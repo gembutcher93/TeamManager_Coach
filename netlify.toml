@@ -1,0 +1,23 @@
+# Configurazione Netlify per VolleyTeam Manager (PWA)
+
+[build]
+  publish = "."
+
+# Il service worker non deve essere messo in cache dal browser/CDN,
+# altrimenti gli aggiornamenti non arrivano agli utenti.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Content-Type = "application/manifest+json"
+
+# Le icone possono essere cacheate a lungo
+[[headers]]
+  for = "/icons/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
