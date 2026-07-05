@@ -65,7 +65,15 @@ function seedDB(){
     const rotationStats = {
         201:{P1:{f:6,s:4},P2:{f:5,s:6},P3:{f:8,s:3},P4:{f:4,s:7},P5:{f:7,s:4},P6:{f:6,s:5}}
     };
-    return {teamName:'TEAM',players,events,scoutHistory,attendance,rotationStats,nextId:300};
+    const trainings = {
+        202:{exercises:[{id:1,name:'Ricezione in bagher zona 5',cat:'Ricezione'},{id:2,name:'Palleggio in salto',cat:'Palleggio'}],
+             grades:{1:{1:6,2:7},2:{1:6.5,2:7},3:{1:5.5,2:8},4:{1:6},5:{1:8,2:6.5}},
+             notes:{2:'Buona spinta gambe, controlla la chiusura del piano.',5:'Ottima lettura in ricezione.'}},
+        203:{exercises:[{id:1,name:'Attacco da posto 4',cat:'Attacco'},{id:2,name:'Muro di reparto',cat:'Muro'}],
+             grades:{1:{1:6,2:7},2:{1:7.5,2:6},4:{1:7,2:6.5},5:{1:6}},
+             notes:{2:'Bel braccio, varia di più le mani.'}}
+    };
+    return {teamName:'TEAM',players,events,scoutHistory,attendance,rotationStats,trainings,nextId:300};
 }
 
 /* ---------- LOAD / SAVE ---------- */
@@ -89,6 +97,8 @@ function loadDB(){
     return seedDB();
 }
 let DB = loadDB();
+if(!DB.trainings) DB.trainings = {};
+if(!DB.nextId) DB.nextId = Date.now();
 function save(){ localStorage.setItem(LS_KEY, JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
 
@@ -346,7 +356,36 @@ function buildLayout(){
         </div>
     </section>
 
-    <!-- TATTICA -->
+    <!-- ALLENAMENTI -->
+    <section id="allenamenti" class="section">
+        <div class="page-head"><div><div class="eyebrow">Programmazione</div><h2>Allenamenti &amp; Voti</h2>
+            <p class="sub">Costruisci la seduta con gli esercizi e assegna un voto a ogni giocatore. Le medie confluiscono nelle schede atleta e nell'app del giocatore.</p></div></div>
+        <div class="card">
+            <div class="form-row">
+                <div class="fg" style="max-width:420px"><label>Seduta di allenamento</label>
+                    <select id="tr-select" onchange="renderTraining()"><option value="">Scegli una seduta…</option></select></div>
+                <div class="fg" style="flex:0"><label>&nbsp;</label><button class="btn btn-ghost" onclick="go('calendario')"><i class="fa-solid fa-calendar-plus"></i> Nuova seduta</button></div>
+            </div>
+            <p class="hint">Le sedute sono gli eventi di tipo "Allenamento" del calendario.</p>
+        </div>
+        <div id="tr-panel" style="display:none">
+            <div class="card">
+                <h3><i class="fa-solid fa-list-check"></i> Esercizi della seduta</h3>
+                <form onsubmit="addExercise(event)"><div class="form-row">
+                    <div class="fg"><label>Nome esercizio</label><input id="ex-name" placeholder="Es. Ricezione in bagher zona 5" required></div>
+                    <div class="fg" style="max-width:190px"><label>Categoria</label><select id="ex-cat">
+                        <option>Riscaldamento</option><option>Battuta</option><option>Ricezione</option><option>Palleggio</option><option>Attacco</option><option>Muro</option><option>Difesa</option><option>Fisico</option><option>Tattica</option></select></div>
+                    <div class="fg" style="flex:0"><label>&nbsp;</label><button class="btn btn-accent" type="submit"><i class="fa-solid fa-plus"></i> Aggiungi</button></div>
+                </div></form>
+                <div id="ex-chips" style="margin-top:1rem"></div>
+            </div>
+            <div class="card" id="grade-card">
+                <h3><i class="fa-solid fa-star-half-stroke"></i> Voti per giocatore <span style="color:var(--muted);font-weight:600;font-size:.82rem">(1–10, lascia vuoto se non valutato)</span></h3>
+                <div class="table-wrap"><table class="scout-table" id="grade-table"></table></div>
+                <p class="hint">Tocca l'icona nota accanto al giocatore per lasciargli un commento sulla seduta.</p>
+            </div>
+        </div>
+    </section>
     <section id="tattica" class="section">
         <div class="page-head"><div><div class="eyebrow">Spogliatoio</div><h2>Lavagnetta Tattica</h2>
             <p class="sub">Disponi la rotazione trascinando i gettoni e disegna schemi, traiettorie e vettori direttamente sul campo.</p></div></div>
@@ -395,7 +434,7 @@ function buildLayout(){
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, tattica:initBoard, backup:()=>{}
+    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{}
 };
 function go(sec){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -564,6 +603,14 @@ function openPlayer(id){
     const chart=svgLine(voti.map(v=>v.voto));
     const statCell=(lbl,v,suf='')=>`<div class="stat-cell"><div class="lbl">${lbl}</div><div class="v num">${v}${suf?`<small>${suf}</small>`:''}</div></div>`;
     const stStatus=p.status||'active';
+    const ts=playerTrainingStats(id);
+    const catBars=Object.keys(ts.byCat).length? `<h3 style="font-size:.95rem;margin:1.2rem 0 .6rem"><i class="fa-solid fa-dumbbell"></i> Rendimento allenamenti per fondamentale</h3>`+
+        Object.keys(ts.byCat).sort((a,b)=>ts.byCat[b]-ts.byCat[a]).map(cat=>{
+            const v=ts.byCat[cat], pct=Math.round(v/10*100), col=v>=6?'linear-gradient(90deg,var(--brand-deep),var(--brand))':'var(--flame)';
+            return `<div style="display:flex;align-items:center;gap:12px;padding:6px 0"><div style="width:110px;font-size:.82rem;font-weight:600">${cat}</div>
+                <div style="flex:1"><div class="bar-track" style="height:8px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>
+                <div class="num" style="font-weight:800;font-family:'Outfit';width:34px;text-align:right;color:${v>=6?'var(--brand)':'var(--flame)'}">${v.toFixed(1)}</div></div>`;
+        }).join('') : '';
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-id-card" style="color:var(--brand)"></i> Scheda atleta</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
@@ -589,7 +636,9 @@ function openPlayer(id){
             ${statCell('Ace totali', s.bAce)}
             ${statCell('Muri punto', s.mPt)}
             ${statCell('Presenza all.', att!==null?att:'—', att!==null?'%':'')}
+            ${statCell('Media allenamenti', ts.avg!=null?ts.avg.toFixed(1):'—')}
         </div>
+        ${catBars}
       </div>`, true);
 }
 
@@ -929,15 +978,21 @@ function buildPlayerPackage(id){
         return {d:e.date,n:e.notes,s:st};
     }).filter(Boolean);
     const cal=DB.events.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(e=>({t:e.type,d:e.date,n:e.notes,res:e.result||null}));
-    // esercizi col voto del mister per questo giocatore (se presenti in futuro)
-    const ex=(DB.exercises||[]).filter(x=>x.grades&&x.grades[id]!==undefined).map(x=>{
-        const ev=DB.events.find(e=>e.id===x.eventId)||{};
-        return {d:ev.date||x.date,n:x.session||ev.notes||'Allenamento',items:[{name:x.name,grade:x.grades[id],note:(x.notes&&x.notes[id])||''}]};
-    });
+    // esercizi con voto del mister, raggruppati per seduta
+    const ex=DB.events.filter(e=>e.type==='Allenamento').sort((a,b)=>new Date(a.date)-new Date(b.date)).map(ev=>{
+        const tr=DB.trainings[ev.id]; if(!tr) return null;
+        const g=tr.grades[id]||{};
+        const items=(tr.exercises||[]).map(x=>(g[x.id]!=null?{name:x.name,cat:x.cat,grade:g[x.id]}:null)).filter(Boolean);
+        const note=(tr.notes&&tr.notes[id])||'';
+        if(!items.length && !note) return null;
+        return {d:ev.date,n:ev.notes,note,items};
+    }).filter(Boolean);
+    const tstat=playerTrainingStats(id);
     return {v:1,k:'vtm-player',team:DB.teamName,gen:new Date().toISOString(),
         p:{name:p.name,number:p.number,role:p.role,hand:p.hand||'Dx',height:p.height||0,cap:!!p.isCaptain,vice:!!p.isViceCaptain,status:p.status||'active',goal:p.goal||''},
         voti:voti.map(v=>({d:v.date,v:v.voto,o:v.opp})),
         season:{matches:s.matches,avgVoto:s.avgVoto,atkEff:s.atkEff,recPos:s.recPos,ace:s.bAce,blk:s.mPt},
+        training:{avg:tstat.avg,count:tstat.count,byCat:tstat.byCat},
         matches, cal, att, attPct:playerAttendance(id), ex};
 }
 function encodePkg(o){ return btoa(unescape(encodeURIComponent(JSON.stringify(o)))); }
@@ -965,4 +1020,112 @@ function downloadPlayerPkg(id){
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
     a.href=url; a.download=`profilo-${slug(p.name)}.vtm.json`; a.click(); URL.revokeObjectURL(url);
     toast('File profilo scaricato');
+}
+
+/* =========================================================
+   ALLENAMENTI & VOTI
+   ========================================================= */
+const CAT_COLOR={Riscaldamento:'#8395B4',Battuta:'#F0463C',Ricezione:'#22C55E',Palleggio:'#5b9dff',Attacco:'#F5B301',Muro:'#a78bfa',Difesa:'#2dd4bf',Fisico:'#fb923c',Tattica:'#e879f9'};
+function currentTraining(){
+    const eid=parseInt(document.getElementById('tr-select').value);
+    if(!eid) return null;
+    if(!DB.trainings[eid]) DB.trainings[eid]={exercises:[],grades:{},notes:{}};
+    return {eid,tr:DB.trainings[eid],ev:DB.events.find(e=>e.id===eid)};
+}
+function populateTraining(){
+    const sel=document.getElementById('tr-select'); const cur=sel.value;
+    sel.innerHTML='<option value="">Scegli una seduta…</option>';
+    DB.events.filter(e=>e.type==='Allenamento').sort((a,b)=>new Date(b.date)-new Date(a.date)).forEach(e=>{
+        const o=document.createElement('option');o.value=e.id;o.textContent=`${fmtDate(e.date)} · ${e.notes}`;sel.appendChild(o);
+    });
+    sel.value=cur; renderTraining();
+}
+function renderTraining(){
+    const c=currentTraining(); const panel=document.getElementById('tr-panel');
+    if(!c){panel.style.display='none';return;}
+    panel.style.display='block';
+    // chips esercizi
+    const chips=document.getElementById('ex-chips');
+    if(!c.tr.exercises.length){chips.innerHTML='<p style="color:var(--muted-2);font-style:italic;font-size:.88rem">Nessun esercizio ancora. Aggiungine uno qui sopra.</p>';}
+    else chips.innerHTML=c.tr.exercises.map(x=>`<span class="pill" style="background:${CAT_COLOR[x.cat]||'var(--surface-3)'}22;color:${CAT_COLOR[x.cat]||'var(--silver)'};border:1px solid ${CAT_COLOR[x.cat]||'var(--line)'}55;margin:0 6px 6px 0;padding:6px 10px;font-size:.8rem">
+        <b>${x.name}</b> · ${x.cat} <i class="fa-solid fa-xmark" style="margin-left:6px;cursor:pointer;opacity:.7" onclick="removeExercise(${x.id})"></i></span>`).join('');
+    renderGradeTable(c);
+}
+function renderGradeTable(c){
+    const tbl=document.getElementById('grade-table');
+    if(!c.tr.exercises.length){tbl.innerHTML=`<tbody><tr><td style="padding:1.4rem;color:var(--muted-2);font-style:italic">Aggiungi almeno un esercizio per iniziare a votare.</td></tr></tbody>`;return;}
+    const roster=activePlayers();
+    if(!roster.length){tbl.innerHTML=`<tbody><tr><td style="padding:1.4rem;color:var(--muted-2)">Nessun atleta disponibile.</td></tr></tbody>`;return;}
+    const head=`<thead><tr><th style="text-align:left">Giocatore</th>${c.tr.exercises.map(x=>`<th title="${x.cat}">${x.name.length>14?x.name.slice(0,13)+'…':x.name}</th>`).join('')}<th>Media</th><th>Nota</th></tr></thead>`;
+    const body=roster.map(p=>{
+        const g=c.tr.grades[p.id]||{};
+        const cells=c.tr.exercises.map(x=>`<td><input class="grade-inp" data-p="${p.id}" data-x="${x.id}" type="number" min="1" max="10" step="0.5" inputmode="decimal" value="${g[x.id]!=null?g[x.id]:''}" oninput="setGrade(${p.id},${x.id},this)"></td>`).join('');
+        const avg=sessionAvg(c.tr,p.id);
+        const hasNote=!!(c.tr.notes[p.id]);
+        const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
+        return `<tr data-row="${p.id}"><td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>${cells}
+            <td class="voto num" id="tmedia-${p.id}" style="color:var(--brand)">${avg!=null?avg.toFixed(1):'—'}</td>
+            <td><button class="btn ${hasNote?'btn-accent':'btn-ghost'} btn-icon" onclick="sessionNote(${p.id})" title="${hasNote?'Modifica nota':'Aggiungi nota'}"><i class="fa-solid fa-comment${hasNote?'':'-dots'}"></i></button></td></tr>`;
+    }).join('');
+    tbl.innerHTML=head+'<tbody>'+body+'</tbody>';
+}
+function addExercise(e){
+    e.preventDefault(); const c=currentTraining(); if(!c)return;
+    const name=document.getElementById('ex-name').value.trim(); if(!name)return;
+    const id=(c.tr.exercises.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
+    c.tr.exercises.push({id,name,cat:document.getElementById('ex-cat').value});
+    save(); e.target.reset(); renderTraining(); toast('Esercizio aggiunto');
+}
+function removeExercise(exId){
+    const c=currentTraining(); if(!c)return;
+    confirmAction('Rimuovere questo esercizio e i relativi voti?',()=>{
+        c.tr.exercises=c.tr.exercises.filter(x=>x.id!==exId);
+        Object.keys(c.tr.grades).forEach(pid=>{ if(c.tr.grades[pid]) delete c.tr.grades[pid][exId]; });
+        save(); renderTraining(); toast('Esercizio rimosso','info');
+    });
+}
+function setGrade(pId,exId,el){
+    const c=currentTraining(); if(!c)return;
+    let v=parseFloat(el.value);
+    if(!c.tr.grades[pId]) c.tr.grades[pId]={};
+    if(isNaN(v)||el.value===''){ delete c.tr.grades[pId][exId]; }
+    else { v=Math.max(1,Math.min(10,v)); c.tr.grades[pId][exId]=v; }
+    const avg=sessionAvg(c.tr,pId);
+    const cell=document.getElementById('tmedia-'+pId); if(cell) cell.textContent=avg!=null?avg.toFixed(1):'—';
+    save();
+}
+function sessionNote(pId){
+    const c=currentTraining(); if(!c)return; const p=playerById(pId);
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-comment" style="color:var(--brand)"></i> Nota · ${p.name}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+        <div class="modal-body"><p style="color:var(--muted);font-size:.85rem;margin-bottom:.8rem">Commento sulla seduta "${c.ev.notes}". Lo vedrà il giocatore nella sua app.</p>
+        <textarea id="snote" style="width:100%;height:100px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font-size:.9rem">${c.tr.notes[pId]||''}</textarea>
+        <div class="modal-buttons"><button class="btn btn-ghost" onclick="closeModal()">Annulla</button>
+        <button class="btn btn-accent" onclick="saveSessionNote(${pId})"><i class="fa-solid fa-check"></i> Salva nota</button></div></div>`);
+}
+function saveSessionNote(pId){
+    const c=currentTraining(); if(!c)return;
+    const v=document.getElementById('snote').value.trim();
+    if(v) c.tr.notes[pId]=v; else delete c.tr.notes[pId];
+    save(); closeModal(); renderTraining(); toast('Nota salvata');
+}
+/* ---- statistiche allenamento per giocatore ---- */
+function sessionAvg(tr,pId){
+    const g=tr.grades[pId]; if(!g) return null;
+    const vals=Object.values(g).filter(v=>typeof v==='number');
+    return vals.length? vals.reduce((a,b)=>a+b,0)/vals.length : null;
+}
+function playerTrainingStats(pId){
+    const sessions=[]; const catSum={}, catCnt={}; let all=[];
+    Object.keys(DB.trainings).forEach(eid=>{
+        const tr=DB.trainings[eid]; const ev=DB.events.find(e=>e.id==eid); if(!ev) return;
+        const g=tr.grades[pId]; if(!g) return;
+        const vals=[];
+        (tr.exercises||[]).forEach(x=>{ const v=g[x.id]; if(typeof v==='number'){vals.push(v);all.push(v);
+            catSum[x.cat]=(catSum[x.cat]||0)+v; catCnt[x.cat]=(catCnt[x.cat]||0)+1; }});
+        if(vals.length) sessions.push({d:ev.date,n:ev.notes,avg:vals.reduce((a,b)=>a+b,0)/vals.length});
+    });
+    sessions.sort((a,b)=>new Date(a.d)-new Date(b.d));
+    const byCat={}; Object.keys(catSum).forEach(c=>byCat[c]=catSum[c]/catCnt[c]);
+    return {avg: all.length? all.reduce((a,b)=>a+b,0)/all.length : null, count:sessions.length, sessions, byCat};
 }
