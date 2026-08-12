@@ -8,19 +8,85 @@ const LS_KEY = 'volleyteam_db';
 const MONTHS = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
 const today = () => new Date(new Date().toDateString());
 
-/* ---------- VOTO (algoritmo del mister, base 6.0) ---------- */
-function computeVoto(s){
-    let v = 6.0;
-    v += (s.bAce*0.6) - (s.bErr*0.5);
-    v += (s.aPt*0.5) - (s.aErr*0.6);
-    v += (s.mPt*0.8);
-    if (s.rTot > 0){
-        const pos = (s.rPos + s.rPrf) / s.rTot;
-        v += (pos*0.8) - ((s.rTot - s.rPos - s.rPrf)*0.2);
-    }
-    return Math.max(2.0, Math.min(10.0, v));
-}
-const blankStat = () => ({bErr:0,bAce:0,rTot:0,rPos:0,rPrf:0,aTot:0,aErr:0,aPt:0,mPt:0});
+/* =========================================================
+   SCOUT — schemi per sport (una engine, tre tabellini).
+   La schermata scout si costruisce da qui in base a DB.sport.
+   ========================================================= */
+function curSport(){ try{ return (DB && DB.sport) || 'pallavolo'; }catch(e){ return 'pallavolo'; } }
+const clampVoto = v => Math.max(2.0, Math.min(10.0, v));
+
+const SCOUT = {
+  pallavolo:{
+    groups:[
+      {label:'Battuta',   fields:[['bErr','Err'],['bAce','Ace']]},
+      {label:'Ricezione', fields:[['rTot','Tot'],['rPos','Pos'],['rPrf','Prf']]},
+      {label:'Attacco',   fields:[['aTot','Tot'],['aErr','Err'],['aPt','Pt']]},
+      {label:'Muro',      fields:[['mPt','Pt']]}
+    ],
+    voto(s){
+      let v=6.0;
+      v+=(s.bAce*0.6)-(s.bErr*0.5);
+      v+=(s.aPt*0.5)-(s.aErr*0.6);
+      v+=(s.mPt*0.8);
+      if(s.rTot>0){ const pos=(s.rPos+s.rPrf)/s.rTot; v+=(pos*0.8)-((s.rTot-s.rPos-s.rPrf)*0.2); }
+      return clampVoto(v);
+    },
+    season(a){
+      const atk=a.aTot?Math.round((a.aPt-a.aErr)/a.aTot*100):null;
+      const rec=a.rTot?Math.round((a.rPos+a.rPrf)/a.rTot*100):null;
+      return [['Efficienza attacco',atk!=null?atk:'—',atk!=null?'%':''],
+              ['Ricezione positiva',rec!=null?rec:'—',rec!=null?'%':''],
+              ['Ace totali',a.bAce||0,''],['Muri punto',a.mPt||0,'']];
+    },
+    note:'Voto: algoritmo dinamico (base 6.0) su battuta, ricezione, attacco e muro.'
+  },
+  calcio:{
+    groups:[
+      {label:'Offensiva',  fields:[['gol','Gol'],['assist','Ass'],['tiri','Tiri'],['tiriP','In porta']]},
+      {label:'Disciplina', fields:[['falli','Falli'],['amm','Amm'],['esp','Esp']]},
+      {label:'Portiere',   fields:[['parate','Parate'],['subiti','Subiti']]},
+      {label:'',           fields:[['min','Min']]}
+    ],
+    voto(s){
+      let v=6.0;
+      v+=s.gol*1.0 + s.assist*0.6 + s.tiriP*0.1 + s.parate*0.15;
+      v-=s.subiti*0.25 + s.falli*0.05 + s.amm*0.3 + s.esp*1.5;
+      return clampVoto(v);
+    },
+    season(a){
+      return [['Gol',a.gol||0,''],['Assist',a.assist||0,''],
+              ['Tiri in porta',a.tiriP||0,''],['Parate',a.parate||0,''],
+              ['Ammonizioni',a.amm||0,'']];
+    },
+    note:'Voto (base 6.0): +gol, assist, parate · −gol subiti, falli, cartellini.'
+  },
+  basket:{
+    groups:[
+      {label:'',        fields:[['punti','Pt']]},
+      {label:'Rimbalzi',fields:[['roff','Off'],['rdif','Dif']]},
+      {label:'',        fields:[['assist','Ass'],['rubate','Rub'],['perse','Perse'],['stoppate','Stop'],['falli','Falli']]},
+      {label:'2 Punti', fields:[['fg2m','Fatti'],['fg2a','Tent']]},
+      {label:'3 Punti', fields:[['fg3m','Fatti'],['fg3a','Tent']]},
+      {label:'Liberi',  fields:[['ftm','Fatti'],['fta','Tent']]},
+      {label:'',        fields:[['min','Min']]}
+    ],
+    voto(s){
+      const miss=(s.fg2a-s.fg2m)+(s.fg3a-s.fg3m)+(s.fta-s.ftm);
+      const val=s.punti+(s.roff+s.rdif)+s.assist+s.rubate+s.stoppate-s.perse-miss-s.falli*0.5;
+      return clampVoto(6.0+val*0.15);
+    },
+    season(a){
+      const p3=a.fg3a?Math.round(a.fg3m/a.fg3a*100):null;
+      return [['Punti',a.punti||0,''],['Rimbalzi',(a.roff||0)+(a.rdif||0),''],
+              ['Assist',a.assist||0,''],['% da 3',p3!=null?p3:'—',p3!=null?'%':''],
+              ['Stoppate',a.stoppate||0,'']];
+    },
+    note:'Voto (base 6.0) dalla valutazione: punti, rimbalzi, assist, rubate, stoppate − perse, errori al tiro, falli.'
+  }
+};
+function scoutFields(sport){ return SCOUT[sport||curSport()].groups.flatMap(g=>g.fields.map(f=>f[0])); }
+function blankStat(sport){ const o={}; scoutFields(sport).forEach(k=>o[k]=0); return o; }
+function computeVoto(s, sport){ return SCOUT[sport||curSport()].voto(s); }
 
 /* ---------- SEED (dati d'esempio per non partire vuoti) ---------- */
 function seedDB(){
@@ -117,17 +183,18 @@ function getPlayerVoti(pId){
     return out;
 }
 function getSeasonStats(pId){
-    const acc={...blankStat(),matches:0,voti:[]};
+    const sport=curSport();
+    const acc={...blankStat(sport),matches:0,voti:[]};
+    const fields=scoutFields(sport);
     DB.scoutHistory.forEach(m=>{
         const r=m.rows.find(x=>x.pId===pId);
         if(!r) return;
         acc.matches++; acc.voti.push(r.voto);
-        ['bErr','bAce','rTot','rPos','rPrf','aTot','aErr','aPt','mPt'].forEach(k=>acc[k]+=r[k]||0);
+        fields.forEach(k=>acc[k]+=r[k]||0);
     });
-    acc.atkEff = acc.aTot? Math.round((acc.aPt-acc.aErr)/acc.aTot*100):null;
-    acc.recPos = acc.rTot? Math.round((acc.rPos+acc.rPrf)/acc.rTot*100):null;
     acc.avgVoto = acc.voti.length? (acc.voti.reduce((a,b)=>a+b,0)/acc.voti.length):null;
     acc.lastVoto = acc.voti.length? acc.voti[acc.voti.length-1]:null;
+    acc.cells = SCOUT[sport].season(acc);
     return acc;
 }
 function playerForm(pId){ // confronto media ultime 2 vs precedenti
@@ -299,21 +366,13 @@ function buildLayout(){
         <div class="card" id="scout-panel" style="display:none">
             <h3 id="scout-title"><i class="fa-solid fa-clipboard-list"></i> Tabellino</h3>
             <div class="table-wrap"><table class="scout-table">
-                <thead>
-                    <tr><th rowspan="2" style="text-align:left">Giocatore</th><th colspan="2">Battuta</th><th colspan="3">Ricezione</th><th colspan="3">Attacco</th><th rowspan="2">Muro</th><th rowspan="2">Voto</th></tr>
-                    <tr><th>Err</th><th>Ace</th><th>Tot</th><th>Pos</th><th>Prf</th><th>Tot</th><th>Err</th><th>Pt</th></tr>
-                </thead>
+                <thead id="scout-head"></thead>
                 <tbody id="scout-body"></tbody>
             </table></div>
             <div style="display:flex;justify-content:flex-end;margin-top:1.2rem">
                 <button class="btn btn-accent" onclick="saveScout()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
             </div>
-            <div class="legend-grid">
-                <div class="legend-item"><strong>BATTUTA</strong>Err = errore al servizio<br>Ace = servizio vincente</div>
-                <div class="legend-item"><strong>RICEZIONE</strong>Tot = ricezioni totali<br>Pos = positiva · Prf = perfetta</div>
-                <div class="legend-item"><strong>ATTACCO</strong>Tot = schiacciate tentate<br>Err = sbagliate · Pt = a punto</div>
-                <div class="legend-item"><strong>MURO / VOTO</strong>Muro = punto diretto a muro<br>Voto = algoritmo dinamico (base 6.0)</div>
-            </div>
+            <div class="legend-grid" id="scout-legend"></div>
         </div>
     </section>
 
@@ -468,6 +527,32 @@ function saveTeam(){
 /* =========================================================
    DASHBOARD
    ========================================================= */
+function courtSVG(sport){
+    if(sport==='pallavolo'){
+        return `<svg class="court" viewBox="0 0 400 200" preserveAspectRatio="none">
+        <rect x="6" y="6" width="388" height="188" fill="none" stroke="#22C55E" stroke-width="2"/>
+        <line x1="200" y1="6" x2="200" y2="194" stroke="#22C55E" stroke-width="2.5"/>
+        <line x1="135" y1="6" x2="135" y2="194" stroke="#22C55E" stroke-width="1" stroke-dasharray="5 5"/>
+        <line x1="265" y1="6" x2="265" y2="194" stroke="#22C55E" stroke-width="1" stroke-dasharray="5 5"/></svg>`;
+    }
+    const c='rgba(255,255,255,.85)';
+    if(sport==='calcio'){
+        return `<svg class="court" viewBox="0 0 400 200" preserveAspectRatio="none">
+        <rect x="6" y="6" width="388" height="188" fill="none" stroke="${c}" stroke-width="2"/>
+        <line x1="200" y1="6" x2="200" y2="194" stroke="${c}" stroke-width="2"/>
+        <circle cx="200" cy="100" r="34" fill="none" stroke="${c}" stroke-width="2"/>
+        <rect x="6" y="55" width="58" height="90" fill="none" stroke="${c}" stroke-width="2"/>
+        <rect x="336" y="55" width="58" height="90" fill="none" stroke="${c}" stroke-width="2"/></svg>`;
+    }
+    return `<svg class="court" viewBox="0 0 400 200" preserveAspectRatio="none">
+        <rect x="6" y="6" width="388" height="188" fill="none" stroke="${c}" stroke-width="2"/>
+        <line x1="200" y1="6" x2="200" y2="194" stroke="${c}" stroke-width="2"/>
+        <circle cx="200" cy="100" r="26" fill="none" stroke="${c}" stroke-width="2"/>
+        <rect x="6" y="64" width="74" height="72" fill="none" stroke="${c}" stroke-width="2"/>
+        <rect x="320" y="64" width="74" height="72" fill="none" stroke="${c}" stroke-width="2"/>
+        <path d="M80 64 A36 36 0 0 1 80 136" fill="none" stroke="${c}" stroke-width="2"/>
+        <path d="M320 64 A36 36 0 0 0 320 136" fill="none" stroke="${c}" stroke-width="2"/></svg>`;
+}
 function renderDashboard(){
     const ne=nextEvent(), rec=teamRecord(), avg=teamAvgVoto(), att=teamAttendancePct();
     const t=today();
@@ -487,11 +572,7 @@ function renderDashboard(){
             <div class="meta">Aggiungi una partita o un allenamento dal calendario.</div>
             <div class="countdown"><button class="btn btn-accent" onclick="go('calendario')"><i class="fa-solid fa-calendar-plus"></i> Vai al calendario</button></div></div>`;
     }
-    const court=`<svg class="court" viewBox="0 0 400 200" preserveAspectRatio="none">
-        <rect x="6" y="6" width="388" height="188" fill="none" stroke="#22C55E" stroke-width="2"/>
-        <line x1="200" y1="6" x2="200" y2="194" stroke="#22C55E" stroke-width="2.5"/>
-        <line x1="135" y1="6" x2="135" y2="194" stroke="#22C55E" stroke-width="1" stroke-dasharray="5 5"/>
-        <line x1="265" y1="6" x2="265" y2="194" stroke="#22C55E" stroke-width="1" stroke-dasharray="5 5"/></svg>`;
+    const court=courtSVG(curSport());
 
     const kpis=`<div class="kpi-grid">
         <div class="kpi"><i class="fa-solid fa-trophy ic"></i><div class="lbl">Bilancio</div>
@@ -631,10 +712,7 @@ function openPlayer(id){
         <h3 style="font-size:.95rem;margin:1.2rem 0 .6rem"><i class="fa-solid fa-table-cells"></i> Statistiche stagione</h3>
         <div class="stat-grid">
             ${statCell('Media voto', s.avgVoto?s.avgVoto.toFixed(1):'—')}
-            ${statCell('Efficienza attacco', s.atkEff!==null?s.atkEff:'—','%')}
-            ${statCell('Ricezione positiva', s.recPos!==null?s.recPos:'—','%')}
-            ${statCell('Ace totali', s.bAce)}
-            ${statCell('Muri punto', s.mPt)}
+            ${(s.cells||[]).map(c=>statCell(c[0],c[1],c[2])).join('')}
             ${statCell('Presenza all.', att!==null?att:'—', att!==null?'%':'')}
             ${statCell('Media allenamenti', ts.avg!=null?ts.avg.toFixed(1):'—')}
         </div>
@@ -710,35 +788,50 @@ function matchOptions(selId){
     sel.value=cur;
 }
 function populateScout(){ matchOptions('scout-select'); }
+function buildScoutHead(sport){
+    const gs=SCOUT[sport].groups, head=document.getElementById('scout-head');
+    let r1='<tr><th rowspan="2" style="text-align:left">Giocatore</th>';
+    let r2='<tr>';
+    gs.forEach(g=>{
+        if(g.label){ r1+=`<th colspan="${g.fields.length}">${g.label}</th>`; g.fields.forEach(f=>r2+=`<th>${f[1]}</th>`); }
+        else { g.fields.forEach(f=>{ r1+=`<th rowspan="2">${f[1]}</th>`; }); }
+    });
+    r1+='<th rowspan="2">Voto</th></tr>'; r2+='</tr>';
+    head.innerHTML=r1+r2;
+}
+function renderScoutLegend(sport){
+    const el=document.getElementById('scout-legend'); if(!el) return;
+    el.innerHTML=`<div class="legend-item" style="grid-column:1/-1"><strong>NOTA</strong>${SCOUT[sport].note||''}</div>`;
+}
 function setupScout(){
     const id=parseInt(document.getElementById('scout-select').value);
     const panel=document.getElementById('scout-panel'), body=document.getElementById('scout-body');
     if(!id){panel.style.display='none';return;}
+    const sport=curSport();
     const match=DB.events.find(e=>e.id===id);
     const existing=DB.scoutHistory.find(s=>s.matchId===id);
     document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
-    panel.style.display='block'; body.innerHTML='';
+    panel.style.display='block';
+    buildScoutHead(sport);
+    const fields=scoutFields(sport), colspan=fields.length+2;
+    body.innerHTML='';
     const roster=activePlayers();
-    if(!roster.length){body.innerHTML='<tr class="empty-row"><td colspan="11">Nessun atleta disponibile in rosa.</td></tr>';return;}
+    if(!roster.length){body.innerHTML=`<tr class="empty-row"><td colspan="${colspan}">Nessun atleta disponibile in rosa.</td></tr>`;return;}
     roster.forEach(p=>{
         const ex=existing? existing.rows.find(r=>r.pId===p.id):null;
-        const g=ex||blankStat();
+        const g=ex||blankStat(sport);
         const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
-        const inp=(cls,val)=>`<td><input class="${cls}" type="number" min="0" value="${val||0}" oninput="calcRow(${p.id})"></td>`;
+        const cells=fields.map(k=>`<td><input data-k="${k}" type="number" min="0" value="${g[k]||0}" oninput="calcRow(${p.id})"></td>`).join('');
         const tr=document.createElement('tr');tr.dataset.pid=p.id;
-        tr.innerHTML=`<td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>
-            ${inp('b-err',g.bErr)}${inp('b-ace',g.bAce)}
-            ${inp('r-tot',g.rTot)}${inp('r-pos',g.rPos)}${inp('r-prf',g.rPrf)}
-            ${inp('a-tot',g.aTot)}${inp('a-err',g.aErr)}${inp('a-pt',g.aPt)}
-            ${inp('m-pt',g.mPt)}
-            <td class="voto num" id="voto-${p.id}" style="color:var(--brand)">${ex?ex.voto.toFixed(1):'6.0'}</td>`;
+        tr.innerHTML=`<td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>${cells}<td class="voto num" id="voto-${p.id}" style="color:var(--brand)">${ex?ex.voto.toFixed(1):'6.0'}</td>`;
         body.appendChild(tr);
     });
+    renderScoutLegend(sport);
 }
 function readRow(id){
     const r=document.querySelector(`tr[data-pid="${id}"]`);
-    const g=k=>parseInt(r.querySelector('.'+k).value)||0;
-    return {bErr:g('b-err'),bAce:g('b-ace'),rTot:g('r-tot'),rPos:g('r-pos'),rPrf:g('r-prf'),aTot:g('a-tot'),aErr:g('a-err'),aPt:g('a-pt'),mPt:g('m-pt')};
+    const o={}; r.querySelectorAll('input[data-k]').forEach(inp=>o[inp.dataset.k]=parseInt(inp.value)||0);
+    return o;
 }
 function calcRow(id){ document.getElementById('voto-'+id).textContent=computeVoto(readRow(id)).toFixed(1); }
 function saveScout(){
@@ -750,7 +843,7 @@ function saveScout(){
         rows.push({pId,...s,voto:+computeVoto(s).toFixed(1)});
     });
     DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==id);
-    DB.scoutHistory.push({matchId:id,date:match.date,opponent:match.notes,rows});
+    DB.scoutHistory.push({matchId:id,date:match.date,opponent:match.notes,sport:curSport(),rows});
     save();toast('Statistiche registrate nelle schede atleti');
     go('roster');
 }
@@ -863,28 +956,67 @@ function initBoard(){
     if(!tokensInit){placeTokens();tokensInit=true;}
     bindDraw(r.width,r.height);
 }
+function courtRect(w,h,sport){
+    // rapporto d'aspetto reale (verticale = altezza/larghezza): calcio 105x68, basket 28x15
+    const ratio = sport==='pallavolo' ? 2 : sport==='basket' ? 28/15 : 105/68;
+    const pad=12, aw=w-pad*2, ah=h-pad*2;
+    let pw,ph;
+    if(aw*ratio<=ah){ pw=aw; ph=aw*ratio; } else { ph=ah; pw=ah/ratio; }
+    return { x:(w-pw)/2, y:(h-ph)/2, w:pw, h:ph };
+}
 function drawCourt(w,h){
     ctx.clearRect(0,0,w,h);
-    ctx.strokeStyle='rgba(34,197,94,.55)';ctx.lineWidth=2;
-    ctx.strokeRect(10,10,w-20,h-20);
-    ctx.beginPath();ctx.moveTo(10,h/2);ctx.lineTo(w-10,h/2);ctx.stroke(); // rete
-    ctx.setLineDash([6,6]);ctx.lineWidth=1;ctx.strokeStyle='rgba(34,197,94,.3)';
-    ctx.beginPath();ctx.moveTo(10,h*0.33);ctx.lineTo(w-10,h*0.33);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(10,h*0.67);ctx.lineTo(w-10,h*0.67);ctx.stroke();
-    ctx.setLineDash([]);
+    const sp=(typeof DB!=='undefined'&&DB&&DB.sport)||'pallavolo';
+    const R=courtRect(w,h,sp), rx=R.x, ry=R.y, rw=R.w, rh=R.h, cx=rx+rw/2, cy=ry+rh/2;
+    if(sp==='pallavolo'){
+        ctx.strokeStyle='rgba(34,197,94,.55)';ctx.lineWidth=2;
+        ctx.strokeRect(rx,ry,rw,rh);
+        ctx.beginPath();ctx.moveTo(rx,cy);ctx.lineTo(rx+rw,cy);ctx.stroke(); // rete
+        ctx.setLineDash([6,6]);ctx.lineWidth=1;ctx.strokeStyle='rgba(34,197,94,.3)';
+        ctx.beginPath();ctx.moveTo(rx,ry+rh*0.333);ctx.lineTo(rx+rw,ry+rh*0.333);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(rx,ry+rh*0.667);ctx.lineTo(rx+rw,ry+rh*0.667);ctx.stroke();
+        ctx.setLineDash([]);
+        return;
+    }
+    // calcio / basket — campo a proporzioni fisse (non si deforma)
+    ctx.strokeStyle='rgba(255,255,255,.55)';ctx.lineWidth=2;
+    ctx.strokeRect(rx,ry,rw,rh);
+    ctx.beginPath();ctx.moveTo(rx,cy);ctx.lineTo(rx+rw,cy);ctx.stroke();            // mezzo campo
+    ctx.beginPath();ctx.arc(cx,cy,rw*0.13,0,Math.PI*2);ctx.stroke();               // cerchio centrale
+    if(sp==='calcio'){
+        const bw=rw*0.5,bx=cx-bw/2,bh=rh*0.16;                                     // aree di rigore
+        ctx.strokeRect(bx,ry,bw,bh);
+        ctx.strokeRect(bx,ry+rh-bh,bw,bh);
+        const gw=rw*0.24,gx=cx-gw/2,gh=rh*0.06;                                    // aree di porta
+        ctx.strokeRect(gx,ry,gw,gh);
+        ctx.strokeRect(gx,ry+rh-gh,gw,gh);
+    }else{ // basket
+        const kw=rw*0.36,kx=cx-kw/2,kh=rh*0.19;                                    // aree (pitturato)
+        ctx.strokeRect(kx,ry,kw,kh);
+        ctx.strokeRect(kx,ry+rh-kh,kw,kh);
+        ctx.beginPath();ctx.arc(cx,ry+kh,kw*0.5,0,Math.PI);ctx.stroke();           // arco tiri liberi
+        ctx.beginPath();ctx.arc(cx,ry+rh-kh,kw*0.5,Math.PI,Math.PI*2);ctx.stroke();
+    }
 }
 function placeTokens(){
     const area=document.getElementById('court-area');
     area.querySelectorAll('.token').forEach(t=>t.remove());
     const r=area.getBoundingClientRect();
-    const roster=activePlayers().slice(0,6);
-    const spots=[[0.75,0.8],[0.75,0.55],[0.5,0.3],[0.25,0.3],[0.25,0.55],[0.5,0.8]];
+    const sp=(typeof DB!=='undefined'&&DB&&DB.sport)||'pallavolo';
+    const FORM={
+        pallavolo:[[0.75,0.8],[0.75,0.55],[0.5,0.3],[0.25,0.3],[0.25,0.55],[0.5,0.8]],
+        calcio:[[0.5,0.9],[0.2,0.75],[0.4,0.78],[0.6,0.78],[0.8,0.75],[0.3,0.55],[0.5,0.55],[0.7,0.55],[0.25,0.32],[0.5,0.28],[0.75,0.32]],
+        basket:[[0.5,0.75],[0.22,0.62],[0.78,0.62],[0.32,0.4],[0.6,0.38]]
+    };
+    const spots=FORM[sp]||FORM.pallavolo;
+    const base=courtRect(r.width,r.height,sp);
+    const roster=activePlayers().slice(0,spots.length);
     roster.forEach((p,i)=>{
         const t=document.createElement('div');
         t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
         t.textContent=p.number;t.title=p.name;
-        const sp=spots[i]||[0.5,0.5];
-        t.style.left=(sp[0]*r.width-23)+'px';t.style.top=(sp[1]*r.height-23)+'px';
+        const pos=spots[i]||[0.5,0.5];
+        t.style.left=(base.x+pos[0]*base.w-23)+'px';t.style.top=(base.y+pos[1]*base.h-23)+'px';
         makeDraggable(t);area.appendChild(t);
     });
 }
@@ -967,18 +1099,18 @@ if('serviceWorker' in navigator){
    CONDIVISIONE COL GIOCATORE (pacchetto offline)
    ========================================================= */
 function buildPlayerPackage(id){
+    const sport=curSport();
     const p=playerById(id), s=getSeasonStats(id), voti=getPlayerVoti(id);
     const matches=DB.scoutHistory.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(m=>{
         const r=m.rows.find(x=>x.pId===id); if(!r) return null;
         const ev=DB.events.find(e=>e.id===m.matchId);
-        return {d:m.date,o:m.opponent,res:(ev&&ev.result)||null,row:r};
+        return {d:m.date,o:m.opponent,res:(ev&&ev.result)||null,voto:+(+r.voto).toFixed(1),cells:SCOUT[sport].season(r).slice(0,3)};
     }).filter(Boolean);
     const att=DB.events.filter(e=>e.type==='Allenamento').sort((a,b)=>new Date(a.date)-new Date(b.date)).map(e=>{
         const a=DB.attendance[e.id]; const st=a&&a[id]?a[id]:null; if(!st) return null;
         return {d:e.date,n:e.notes,s:st};
     }).filter(Boolean);
     const cal=DB.events.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(e=>({t:e.type,d:e.date,n:e.notes,res:e.result||null}));
-    // esercizi con voto del mister, raggruppati per seduta
     const ex=DB.events.filter(e=>e.type==='Allenamento').sort((a,b)=>new Date(a.date)-new Date(b.date)).map(ev=>{
         const tr=DB.trainings[ev.id]; if(!tr) return null;
         const g=tr.grades[id]||{};
@@ -988,10 +1120,10 @@ function buildPlayerPackage(id){
         return {d:ev.date,n:ev.notes,note,items};
     }).filter(Boolean);
     const tstat=playerTrainingStats(id);
-    return {v:1,k:'vtm-player',team:DB.teamName,gen:new Date().toISOString(),
+    return {v:2,k:'vtm-player',sport,team:DB.teamName,gen:new Date().toISOString(),
         p:{name:p.name,number:p.number,role:p.role,hand:p.hand||'Dx',height:p.height||0,cap:!!p.isCaptain,vice:!!p.isViceCaptain,status:p.status||'active',goal:p.goal||''},
         voti:voti.map(v=>({d:v.date,v:v.voto,o:v.opp})),
-        season:{matches:s.matches,avgVoto:s.avgVoto,atkEff:s.atkEff,recPos:s.recPos,ace:s.bAce,blk:s.mPt},
+        season:{matches:s.matches,avgVoto:s.avgVoto,cells:s.cells},
         training:{avg:tstat.avg,count:tstat.count,byCat:tstat.byCat},
         matches, cal, att, attPct:playerAttendance(id), ex};
 }

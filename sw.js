@@ -1,6 +1,6 @@
 /* VolleyTeam Manager - Service Worker
    Bump CACHE_VERSION ad ogni rilascio per forzare l'aggiornamento. */
-const CACHE_VERSION = 'volleyteam-v4';
+const CACHE_VERSION = 'volleyteam-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -42,13 +42,6 @@ self.addEventListener('fetch', (event) => {
   const sameOrigin = url.origin === self.location.origin;
 
   if (sameOrigin) {
-    // Navigazioni -> sempre l'app shell, così l'app si apre anche se l'URL non e' la root pulita (es. /index)
-    if (req.mode === 'navigate') {
-      event.respondWith(
-        caches.match('./index.html').then((c) => c || fetch(req).catch(() => caches.match('./index.html')))
-      );
-      return;
-    }
     event.respondWith(
       caches.match(req).then((cached) =>
         cached ||

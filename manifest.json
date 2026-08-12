@@ -1,7 +1,7 @@
 {
-  "name": "Coaching Manager",
-  "short_name": "Coaching",
-  "description": "Gestionale per allenatori — pallavolo, calcio e basket: roster, scout statistico, voti e lavagnetta tattica.",
+  "name": "VolleyTeam Manager",
+  "short_name": "VolleyTeam",
+  "description": "Gestionale completo per l'allenatore di pallavolo: roster, calendario, scout statistico e lavagnetta tattica.",
   "lang": "it",
   "dir": "ltr",
   "start_url": "/",
@@ -11,34 +11,11 @@
   "orientation": "any",
   "background_color": "#020617",
   "theme_color": "#020617",
-  "categories": [
-    "sports",
-    "productivity"
-  ],
+  "categories": ["sports", "productivity"],
   "icons": [
-    {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/maskable-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "icons/maskable-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
