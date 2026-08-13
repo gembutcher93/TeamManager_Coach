@@ -178,7 +178,7 @@
       'align-items:center;gap:3px;padding:7px 6px;border-radius:12px;white-space:nowrap;transition:.15s;}' +
       '#ps-bottomnav button i{font-size:1.12rem;}' +
       '#ps-bottomnav button.active{color:var(--brand);background:rgba(255,255,255,.06);}' +
-      '@media(max-width:960px){#ps-bottomnav{display:block;} main{padding-bottom:5.6rem!important;}}';
+      '@media(max-width:960px){#ps-bottomnav{display:block;} main{height:calc(100vh - 4.4rem - env(safe-area-inset-bottom))!important;overflow-y:auto!important;-webkit-overflow-scrolling:touch;padding-bottom:1.4rem!important;}}';
     document.head.appendChild(st);
     const map = {}; src.forEach(b => { if (b.dataset.sec) map[b.dataset.sec] = b; });
     const order = NAV_ORDER.filter(s => map[s]).concat(Object.keys(map).filter(s => !NAV_ORDER.includes(s)));
