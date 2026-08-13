@@ -692,16 +692,20 @@ function openPlayer(id){
                 <div style="flex:1"><div class="bar-track" style="height:8px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>
                 <div class="num" style="font-weight:800;font-family:'Outfit';width:34px;text-align:right;color:${v>=6?'var(--brand)':'var(--flame)'}">${v.toFixed(1)}</div></div>`;
         }).join('') : '';
+    coachMediaCSS();
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-id-card" style="color:var(--brand)"></i> Scheda atleta</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
       <div class="modal-body">
         <div class="player-head">
-            <div class="player-avatar">${p.number}</div>
+            <div class="player-avatar" id="cph-av" onclick="pickPhotoCoach(${id})"><div class="cph-im" id="cph-im-${id}">${COACH_PHOTOS[id]?`<img src="${COACH_PHOTOS[id]}">`:p.number}</div><div class="cph-cam"><i class="fa-solid fa-camera"></i></div></div>
             <div class="meta"><h4>${p.name} ${p.isCaptain?'👑':p.isViceCaptain?'🥈':''}</h4>
                 <p>${p.role} · ${p.hand||'Dx'} · ${p.height?p.height+' cm':'altezza n.d.'} · <span class="delta ${f.dir}" style="font-weight:700">${f.txt}</span></p></div>
         </div>
-        <button class="btn btn-accent btn-sm" style="margin-bottom:1rem" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi col giocatore</button>
+        <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+            <button class="btn btn-accent btn-sm" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi</button>
+            <button class="btn btn-ghost btn-sm" onclick="openPlayerCard(${id})"><i class="fa-solid fa-id-badge"></i> Card giocatore</button>
+        </div>
         <div style="display:flex;gap:8px;margin-bottom:1.2rem;flex-wrap:wrap">
             <button class="btn btn-sm ${stStatus==='active'?'btn-accent':'btn-ghost'}" onclick="setStatus(${id},'active')">Disponibile</button>
             <button class="btn btn-sm ${stStatus==='injured'?'btn-danger':'btn-ghost'}" onclick="setStatus(${id},'injured')">Infortunato</button>
@@ -718,6 +722,7 @@ function openPlayer(id){
         </div>
         ${catBars}
       </div>`, true);
+    loadCoachPhoto(id);
 }
 
 /* =========================================================
@@ -1098,7 +1103,7 @@ if('serviceWorker' in navigator){
 /* =========================================================
    CONDIVISIONE COL GIOCATORE (pacchetto offline)
    ========================================================= */
-function buildPlayerPackage(id){
+function buildPlayerPackage(id, photo){
     const sport=curSport();
     const p=playerById(id), s=getSeasonStats(id), voti=getPlayerVoti(id);
     const matches=DB.scoutHistory.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(m=>{
@@ -1120,7 +1125,7 @@ function buildPlayerPackage(id){
         return {d:ev.date,n:ev.notes,note,items};
     }).filter(Boolean);
     const tstat=playerTrainingStats(id);
-    return {v:2,k:'vtm-player',sport,team:DB.teamName,gen:new Date().toISOString(),
+    return {v:2,k:'vtm-player',photo:photo||null,sport,team:DB.teamName,gen:new Date().toISOString(),
         p:{name:p.name,number:p.number,role:p.role,hand:p.hand||'Dx',height:p.height||0,cap:!!p.isCaptain,vice:!!p.isViceCaptain,status:p.status||'active',goal:p.goal||''},
         voti:voti.map(v=>({d:v.date,v:v.voto,o:v.opp})),
         season:{matches:s.matches,avgVoto:s.avgVoto,cells:s.cells},
@@ -1129,8 +1134,8 @@ function buildPlayerPackage(id){
 }
 function encodePkg(o){ return btoa(unescape(encodeURIComponent(JSON.stringify(o)))); }
 function slug(s){ return s.toLowerCase().normalize('NFD').replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
-function sharePlayer(id){
-    const p=playerById(id); const pkg=buildPlayerPackage(id); const code=encodePkg(pkg);
+async function sharePlayer(id){
+    const photo=await cIdbGet('p'+id); const p=playerById(id); const pkg=buildPlayerPackage(id,photo); const code=encodePkg(pkg);
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-share-nodes" style="color:var(--brand)"></i> Condividi · ${p.name}</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
@@ -1146,8 +1151,8 @@ function copyShare(){
     const ta=document.getElementById('share-code'); ta.select();
     navigator.clipboard?.writeText(ta.value).then(()=>toast('Codice copiato')).catch(()=>{document.execCommand('copy');toast('Codice copiato');});
 }
-function downloadPlayerPkg(id){
-    const p=playerById(id); const pkg=buildPlayerPackage(id);
+async function downloadPlayerPkg(id){
+    const photo=await cIdbGet('p'+id); const p=playerById(id); const pkg=buildPlayerPackage(id,photo);
     const blob=new Blob([JSON.stringify(pkg)],{type:'application/json'});
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
     a.href=url; a.download=`profilo-${slug(p.name)}.vtm.json`; a.click(); URL.revokeObjectURL(url);
@@ -1260,4 +1265,115 @@ function playerTrainingStats(pId){
     sessions.sort((a,b)=>new Date(a.d)-new Date(b.d));
     const byCat={}; Object.keys(catSum).forEach(c=>byCat[c]=catSum[c]/catCnt[c]);
     return {avg: all.length? all.reduce((a,b)=>a+b,0)/all.length : null, count:sessions.length, sessions, byCat};
+}
+
+/* =========================================================
+   FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)
+   ========================================================= */
+var COACH_PHOTOS={};
+function cIdb(){ return new Promise((res,rej)=>{const r=indexedDB.open('pm-media',1);
+  r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('img')) r.result.createObjectStore('img'); };
+  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);}); }
+async function cIdbGet(k){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img').objectStore('img').get(k); t.onsuccess=()=>res(t.result||null); t.onerror=()=>res(null);});}catch(e){return null;} }
+async function cIdbSet(k,v){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img','readwrite').objectStore('img').put(v,k); t.onsuccess=()=>res(true); t.onerror=()=>res(false);});}catch(e){return false;} }
+async function cIdbDel(k){ try{const db=await cIdb(); db.transaction('img','readwrite').objectStore('img').delete(k);}catch(e){} }
+function cphAbbr(r){ return (r||'').replace(/[^A-Za-zÀ-ÿ]/g,'').slice(0,3).toUpperCase()||'—'; }
+function cphInitials(n){ return (n||'?').trim().split(/\s+/).map(x=>x[0]).slice(0,2).join('').toUpperCase()||'?'; }
+function cphOverall(a){ return a? Math.max(40,Math.min(99,Math.round((a-2)/8*59+40))):null; }
+function coachMediaCSS(){
+  if(document.getElementById('coach-media-css'))return;
+  const st=document.createElement('style'); st.id='coach-media-css';
+  st.textContent=`
+  #cph-av{overflow:visible!important;position:relative;cursor:pointer;}
+  #cph-av .cph-im{width:100%;height:100%;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;}
+  #cph-av .cph-im img{width:100%;height:100%;object-fit:cover;}
+  #cph-av .cph-cam{position:absolute;bottom:-3px;right:-3px;width:24px;height:24px;border-radius:50%;background:var(--brand);color:#04140A;display:flex;align-items:center;justify-content:center;border:2px solid var(--surface);font-size:.62rem;}
+  .fc-wrap{display:flex;flex-direction:column;align-items:center;}
+  .fc{position:relative;width:300px;max-width:100%;border-radius:24px;overflow:hidden;background:linear-gradient(160deg,var(--fc-a),var(--fc-b));padding:18px 18px 20px;color:#0b1220;box-shadow:0 30px 70px -24px rgba(0,0,0,.75);}
+  .fc::before{content:"";position:absolute;inset:0;background:linear-gradient(125deg,rgba(255,255,255,.4),transparent 38%,transparent 60%,rgba(255,255,255,.22));mix-blend-mode:overlay;pointer-events:none;}
+  .fc .top{display:flex;justify-content:space-between;align-items:flex-start;position:relative;}
+  .fc .ovr{text-align:center;line-height:.95;} .fc .ovr b{font-family:'Outfit',sans-serif;font-size:2.5rem;font-weight:900;display:block;}
+  .fc .ovr span{font-size:.72rem;font-weight:800;letter-spacing:1px;}
+  .fc .sporticon{font-size:1.7rem;}
+  .fc .photo{width:176px;height:234px;margin:4px auto 8px;border-radius:16px;overflow:hidden;background:rgba(255,255,255,.28);display:flex;align-items:center;justify-content:center;}
+  .fc .photo img{width:100%;height:100%;object-fit:cover;} .fc .photo .ini{font-family:'Outfit';font-weight:900;font-size:3rem;color:rgba(0,0,0,.32);}
+  .fc .nm{text-align:center;font-family:'Outfit',sans-serif;font-weight:900;font-size:1.35rem;text-transform:uppercase;letter-spacing:.4px;line-height:1;}
+  .fc .tm{text-align:center;font-weight:700;font-size:.82rem;opacity:.82;margin-top:3px;}
+  .fc .stats{display:grid;grid-template-columns:1fr 1fr;gap:7px 16px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,.2);position:relative;}
+  .fc .st{display:flex;justify-content:space-between;font-weight:800;font-size:.85rem;} .fc .st span{opacity:.68;font-weight:700;}
+  `;
+  document.head.appendChild(st);
+}
+function loadCoachPhoto(id){
+  if(COACH_PHOTOS[id]!==undefined) return;
+  cIdbGet('p'+id).then(d=>{ COACH_PHOTOS[id]=d||null; const el=document.getElementById('cph-im-'+id); if(el&&d) el.innerHTML=`<img src="${d}">`; });
+}
+function pickPhotoCoach(id){
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+  inp.onchange=()=>{ const f=inp.files&&inp.files[0]; if(!f)return;
+    const rd=new FileReader(); rd.onload=()=>{ const im=new Image(); im.onload=()=>{
+      const MAX=1000, r=Math.min(MAX/im.width,MAX/im.height,1), w=Math.round(im.width*r), h=Math.round(im.height*r);
+      const cv=document.createElement('canvas'); cv.width=w; cv.height=h; cv.getContext('2d').drawImage(im,0,0,w,h);
+      repositionCoach(cv.toDataURL('image/jpeg',0.85), async data=>{ await cIdbSet('p'+id,data); COACH_PHOTOS[id]=data; closeModal(); openPlayerCard(id); toast('Foto aggiornata'); });
+    }; im.src=rd.result; };
+    rd.readAsDataURL(f);
+  };
+  inp.click();
+}
+async function removePhotoCoach(id){ await cIdbDel('p'+id); COACH_PHOTOS[id]=null; closeModal(); openPlayerCard(id); toast('Foto rimossa'); }
+function repositionCoach(srcDataURL, onConfirm){
+  coachMediaCSS(); const Fw=246, Fh=328;
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crop-simple" style="color:var(--brand)"></i> Posiziona la foto</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body" style="text-align:center">
+      <div id="rp-frame" style="width:${Fw}px;height:${Fh}px;margin:0 auto;border-radius:16px;overflow:hidden;position:relative;background:#000;touch-action:none;border:2px solid var(--brand)">
+        <img id="rp-img" src="${srcDataURL}" style="position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;pointer-events:none;max-width:none"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:14px"><i class="fa-solid fa-magnifying-glass-minus" style="color:var(--muted)"></i>
+        <input id="rp-zoom" type="range" min="100" max="300" value="100" style="flex:1"><i class="fa-solid fa-magnifying-glass-plus" style="color:var(--muted)"></i></div>
+      <p style="color:var(--muted);font-size:.78rem;margin-top:6px">Trascina per spostare, usa lo slider per lo zoom.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:12px" onclick="confirmCoachPhoto()"><i class="fa-solid fa-check"></i> Conferma</button>
+    </div>`, true);
+  const frame=document.getElementById('rp-frame'), img=document.getElementById('rp-img');
+  const st={imgW:0,imgH:0,cover:1,zoom:1,tx:0,ty:0};
+  const dW=()=>st.imgW*st.cover*st.zoom, dH=()=>st.imgH*st.cover*st.zoom;
+  const clamp=()=>{ st.tx=Math.min(0,Math.max(Fw-dW(),st.tx)); st.ty=Math.min(0,Math.max(Fh-dH(),st.ty)); };
+  const apply=()=>{ img.style.transform=`translate(${st.tx}px,${st.ty}px) scale(${st.cover*st.zoom})`; };
+  const init=()=>{ st.imgW=img.naturalWidth; st.imgH=img.naturalHeight; st.cover=Math.max(Fw/st.imgW,Fh/st.imgH); st.zoom=1; st.tx=(Fw-dW())/2; st.ty=(Fh-dH())/2; clamp(); apply(); };
+  img.onload=init; if(img.complete && img.naturalWidth) init();
+  document.getElementById('rp-zoom').oninput=e=>{ const z=e.target.value/100, cx=Fw/2-st.tx, cy=Fh/2-st.ty, ratio=z/st.zoom; st.zoom=z; st.tx=Fw/2-cx*ratio; st.ty=Fh/2-cy*ratio; clamp(); apply(); };
+  let px,py,drag=false;
+  frame.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY;try{frame.setPointerCapture(e.pointerId);}catch(_){}});
+  frame.addEventListener('pointermove',e=>{ if(!drag)return; st.tx+=e.clientX-px; st.ty+=e.clientY-py; px=e.clientX; py=e.clientY; clamp(); apply(); });
+  frame.addEventListener('pointerup',()=>drag=false); frame.addEventListener('pointercancel',()=>drag=false);
+  window.__rpc={st,Fw,Fh,img,onConfirm};
+}
+function confirmCoachPhoto(){
+  const R=window.__rpc; if(!R){closeModal();return;}
+  const {st,Fw,Fh,img,onConfirm}=R, Tw=480,Th=640, s=st.cover*st.zoom;
+  const c=document.createElement('canvas'); c.width=Tw; c.height=Th;
+  c.getContext('2d').drawImage(img,(-st.tx)/s,(-st.ty)/s,Fw/s,Fh/s,0,0,Tw,Th);
+  onConfirm(c.toDataURL('image/jpeg',0.78));
+}
+function openPlayerCard(id){
+  coachMediaCSS();
+  const p=playerById(id), s=getSeasonStats(id), sport=curSport();
+  const ovr=cphOverall(s.avgVoto);
+  const pal={pallavolo:['#F6D365','#E2A13C'],calcio:['#7BE0A3','#34A853'],basket:['#FDBA74','#F97316']}[sport]||['#F6D365','#E2A13C'];
+  const ic={pallavolo:'🏐',calcio:'⚽',basket:'🏀'}[sport]||'🏅';
+  const cells=(s.cells||[]).slice(0,4);
+  const photo=COACH_PHOTOS[id]?`<img src="${COACH_PHOTOS[id]}">`:`<div class="ini">${cphInitials(p.name)}</div>`;
+  const stats=cells.length?cells.map(c=>`<div class="st"><span>${c[0]}</span> ${c[1]}${c[2]||''}</div>`).join(''):`<div class="st"><span>Media voto</span> ${s.avgVoto?s.avgVoto.toFixed(1):'—'}</div>`;
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${p.name}</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body fc-wrap">
+      <div class="fc" style="--fc-a:${pal[0]};--fc-b:${pal[1]}">
+        <div class="top"><div class="ovr"><b>${ovr||'—'}</b><span>${cphAbbr(p.role)}</span></div><div class="sporticon">${ic}</div></div>
+        <div class="photo">${photo}</div>
+        <div class="nm">${p.name} <span style="opacity:.55">#${p.number||''}</span></div>
+        <div class="tm">${DB.teamName||''}</div>
+        <div class="stats">${stats}</div>
+      </div>
+      <button class="btn btn-accent" style="width:100%;margin-top:16px" onclick="pickPhotoCoach(${id})"><i class="fa-solid fa-camera"></i> ${COACH_PHOTOS[id]?'Cambia foto':'Aggiungi foto'}</button>
+      ${COACH_PHOTOS[id]?`<button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="removePhotoCoach(${id})"><i class="fa-solid fa-trash"></i> Rimuovi foto</button>`:''}
+    </div>`, true);
 }
