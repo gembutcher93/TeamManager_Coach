@@ -23,16 +23,8 @@ const SCOUT = {
       {label:'Attacco',   fields:[['aTot','Tot'],['aErr','Err'],['aPt','Pt']]},
       {label:'Muro',      fields:[['mPt','Pt']]}
     ],
-    voto(s){
-      let parts=0, w=0;
-      if(s.aTot>0){ const e=(s.aPt-s.aErr)/s.aTot; parts+=Math.max(-1,Math.min(1,e))*s.aTot; w+=s.aTot; }              // efficienza attacco
-      if(s.rTot>0){ const err=s.rTot-s.rPos-s.rPrf; const e=(s.rPrf+s.rPos*0.5-err)/s.rTot; parts+=Math.max(-1,Math.min(1,e))*s.rTot; w+=s.rTot; } // qualità ricezione
-      const eff = w? parts/w : 0;                 // -1..+1
-      const conf = Math.min(1, w/10);             // poche azioni -> tira verso il 6
-      let v = 6.0 + eff*3.2*conf;                 // nucleo su efficienza, normalizzato per volume
-      v += s.bAce*0.18 - s.bErr*0.30 + s.mPt*0.22; // battuta e muro come plus/minus contenuti
-      return clampVoto(v);
-    },
+    voto(s, role){ return volleyVoto(s, role).voto; },
+    why(s, role){ return volleyVoto(s, role).parts; },
     season(a){
       const atk=a.aTot?Math.round((a.aPt-a.aErr)/a.aTot*100):null;
       const rec=a.rTot?Math.round((a.rPos+a.rPrf)/a.rTot*100):null;
@@ -88,7 +80,49 @@ const SCOUT = {
 };
 function scoutFields(sport){ return SCOUT[sport||curSport()].groups.flatMap(g=>g.fields.map(f=>f[0])); }
 function blankStat(sport){ const o={}; scoutFields(sport).forEach(k=>o[k]=0); return o; }
-function computeVoto(s, sport){ return SCOUT[sport||curSport()].voto(s); }
+function computeVoto(s, sport, role){ return SCOUT[sport||curSport()].voto(s, role); }
+/* Voto pallavolo pesato per ruolo (Eff% attacco, Pos% ricezione, muro doppio al centrale, libero su ricezione) */
+function volleyVoto(s, role){
+  role = role || 'Schiacciatore';
+  const aTot=s.aTot||0, rTot=s.rTot||0;
+  const attEff = aTot>0 ? (s.aPt - s.aErr)/aTot : null;
+  const recErr = rTot - (s.rPos||0) - (s.rPrf||0);
+  const recPos = rTot>0 ? ((s.rPos||0)+(s.rPrf||0))/rTot : null;
+  const aces=s.bAce||0, servErr=s.bErr||0, blocks=s.mPt||0;
+  let v=6.0; const parts=[];
+  const add=(val,lbl)=>{ if(val){ v+=val; parts.push(lbl+' '+(val>0?'+':'')+val.toFixed(1)); } };
+  const attackPts=(eff,mult)=>{ if(eff==null) return 0; let p;
+    if(eff>=0.45)p=1.2; else if(eff>=0.40)p=1.0; else if(eff>=0.30)p=0.6; else if(eff>=0.25)p=0.4; else if(eff>=0.15)p=0.15; else if(eff>=0.10)p=0; else p=-1.0;
+    return p*(mult||1); };
+  const volBonus=(eff)=> (eff!=null && eff>=0.30 && aTot>=18) ? 0.3 : 0;
+  const effPct = attEff!=null?Math.round(attEff*100)+'%':'';
+  const posPct = recPos!=null?Math.round(recPos*100)+'%':'';
+  if(role==='Libero'){
+    if(recPos!=null){ let rp; if(recPos>=0.65)rp=1.5; else if(recPos>=0.58)rp=1.0; else if(recPos>=0.50)rp=0.5; else if(recPos>=0.40)rp=0; else rp=-0.8; add(rp,'Ricezione '+posPct); }
+  } else if(role==='Palleggiatore'){
+    add(attackPts(attEff,0.5),'Attacco '+effPct);
+    add(blocks*0.25, blocks?blocks+' muri':null);
+    add(aces*0.2, aces?aces+' ace':null);
+    add(-servErr*0.30, servErr?servErr+' err.batt':null);
+  } else if(role==='Centrale'){
+    add(attackPts(attEff,1.0),'Attacco '+effPct);
+    add(blocks*0.4, blocks?blocks+' muri(x2)':null);
+    add(aces*0.15, aces?aces+' ace':null);
+    add(-servErr*0.30, servErr?servErr+' err.batt':null);
+  } else if(role==='Opposto'){
+    add(attackPts(attEff,1.3)+volBonus(attEff),'Attacco '+effPct);
+    add(blocks*0.25, blocks?blocks+' muri':null);
+    add(aces*0.2, aces?aces+' ace':null);
+    add(-servErr*0.30, servErr?servErr+' err.batt':null);
+  } else {
+    add(attackPts(attEff,1.0)+volBonus(attEff),'Attacco '+effPct);
+    if(recPos!=null){ let rp; if(recPos>=0.60)rp=1.0; else if(recPos>=0.55)rp=0.8; else if(recPos>=0.45)rp=0.4; else if(recPos>=0.35)rp=0; else rp=-0.6; add(rp,'Ricezione '+posPct); }
+    add(aces*0.15, aces?aces+' ace':null);
+    add(blocks*0.25, blocks?blocks+' muri':null);
+    add(-servErr*0.30, servErr?servErr+' err.batt':null);
+  }
+  return { voto: clampVoto(v), parts };
+}
 
 /* ---------- SEED (dati d'esempio per non partire vuoti) ---------- */
 function seedDB(){
@@ -848,14 +882,14 @@ function readRow(id){
     const o={}; r.querySelectorAll('input[data-k]').forEach(inp=>o[inp.dataset.k]=parseInt(inp.value)||0);
     return o;
 }
-function calcRow(id){ document.getElementById('voto-'+id).textContent=computeVoto(readRow(id)).toFixed(1); }
+function calcRow(id){ document.getElementById('voto-'+id).textContent=computeVoto(readRow(id),null,(playerById(id)||{}).role).toFixed(1); }
 function saveScout(){
     const id=parseInt(document.getElementById('scout-select').value);
     const match=DB.events.find(e=>e.id===id);
     const rows=[];
     document.querySelectorAll('#scout-body tr[data-pid]').forEach(tr=>{
         const pId=parseInt(tr.dataset.pid);const s=readRow(pId);
-        rows.push({pId,...s,voto:+computeVoto(s).toFixed(1)});
+        rows.push({pId,...s,voto:+computeVoto(s,null,(playerById(pId)||{}).role).toFixed(1)});
     });
     DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==id);
     DB.scoutHistory.push({matchId:id,date:match.date,opponent:match.notes,sport:curSport(),rows});
