@@ -148,7 +148,6 @@
       applyAccent(pick.accent);
       patchRoles(pick.sport);
       if (typeof window.renderTeamName === 'function') window.renderTeamName();
-      injectSportButton(cur);
       wrap.remove();
       if (typeof window.go === 'function') window.go('dashboard');
     };
@@ -210,13 +209,28 @@
         else {
           applyAccent(d.accent || 'verde');
           ensureRoles(d.sport);
-          injectSportButton(d);
         }
       } else if (tries > 30) { clearInterval(t); }
     }, 80);
   }
   if (document.readyState === 'complete' || document.readyState === 'interactive') boot();
   else window.addEventListener('load', boot);
+
+  // Reset (Azzera tutto) -> ripropone la scelta sport, invece di uno switch fisso
+  function installReset(){
+    if (typeof window.resetAll !== 'function' || window.__psReset) return;
+    window.__psReset = true;
+    window.resetAll = function(){
+      confirmAction('Cancellare TUTTI i dati e ripartire da zero? Non si può annullare.', function(){
+        try { localStorage.removeItem(LS_KEY); } catch(e){}
+        DB = seedDB(); save(); renderTeamName(); go('dashboard');
+        showSetup(readDB());
+        toast('App azzerata — scegli lo sport', 'info');
+      });
+    };
+  }
+  installReset();
+  window.addEventListener('load', installReset);
 
   window.POLISPORT = { SPORTS, ACCENTS, showSetup };
 })();
