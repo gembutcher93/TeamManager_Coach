@@ -24,11 +24,13 @@ const SCOUT = {
       {label:'Muro',      fields:[['mPt','Pt']]}
     ],
     voto(s){
-      let v=6.0;
-      v+=(s.bAce*0.6)-(s.bErr*0.5);
-      v+=(s.aPt*0.5)-(s.aErr*0.6);
-      v+=(s.mPt*0.8);
-      if(s.rTot>0){ const pos=(s.rPos+s.rPrf)/s.rTot; v+=(pos*0.8)-((s.rTot-s.rPos-s.rPrf)*0.2); }
+      let parts=0, w=0;
+      if(s.aTot>0){ const e=(s.aPt-s.aErr)/s.aTot; parts+=Math.max(-1,Math.min(1,e))*s.aTot; w+=s.aTot; }              // efficienza attacco
+      if(s.rTot>0){ const err=s.rTot-s.rPos-s.rPrf; const e=(s.rPrf+s.rPos*0.5-err)/s.rTot; parts+=Math.max(-1,Math.min(1,e))*s.rTot; w+=s.rTot; } // qualità ricezione
+      const eff = w? parts/w : 0;                 // -1..+1
+      const conf = Math.min(1, w/10);             // poche azioni -> tira verso il 6
+      let v = 6.0 + eff*3.2*conf;                 // nucleo su efficienza, normalizzato per volume
+      v += s.bAce*0.18 - s.bErr*0.30 + s.mPt*0.22; // battuta e muro come plus/minus contenuti
       return clampVoto(v);
     },
     season(a){
@@ -582,7 +584,7 @@ function renderDashboard(){
             <div class="val num">${avg?avg.toFixed(2):'—'}</div>
             <div class="delta ${avg>=6?'up':'down'}">${avg?(avg>=6?'sopra la sufficienza':'sotto la sufficienza'):'nessuna gara'}</div></div>
         <div class="kpi"><i class="fa-solid fa-users ic"></i><div class="lbl">Atleti in rosa</div>
-            <div class="val num">${DB.players.length}<small>/12</small></div>
+            <div class="val num">${DB.players.length}<small>atleti</small></div>
             <div class="delta flat">${DB.players.filter(p=>p.status==='injured').length} infortunati</div></div>
         <div class="kpi"><i class="fa-solid fa-user-check ic"></i><div class="lbl">Presenza media</div>
             <div class="val num">${att!==null?att:'—'}<small>%</small></div>
@@ -621,7 +623,7 @@ function renderDashboard(){
 const STATUS_META={active:{c:'var(--ok)',t:'Disponibile'},injured:{c:'var(--bad)',t:'Infortunato'},suspended:{c:'var(--warn)',t:'Squalificato'}};
 function renderRoster(){
     const body=document.getElementById('roster-body');
-    document.getElementById('roster-count').textContent=`(${DB.players.length}/12)`;
+    document.getElementById('roster-count').textContent=`(${DB.players.length} in rosa)`;
     if(!DB.players.length){body.innerHTML=`<tr class="empty-row"><td colspan="8">Nessun atleta. Aggiungi il primo giocatore qui sopra.</td></tr>`;return;}
     body.innerHTML='';
     DB.players.forEach(p=>{
@@ -649,7 +651,7 @@ function renderRoster(){
 }
 function addPlayer(e){
     e.preventDefault();
-    if(DB.players.length>=12) return toast('Limite di 12 atleti raggiunto','danger');
+    // nessun limite di rosa: calcio/basket possono avere 20+ atleti
     const number=parseInt(document.getElementById('p-number').value);
     if(DB.players.some(p=>p.number===number)) return toast(`La maglia ${number} è già assegnata`,'warning');
     DB.players.push({id:uid(),name:document.getElementById('p-name').value.trim(),number,
