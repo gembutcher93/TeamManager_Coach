@@ -397,6 +397,13 @@ function buildLayout(){
         </div>
     </section>
 
+    <!-- FORMAZIONE -->
+    <section id="formazione" class="section">
+        <div class="page-head"><div><div class="eyebrow">Meritocrazia</div><h2>Formazione consigliata</h2>
+            <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div></div>
+        <div id="formazione-content"></div>
+    </section>
+
     <!-- PRESENZE -->
     <section id="presenze" class="section">
         <div class="page-head"><div><div class="eyebrow">Gestione gruppo</div><h2>Presenze Allenamenti</h2>
@@ -495,7 +502,8 @@ function buildLayout(){
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{}
+    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{},
+    formazione:renderFormazione
 };
 function go(sec){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -1378,4 +1386,61 @@ function openPlayerCard(id){
       <button class="btn btn-accent" style="width:100%;margin-top:16px" onclick="pickPhotoCoach(${id})"><i class="fa-solid fa-camera"></i> ${COACH_PHOTOS[id]?'Cambia foto':'Aggiungi foto'}</button>
       ${COACH_PHOTOS[id]?`<button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="removePhotoCoach(${id})"><i class="fa-solid fa-trash"></i> Rimuovi foto</button>`:''}
     </div>`, true);
+}
+
+/* =========================================================
+   FORMAZIONE CONSIGLIATA (meritocrazia) — tutti gli sport
+   ========================================================= */
+const FORMATION = {
+  pallavolo: [['Palleggiatore',1],['Opposto',1],['Schiacciatore',2],['Centrale',2],['Libero',1]],
+  calcio:    [['Portiere',1],['Difensore',4],['Centrocampista',3],['Attaccante',3]],
+  basket:    [['Playmaker',1],['Guardia',1],['Ala piccola',1],['Ala grande',1],['Centro',1]]
+};
+function injectFmzCSS(){
+  if(document.getElementById('fmz-css'))return;
+  const st=document.createElement('style'); st.id='fmz-css';
+  st.textContent=`
+  .fmz-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;}
+  .fmz-role{background:var(--surface-2);border:1px solid var(--line);border-radius:14px;padding:12px 14px;}
+  .fmz-role-h{font-weight:800;font-family:'Outfit',sans-serif;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;}
+  .fmz-n{color:var(--muted);font-size:.8rem;font-weight:600;}
+  .fmz-slot{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);}
+  .fmz-slot:last-child{border-bottom:0;}
+  .fmz-slot.empty{color:var(--muted);font-style:italic;font-size:.85rem;justify-content:center;padding:10px 0;}
+  .fmz-num{font-family:'Outfit',sans-serif;font-weight:800;color:var(--brand);min-width:36px;}
+  .fmz-name{flex:1;font-weight:600;}
+  .fmz-role-tag{color:var(--muted);font-size:.78rem;}
+  .voto-badge{font-family:'Outfit',sans-serif;font-weight:800;border-radius:8px;padding:3px 9px;font-size:.85rem;}
+  .voto-badge.hi{background:rgba(34,197,94,.18);color:#22C55E;} .voto-badge.md{background:rgba(245,179,1,.16);color:#f5b301;}
+  .voto-badge.lo{background:rgba(240,70,60,.16);color:#F0463C;} .voto-badge.nd{background:var(--surface);color:var(--muted);}
+  .fmz-bench .fmz-slot{border-bottom:1px solid var(--line);}
+  `;
+  document.head.appendChild(st);
+}
+function renderFormazione(){
+  injectFmzCSS();
+  const sport=curSport(), plan=FORMATION[sport]||FORMATION.pallavolo;
+  const players=DB.players.map(p=>({p, v:getSeasonStats(p.id).avgVoto}));
+  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v??-1)-(a.v??-1)));
+  const badge=v=> v==null?'<span class="voto-badge nd">—</span>':`<span class="voto-badge ${v>=7?'hi':v>=5.5?'md':'lo'}">${v.toFixed(1)}</span>`;
+  const used=new Set(); const starters=[];
+  plan.forEach(([role,n])=>{
+    const pool=byRole(role).filter(x=>!used.has(x.p.id)); const slots=[];
+    for(let i=0;i<n;i++){ const pick=pool[i]; if(pick){used.add(pick.p.id);slots.push(pick);} else slots.push(null); }
+    starters.push({role,slots});
+  });
+  const startersHtml=starters.map(g=>`
+    <div class="fmz-role"><div class="fmz-role-h">${g.role} <span class="fmz-n">×${g.slots.length}</span></div>
+      ${g.slots.map(s=> s?`<div class="fmz-slot"><span class="fmz-num">#${s.p.number}</span><span class="fmz-name">${s.p.name}</span>${badge(s.v)}</div>`:`<div class="fmz-slot empty">nessun ${g.role.toLowerCase()} in rosa</div>`).join('')}
+    </div>`).join('');
+  const bench=players.filter(x=>!used.has(x.p.id)).sort((a,b)=>((b.v??-1)-(a.v??-1)));
+  const benchHtml=bench.length? bench.map(x=>`<div class="fmz-slot"><span class="fmz-num">#${x.p.number}</span><span class="fmz-name">${x.p.name}</span><span class="fmz-role-tag">${x.p.role}</span>${badge(x.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+  document.getElementById('formazione-content').innerHTML=`
+    <div class="card"><h3><i class="fa-solid fa-star" style="color:var(--brand)"></i> Titolari consigliati</h3>
+      <div class="fmz-grid">${startersHtml}</div>
+      <p class="hint" style="margin-top:1rem">Scelti per media voto. Più registri partite nello Scout, più la formazione diventa precisa.</p>
+    </div>
+    <div class="card"><h3><i class="fa-solid fa-users" style="color:var(--muted)"></i> Riserve (in ordine di rendimento)</h3>
+      <div class="fmz-bench">${benchHtml}</div>
+    </div>`;
 }
