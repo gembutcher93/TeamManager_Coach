@@ -95,28 +95,50 @@ function volleyVoto(s, role){
     if(eff>=0.45)p=1.2; else if(eff>=0.40)p=1.0; else if(eff>=0.30)p=0.6; else if(eff>=0.25)p=0.4; else if(eff>=0.15)p=0.15; else if(eff>=0.10)p=0; else p=-1.0;
     return p*(mult||1); };
   const volBonus=(eff)=> (eff!=null && eff>=0.30 && aTot>=18) ? 0.3 : 0;
+  /* Ricezione: contributo continuo, scalato per volume e PESATO PER RUOLO.
+     Vale per tutti — tanto per il libero, meno per chi attacca, poco (ma non zero)
+     per chi riceve di rado (centrale/palleggiatore/opposto): se capita di ricevere
+     o coprire un pallonetto, quel tocco — positivo, negativo o errore — muove il voto. */
+  const recPoints=(mult)=>{ if(recPos==null||!rTot) return 0; let q;
+    if(recPos>=0.95)q=1.7; else if(recPos>=0.85)q=1.4; else if(recPos>=0.75)q=1.1;
+    else if(recPos>=0.68)q=0.85; else if(recPos>=0.60)q=0.6; else if(recPos>=0.52)q=0.32;
+    else if(recPos>=0.45)q=0.08; else if(recPos>=0.38)q=-0.3; else if(recPos>=0.30)q=-0.7; else q=-1.2;
+    return q*mult*Math.min(1, rTot/14); };
+  const RECW={Libero:2.1, Schiacciatore:1.05, Opposto:0.6, Centrale:0.6, Palleggiatore:0.6};
+  const recPts=recPoints(RECW[role]!=null?RECW[role]:1.0);
   const effPct = attEff!=null?Math.round(attEff*100)+'%':'';
   const posPct = recPos!=null?Math.round(recPos*100)+'%':'';
+  const recLbl=recPos!=null?'Ricezione '+posPct:null;
   if(role==='Libero'){
-    if(recPos!=null){ let rp; if(recPos>=0.65)rp=1.5; else if(recPos>=0.58)rp=1.0; else if(recPos>=0.50)rp=0.5; else if(recPos>=0.40)rp=0; else rp=-0.8; add(rp,'Ricezione '+posPct); }
+    add(recPts, recLbl);
+    add((recPos!=null && recPos>=0.60 && rTot>=15) ? 0.5 : 0, rTot>=15?'volume ricezione':null);
+    /* contributi rari ma reali: pallonetto/attacco a punto, muro, ace (ogni tocco conta) */
+    add((s.aPt||0)*0.6, s.aPt?s.aPt+' attacchi pt':null);
+    add(-(s.aErr||0)*0.2, s.aErr?s.aErr+' err.att':null);
+    add(blocks*0.4, blocks?blocks+' muri':null);
+    add(aces*0.3, aces?aces+' ace':null);
+    add(-servErr*0.30, servErr?servErr+' err.batt':null);
   } else if(role==='Palleggiatore'){
     add(attackPts(attEff,0.5),'Attacco '+effPct);
+    add(recPts, recLbl);
     add(blocks*0.25, blocks?blocks+' muri':null);
     add(aces*0.2, aces?aces+' ace':null);
     add(-servErr*0.30, servErr?servErr+' err.batt':null);
   } else if(role==='Centrale'){
     add(attackPts(attEff,1.0),'Attacco '+effPct);
     add(blocks*0.4, blocks?blocks+' muri(x2)':null);
+    add(recPts, recLbl);
     add(aces*0.15, aces?aces+' ace':null);
     add(-servErr*0.30, servErr?servErr+' err.batt':null);
   } else if(role==='Opposto'){
     add(attackPts(attEff,1.3)+volBonus(attEff),'Attacco '+effPct);
+    add(recPts, recLbl);
     add(blocks*0.25, blocks?blocks+' muri':null);
     add(aces*0.2, aces?aces+' ace':null);
     add(-servErr*0.30, servErr?servErr+' err.batt':null);
   } else {
     add(attackPts(attEff,1.0)+volBonus(attEff),'Attacco '+effPct);
-    if(recPos!=null){ let rp; if(recPos>=0.60)rp=1.0; else if(recPos>=0.55)rp=0.8; else if(recPos>=0.45)rp=0.4; else if(recPos>=0.35)rp=0; else rp=-0.6; add(rp,'Ricezione '+posPct); }
+    add(recPts, recLbl);
     add(aces*0.15, aces?aces+' ace':null);
     add(blocks*0.25, blocks?blocks+' muri':null);
     add(-servErr*0.30, servErr?servErr+' err.batt':null);
@@ -955,7 +977,7 @@ function buildScoutTap(matchId, existing){
   scoutTapCSS();
   const base={};
   if(existing){ existing.rows.forEach(r=>{ const b=blankStat('pallavolo'); scoutFields('pallavolo').forEach(k=>b[k]=r[k]||0); base[r.pId]=b; }); }
-  TAP={ matchId, base, events:[], sel:null, fund:'R' };
+  TAP={ matchId, base, events:[], sel:null, fund:'R', seq:1 };
   const el=document.getElementById('scout-tap');
   el.innerHTML=`
     <div class="stap-wrap">
@@ -967,6 +989,7 @@ function buildScoutTap(matchId, existing){
         <div class="stap-sel" id="stap-sel"></div>
         <div class="stap-funds" id="stap-funds"></div>
         <div class="stap-grades" id="stap-grades"></div>
+        <div class="stap-detail" id="stap-detail"></div>
         <div class="stap-last" id="stap-last"></div>
         <button class="stap-undo" id="stap-undo" onclick="tapUndo()"><i class="fa-solid fa-rotate-left"></i> Annulla ultimo</button>
         <button class="btn btn-accent stap-save" onclick="saveScoutTap()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
@@ -1012,12 +1035,38 @@ function tapRenderSel(){
       last.innerHTML=`Ultimo: <b>#${pl?pl.number:'?'}</b> · ${fn} · <b class="stap-lg-sym">${e.grade}</b>`; }
     else last.textContent='';
   }
+  tapRenderDetail();
+}
+/* Dettaglio del giocatore selezionato: ogni tocco è una chip rimovibile singolarmente */
+function tapRenderDetail(){
+  const box=document.getElementById('stap-detail'); if(!box) return;
+  if(!TAP.sel){ box.innerHTML=''; return; }
+  const p=playerById(TAP.sel);
+  const evs=TAP.events.filter(e=>e.pId===TAP.sel);
+  const gClass=g=>(TAP_GRADES.find(x=>x[0]===g)||[])[2]||'';
+  const fShort={R:'Ric',A:'Att',B:'Batt',M:'Muro'};
+  const baseRow=TAP.base[TAP.sel];
+  const baseInfo = baseRow ? (()=>{ const {rec,eff}=tapPct(baseRow); const bits=[];
+      if(rec!=null)bits.push('Ric '+rec+'%'); if(eff!=null)bits.push('Att '+eff+'%');
+      if(baseRow.mPt)bits.push(baseRow.mPt+' muri'); if(baseRow.bAce)bits.push(baseRow.bAce+' ace');
+      return bits.length?`<div class="stap-base">Già registrato: ${bits.join(' · ')} <span class="stap-base-note">(aggregato, non rimovibile a tocco)</span></div>`:''; })() : '';
+  const chips = evs.length
+    ? evs.map(e=>`<button class="stap-chip ${gClass(e.grade)}" onclick="tapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
+         <span class="stap-chip-f">${fShort[e.fund]||e.fund}</span><b>${e.grade}</b><i class="fa-solid fa-xmark"></i></button>`).join('')
+    : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione${baseRow?' (oltre a quelli già salvati)':''}.</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div>${baseInfo}<div class="stap-chips">${chips}</div>`;
+}
+function tapRemoveEvent(id){
+  if(!TAP) return;
+  const i=TAP.events.findIndex(e=>e.id===id); if(i<0) return;
+  TAP.events.splice(i,1);
+  tapRenderPlayers(); tapRenderSel();
 }
 function tapFund(f){ if(!TAP) return; TAP.fund=f; document.querySelectorAll('.stap-fund').forEach(b=>b.classList.toggle('on',b.dataset.f===f)); }
 function tapSelect(pId){ if(!TAP) return; TAP.sel=pId; tapRenderPlayers(); tapRenderSel(); }
 function tapGrade(g){
   if(!TAP||!TAP.sel) return;
-  TAP.events.push({pId:TAP.sel, fund:TAP.fund, grade:g});
+  TAP.events.push({id:TAP.seq++, pId:TAP.sel, fund:TAP.fund, grade:g});
   tapRenderPlayers(); tapRenderSel();
 }
 function tapUndo(){
@@ -1067,6 +1116,16 @@ function scoutTapCSS(){
   .stap-grade b{font-size:1.6rem;font-family:'Outfit',sans-serif;} .stap-grade span{font-size:.6rem;text-transform:uppercase;letter-spacing:.3px;opacity:.85;}
   .stap-grade:disabled{opacity:.32;cursor:not-allowed;}
   .stap-grade.g-perf{background:#5fd06f;} .stap-grade.g-pos{background:#8fe388;} .stap-grade.g-ok{background:#ffd166;} .stap-grade.g-neg{background:#f4a259;} .stap-grade.g-err{background:#ef6461;color:#fff;}
+  .stap-detail{display:flex;flex-direction:column;gap:6px;}
+  .stap-detail-h{font-size:.8rem;color:var(--muted);display:flex;align-items:center;gap:6px;}
+  .stap-detail-h .stap-detail-n{margin-left:auto;background:var(--brand);color:#04140A;border-radius:20px;padding:0 8px;font-weight:800;font-size:.72rem;}
+  .stap-base{font-size:.72rem;color:var(--muted);} .stap-base-note{opacity:.7;}
+  .stap-detail-empty{font-size:.76rem;color:var(--muted);font-style:italic;}
+  .stap-chips{display:flex;flex-wrap:wrap;gap:6px;max-height:150px;overflow:auto;}
+  .stap-chip{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border:none;border-radius:10px;cursor:pointer;color:#0b1220;font-weight:700;font-size:.78rem;line-height:1;}
+  .stap-chip b{font-family:'Outfit',sans-serif;font-size:1rem;} .stap-chip .stap-chip-f{font-size:.66rem;text-transform:uppercase;letter-spacing:.3px;opacity:.85;} .stap-chip i{opacity:.55;font-size:.7rem;}
+  .stap-chip:hover i{opacity:1;} .stap-chip:active{transform:scale(.95);}
+  .stap-chip.g-perf{background:#5fd06f;} .stap-chip.g-pos{background:#8fe388;} .stap-chip.g-ok{background:#ffd166;} .stap-chip.g-neg{background:#f4a259;} .stap-chip.g-err{background:#ef6461;color:#fff;}
   .stap-last{min-height:18px;font-size:.8rem;color:var(--muted);text-align:center;} .stap-last .stap-lg-sym{font-family:'Outfit';}
   .stap-undo{padding:12px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.18));background:transparent;color:var(--text,#fff);font-weight:700;cursor:pointer;}
   .stap-undo:disabled{opacity:.35;cursor:not-allowed;} .stap-save{margin-top:2px;}
