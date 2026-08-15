@@ -401,13 +401,18 @@ function buildLayout(){
         </div>
         <div class="card" id="scout-panel" style="display:none">
             <h3 id="scout-title"><i class="fa-solid fa-clipboard-list"></i> Tabellino</h3>
-            <div class="table-wrap"><table class="scout-table">
-                <thead id="scout-head"></thead>
-                <tbody id="scout-body"></tbody>
-            </table></div>
-            <div style="display:flex;justify-content:flex-end;margin-top:1.2rem">
-                <button class="btn btn-accent" onclick="saveScout()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+            <!-- MODALITÀ NUMERICA (calcio/basket + fallback): tabella per fondamentale -->
+            <div id="scout-numeric">
+                <div class="table-wrap"><table class="scout-table">
+                    <thead id="scout-head"></thead>
+                    <tbody id="scout-body"></tbody>
+                </table></div>
+                <div style="display:flex;justify-content:flex-end;margin-top:1.2rem">
+                    <button class="btn btn-accent" onclick="saveScout()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+                </div>
             </div>
+            <!-- MODALITÀ TAP A TOCCHI (pallavolo): tap giocatore → tap grado -->
+            <div id="scout-tap" style="display:none"></div>
             <div class="legend-grid" id="scout-legend"></div>
         </div>
     </section>
@@ -861,6 +866,15 @@ function setupScout(){
     const existing=DB.scoutHistory.find(s=>s.matchId===id);
     document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
     panel.style.display='block';
+    const numEl=document.getElementById('scout-numeric'), tapEl=document.getElementById('scout-tap');
+    /* PALLAVOLO → scout a tocchi (versione A). Altri sport → tabella numerica. */
+    if(sport==='pallavolo'){
+        numEl.style.display='none'; tapEl.style.display='block';
+        buildScoutTap(id, existing);
+        renderScoutLegend(sport);
+        return;
+    }
+    numEl.style.display='block'; tapEl.style.display='none';
     buildScoutHead(sport);
     const fields=scoutFields(sport), colspan=fields.length+2;
     body.innerHTML='';
@@ -895,6 +909,173 @@ function saveScout(){
     DB.scoutHistory.push({matchId:id,date:match.date,opponent:match.notes,sport:curSport(),rows});
     save();toast('Statistiche registrate nelle schede atleti');
     go('roster');
+}
+
+/* =========================================================
+   SCOUT PALLAVOLO — versione A (tap giocatore → tap grado)
+   I gradi Data Volley (# + ! − =) alimentano contatori precisi
+   (Pos% ricezione, Eff% attacco) che passano allo STESSO voto
+   pesato per ruolo (volleyVoto) e allo stesso DB.scoutHistory.
+   ========================================================= */
+const TAP_FUNDS = [
+  ['R','Ricezione','fa-hands-catching'],
+  ['A','Attacco','fa-volleyball'],
+  ['B','Battuta','fa-bullseye'],
+  ['M','Muro','fa-hand']
+];
+const TAP_GRADES = [
+  ['#','Perfetto','g-perf'],
+  ['+','Positivo','g-pos'],
+  ['!','Ok','g-ok'],
+  ['-','Negativo','g-neg'],
+  ['=','Errore','g-err']
+];
+/* stato di sessione dello scout a tocchi */
+let TAP = null;
+
+/* mappa un tocco (fondamentale + grado) sui contatori del modello pallavolo */
+function tapApply(o, fund, grade){
+  if(fund==='R'){ o.rTot++; if(grade==='#')o.rPrf++; else if(grade==='+'||grade==='!')o.rPos++; }
+  else if(fund==='A'){ o.aTot++; if(grade==='#')o.aPt++; else if(grade==='=')o.aErr++; }
+  else if(fund==='B'){ if(grade==='#')o.bAce++; else if(grade==='=')o.bErr++; }
+  else if(fund==='M'){ if(grade==='#'||grade==='+')o.mPt++; }
+}
+/* riga statistica derivata dai tocchi (base salvata + eventi di sessione) */
+function tapDeriveRow(pId){
+  const o=Object.assign(blankStat('pallavolo'), TAP.base[pId]||{});
+  TAP.events.forEach(e=>{ if(e.pId===pId) tapApply(o,e.fund,e.grade); });
+  return o;
+}
+function tapPct(row){
+  const rec = row.rTot>0 ? Math.round((row.rPos+row.rPrf)/row.rTot*100) : null;
+  const eff = row.aTot>0 ? Math.round((row.aPt-row.aErr)/row.aTot*100) : null;
+  return {rec, eff};
+}
+function buildScoutTap(matchId, existing){
+  scoutTapCSS();
+  const base={};
+  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('pallavolo'); scoutFields('pallavolo').forEach(k=>b[k]=r[k]||0); base[r.pId]=b; }); }
+  TAP={ matchId, base, events:[], sel:null, fund:'R' };
+  const el=document.getElementById('scout-tap');
+  el.innerHTML=`
+    <div class="stap-wrap">
+      <div class="stap-left">
+        <div class="stap-hint"><i class="fa-solid fa-hand-pointer"></i> Tocca un giocatore, poi tocca il grado del suo tocco.</div>
+        <div class="stap-players" id="stap-players"></div>
+      </div>
+      <div class="stap-pad">
+        <div class="stap-sel" id="stap-sel"></div>
+        <div class="stap-funds" id="stap-funds"></div>
+        <div class="stap-grades" id="stap-grades"></div>
+        <div class="stap-last" id="stap-last"></div>
+        <button class="stap-undo" id="stap-undo" onclick="tapUndo()"><i class="fa-solid fa-rotate-left"></i> Annulla ultimo</button>
+        <button class="btn btn-accent stap-save" onclick="saveScoutTap()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+        <div class="stap-legend">
+          ${TAP_GRADES.map(g=>`<span class="stap-lg ${g[2]}"><b>${g[0]}</b> ${g[1]}</span>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('stap-funds').innerHTML=TAP_FUNDS.map(f=>
+    `<button class="stap-fund${f[0]===TAP.fund?' on':''}" data-f="${f[0]}" onclick="tapFund('${f[0]}')"><i class="fa-solid ${f[2]}"></i> ${f[1]}</button>`).join('');
+  document.getElementById('stap-grades').innerHTML=TAP_GRADES.map(g=>
+    `<button class="stap-grade ${g[2]}" onclick="tapGrade('${g[0]}')"><b>${g[0]}</b><span>${g[1]}</span></button>`).join('');
+  tapRenderPlayers();
+  tapRenderSel();
+}
+function tapRenderPlayers(){
+  const box=document.getElementById('stap-players'); if(!box) return;
+  const roster=activePlayers().filter(p=>curSport()!=='pallavolo' || true);
+  if(!roster.length){ box.innerHTML='<div class="empty-row" style="padding:1rem">Nessun atleta in rosa.</div>'; return; }
+  box.innerHTML=roster.map(p=>{
+    const row=tapDeriveRow(p.id), {rec,eff}=tapPct(row);
+    const v=computeVoto(row,'pallavolo',p.role);
+    const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
+    const vClass=v>=7?'hi':v>=5.5?'md':'lo';
+    return `<button class="stap-player${TAP.sel===p.id?' sel':''}" onclick="tapSelect(${p.id})">
+      <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+      <div class="stap-p-stat"><span>Ric ${rec==null?'—':rec+'%'}</span><span>Att ${eff==null?'—':eff+'%'}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}</span></div>
+    </button>`;
+  }).join('');
+}
+function tapRenderSel(){
+  const sel=document.getElementById('stap-sel'); if(!sel) return;
+  const p=TAP.sel?playerById(TAP.sel):null;
+  sel.innerHTML = p
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
+  const on=!!p;
+  document.querySelectorAll('.stap-grade').forEach(b=>b.disabled=!on);
+  const undo=document.getElementById('stap-undo'); if(undo) undo.disabled=!TAP.events.length;
+  const last=document.getElementById('stap-last');
+  if(last){
+    if(TAP.events.length){ const e=TAP.events[TAP.events.length-1]; const pl=playerById(e.pId); const fn=(TAP_FUNDS.find(f=>f[0]===e.fund)||[])[1]||e.fund;
+      last.innerHTML=`Ultimo: <b>#${pl?pl.number:'?'}</b> · ${fn} · <b class="stap-lg-sym">${e.grade}</b>`; }
+    else last.textContent='';
+  }
+}
+function tapFund(f){ if(!TAP) return; TAP.fund=f; document.querySelectorAll('.stap-fund').forEach(b=>b.classList.toggle('on',b.dataset.f===f)); }
+function tapSelect(pId){ if(!TAP) return; TAP.sel=pId; tapRenderPlayers(); tapRenderSel(); }
+function tapGrade(g){
+  if(!TAP||!TAP.sel) return;
+  TAP.events.push({pId:TAP.sel, fund:TAP.fund, grade:g});
+  tapRenderPlayers(); tapRenderSel();
+}
+function tapUndo(){
+  if(!TAP||!TAP.events.length) return;
+  const e=TAP.events.pop();
+  TAP.sel=e.pId; TAP.fund=e.fund;
+  document.querySelectorAll('.stap-fund').forEach(b=>b.classList.toggle('on',b.dataset.f===e.fund));
+  tapRenderPlayers(); tapRenderSel();
+}
+function saveScoutTap(){
+  if(!TAP) return;
+  const match=DB.events.find(e=>e.id===TAP.matchId);
+  const rows=[];
+  activePlayers().forEach(p=>{
+    const s=tapDeriveRow(p.id);
+    rows.push({pId:p.id, ...s, voto:+computeVoto(s,'pallavolo',p.role).toFixed(1)});
+  });
+  DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==TAP.matchId);
+  DB.scoutHistory.push({matchId:TAP.matchId, date:match.date, opponent:match.notes, sport:'pallavolo', rows});
+  save(); toast('Statistiche registrate nelle schede atleti');
+  go('roster');
+}
+function scoutTapCSS(){
+  if(document.getElementById('scout-tap-css')) return;
+  const st=document.createElement('style'); st.id='scout-tap-css';
+  st.textContent=`
+  #scout-tap .stap-wrap{display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start;}
+  .stap-hint{font-size:.85rem;color:var(--muted);margin-bottom:.6rem;}
+  .stap-players{display:flex;flex-direction:column;gap:8px;}
+  .stap-player{display:flex;flex-direction:column;gap:6px;text-align:left;width:100%;padding:10px 12px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:14px;background:var(--surface-2,rgba(255,255,255,.03));color:inherit;cursor:pointer;transition:border-color .15s,transform .05s;}
+  .stap-player:active{transform:scale(.996);}
+  .stap-player.sel{border-color:var(--brand);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand) 40%,transparent) inset;}
+  .stap-p-main{display:flex;align-items:center;gap:8px;}
+  .stap-num{font-weight:800;color:var(--brand);min-width:34px;}
+  .stap-name{font-weight:700;flex:1;}
+  .stap-role{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+  .stap-p-stat{display:flex;align-items:center;gap:10px;font-size:.8rem;color:var(--muted);}
+  .stap-p-stat .stap-voto{margin-left:auto;font-family:'Outfit',sans-serif;font-weight:900;font-size:1.15rem;padding:1px 10px;border-radius:9px;}
+  .stap-voto.hi{color:#0b1220;background:#8fe388;} .stap-voto.md{color:#0b1220;background:#ffd166;} .stap-voto.lo{color:#fff;background:#ef6461;}
+  .stap-pad{position:sticky;top:12px;display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:18px;background:var(--surface-2,rgba(255,255,255,.03));}
+  .stap-sel{min-height:26px;font-size:.95rem;} .stap-sel-num{color:var(--brand);font-weight:800;} .stap-sel-role{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;} .stap-sel-empty{color:var(--muted);}
+  .stap-funds{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .stap-fund{padding:10px 8px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.12));background:transparent;color:var(--muted);font-weight:700;font-size:.85rem;cursor:pointer;}
+  .stap-fund.on{border-color:var(--brand);color:var(--text,#fff);background:color-mix(in srgb,var(--brand) 16%,transparent);}
+  .stap-grades{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+  .stap-grade{display:flex;flex-direction:column;align-items:center;gap:2px;padding:14px 4px;border-radius:14px;border:none;cursor:pointer;color:#0b1220;font-weight:800;line-height:1;}
+  .stap-grade b{font-size:1.6rem;font-family:'Outfit',sans-serif;} .stap-grade span{font-size:.6rem;text-transform:uppercase;letter-spacing:.3px;opacity:.85;}
+  .stap-grade:disabled{opacity:.32;cursor:not-allowed;}
+  .stap-grade.g-perf{background:#5fd06f;} .stap-grade.g-pos{background:#8fe388;} .stap-grade.g-ok{background:#ffd166;} .stap-grade.g-neg{background:#f4a259;} .stap-grade.g-err{background:#ef6461;color:#fff;}
+  .stap-last{min-height:18px;font-size:.8rem;color:var(--muted);text-align:center;} .stap-last .stap-lg-sym{font-family:'Outfit';}
+  .stap-undo{padding:12px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.18));background:transparent;color:var(--text,#fff);font-weight:700;cursor:pointer;}
+  .stap-undo:disabled{opacity:.35;cursor:not-allowed;} .stap-save{margin-top:2px;}
+  .stap-legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}
+  .stap-lg{font-size:.68rem;color:var(--muted);display:inline-flex;gap:4px;align-items:center;} .stap-lg b{width:16px;height:16px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;color:#0b1220;font-weight:800;}
+  .stap-lg.g-perf b{background:#5fd06f;} .stap-lg.g-pos b{background:#8fe388;} .stap-lg.g-ok b{background:#ffd166;} .stap-lg.g-neg b{background:#f4a259;} .stap-lg.g-err b{background:#ef6461;color:#fff;}
+  @media(max-width:820px){ #scout-tap .stap-wrap{grid-template-columns:1fr;} .stap-pad{position:static;} }
+  `;
+  document.head.appendChild(st);
 }
 
 /* =========================================================
