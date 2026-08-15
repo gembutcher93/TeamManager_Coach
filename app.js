@@ -81,69 +81,258 @@ const SCOUT = {
 function scoutFields(sport){ return SCOUT[sport||curSport()].groups.flatMap(g=>g.fields.map(f=>f[0])); }
 function blankStat(sport){ const o={}; scoutFields(sport).forEach(k=>o[k]=0); return o; }
 function computeVoto(s, sport, role){ return SCOUT[sport||curSport()].voto(s, role); }
-/* Voto pallavolo pesato per ruolo (Eff% attacco, Pos% ricezione, muro doppio al centrale, libero su ricezione) */
+/* =========================================================
+   MOTORE VOTO PALLAVOLO — pesi in configurazione (regolabili da admin)
+   I default qui sotto = calibrazione attuale: cambiarli NON è necessario,
+   ma l'allenatore/admin può ritoccarli dal pannello in Impostazioni.
+   Il voto viene sempre RICALCOLATO live da queste + le statistiche,
+   quindi ritoccare un peso aggiorna anche le partite già registrate.
+   ========================================================= */
+const DEFAULT_VOLLEY_WEIGHTS = {
+  base: 6.0,
+  /* curva attacco: [sogliaEff, punti]; sotto l'ultima soglia → attackFloor */
+  attackCurve: [[0.45,1.2],[0.40,1.0],[0.30,0.6],[0.25,0.4],[0.15,0.15],[0.10,0.0]],
+  attackFloor: -1.0,
+  /* curva ricezione: [sogliaPos%, punti]; sotto l'ultima → recFloor */
+  recCurve: [[0.95,1.7],[0.85,1.4],[0.75,1.1],[0.68,0.85],[0.60,0.6],[0.52,0.32],[0.45,0.08],[0.38,-0.3],[0.30,-0.7]],
+  recFloor: -1.2,
+  recVolumeDenom: 14,               /* n° ricezioni per "volume pieno" */
+  volBonus: {minEff:0.30, minAtt:18, val:0.3},  /* bonus attaccante prolifico */
+  /* pesi per ruolo. att = moltiplicatore curva attacco; rec = moltiplicatore curva ricezione */
+  roles: {
+    Libero:        {att:0,   rec:2.1,  block:0.4,  ace:0.3,  servErrPen:0.30, attPt:0.6, attErrPen:0.2, recVolBonus:{minPos:0.60,minTot:15,val:0.5}},
+    Schiacciatore: {att:1.0, rec:1.05, block:0.25, ace:0.15, servErrPen:0.30, volBonus:true},
+    Opposto:       {att:1.3, rec:0.6,  block:0.25, ace:0.2,  servErrPen:0.30, volBonus:true},
+    Centrale:      {att:1.0, rec:0.6,  block:0.4,  ace:0.15, servErrPen:0.30, blockNote:'(x2)'},
+    Palleggiatore: {att:0.5, rec:0.6,  block:0.25, ace:0.2,  servErrPen:0.30}
+  }
+};
+let WEIGHTS_OVERRIDE=null;   /* usato dall'editor admin per l'anteprima live */
+function getVolleyWeights(){
+  if(WEIGHTS_OVERRIDE) return WEIGHTS_OVERRIDE;
+  if(!DB.settings) DB.settings={};
+  if(!DB.settings.volleyWeights) DB.settings.volleyWeights=JSON.parse(JSON.stringify(DEFAULT_VOLLEY_WEIGHTS));
+  return DB.settings.volleyWeights;
+}
+/* Voto di una riga di scout, RICALCOLATO live da stat + ruolo + pesi correnti */
+function rowVoto(row, sport){
+  const p=playerById(row.pId);
+  return computeVoto(row, sport||curSport(), p?p.role:null);
+}
 function volleyVoto(s, role){
-  role = role || 'Schiacciatore';
+  const W=getVolleyWeights();
+  role = W.roles[role] ? role : 'Schiacciatore';
+  const R=W.roles[role];
   const aTot=s.aTot||0, rTot=s.rTot||0;
   const attEff = aTot>0 ? (s.aPt - s.aErr)/aTot : null;
-  const recErr = rTot - (s.rPos||0) - (s.rPrf||0);
   const recPos = rTot>0 ? ((s.rPos||0)+(s.rPrf||0))/rTot : null;
   const aces=s.bAce||0, servErr=s.bErr||0, blocks=s.mPt||0;
-  let v=6.0; const parts=[];
+  let v=W.base; const parts=[];
   const add=(val,lbl)=>{ if(val){ v+=val; parts.push(lbl+' '+(val>0?'+':'')+val.toFixed(1)); } };
-  const attackPts=(eff,mult)=>{ if(eff==null) return 0; let p;
-    if(eff>=0.45)p=1.2; else if(eff>=0.40)p=1.0; else if(eff>=0.30)p=0.6; else if(eff>=0.25)p=0.4; else if(eff>=0.15)p=0.15; else if(eff>=0.10)p=0; else p=-1.0;
-    return p*(mult||1); };
-  const volBonus=(eff)=> (eff!=null && eff>=0.30 && aTot>=18) ? 0.3 : 0;
-  /* Ricezione: contributo continuo, scalato per volume e PESATO PER RUOLO.
-     Vale per tutti — tanto per il libero, meno per chi attacca, poco (ma non zero)
-     per chi riceve di rado (centrale/palleggiatore/opposto): se capita di ricevere
-     o coprire un pallonetto, quel tocco — positivo, negativo o errore — muove il voto. */
-  const recPoints=(mult)=>{ if(recPos==null||!rTot) return 0; let q;
-    if(recPos>=0.95)q=1.7; else if(recPos>=0.85)q=1.4; else if(recPos>=0.75)q=1.1;
-    else if(recPos>=0.68)q=0.85; else if(recPos>=0.60)q=0.6; else if(recPos>=0.52)q=0.32;
-    else if(recPos>=0.45)q=0.08; else if(recPos>=0.38)q=-0.3; else if(recPos>=0.30)q=-0.7; else q=-1.2;
-    return q*mult*Math.min(1, rTot/14); };
-  const RECW={Libero:2.1, Schiacciatore:1.05, Opposto:0.6, Centrale:0.6, Palleggiatore:0.6};
-  const recPts=recPoints(RECW[role]!=null?RECW[role]:1.0);
+  const onCurve=(x,curve,floor)=>{ if(x==null)return null; for(const [th,val] of curve){ if(x>=th) return val; } return floor; };
+  const attackPts=(eff,mult)=>{ if(eff==null) return 0; return onCurve(eff,W.attackCurve,W.attackFloor)*(mult||1); };
+  const volBonus=(eff)=> (R.volBonus && eff!=null && eff>=W.volBonus.minEff && aTot>=W.volBonus.minAtt) ? W.volBonus.val : 0;
+  const recPts=()=>{ if(recPos==null||!rTot) return 0; return onCurve(recPos,W.recCurve,W.recFloor)*R.rec*Math.min(1, rTot/W.recVolumeDenom); };
   const effPct = attEff!=null?Math.round(attEff*100)+'%':'';
   const posPct = recPos!=null?Math.round(recPos*100)+'%':'';
-  const recLbl=recPos!=null?'Ricezione '+posPct:null;
+  const recLbl = recPos!=null?'Ricezione '+posPct:null;
   if(role==='Libero'){
-    add(recPts, recLbl);
-    add((recPos!=null && recPos>=0.60 && rTot>=15) ? 0.5 : 0, rTot>=15?'volume ricezione':null);
-    /* contributi rari ma reali: pallonetto/attacco a punto, muro, ace (ogni tocco conta) */
-    add((s.aPt||0)*0.6, s.aPt?s.aPt+' attacchi pt':null);
-    add(-(s.aErr||0)*0.2, s.aErr?s.aErr+' err.att':null);
-    add(blocks*0.4, blocks?blocks+' muri':null);
-    add(aces*0.3, aces?aces+' ace':null);
-    add(-servErr*0.30, servErr?servErr+' err.batt':null);
-  } else if(role==='Palleggiatore'){
-    add(attackPts(attEff,0.5),'Attacco '+effPct);
-    add(recPts, recLbl);
-    add(blocks*0.25, blocks?blocks+' muri':null);
-    add(aces*0.2, aces?aces+' ace':null);
-    add(-servErr*0.30, servErr?servErr+' err.batt':null);
-  } else if(role==='Centrale'){
-    add(attackPts(attEff,1.0),'Attacco '+effPct);
-    add(blocks*0.4, blocks?blocks+' muri(x2)':null);
-    add(recPts, recLbl);
-    add(aces*0.15, aces?aces+' ace':null);
-    add(-servErr*0.30, servErr?servErr+' err.batt':null);
-  } else if(role==='Opposto'){
-    add(attackPts(attEff,1.3)+volBonus(attEff),'Attacco '+effPct);
-    add(recPts, recLbl);
-    add(blocks*0.25, blocks?blocks+' muri':null);
-    add(aces*0.2, aces?aces+' ace':null);
-    add(-servErr*0.30, servErr?servErr+' err.batt':null);
+    add(recPts(), recLbl);
+    if(R.recVolBonus) add((recPos!=null && recPos>=R.recVolBonus.minPos && rTot>=R.recVolBonus.minTot)?R.recVolBonus.val:0, rTot>=(R.recVolBonus.minTot||99)?'volume ricezione':null);
+    add((s.aPt||0)*(R.attPt||0), s.aPt?s.aPt+' attacchi pt':null);
+    add(-(s.aErr||0)*(R.attErrPen||0), s.aErr?s.aErr+' err.att':null);
+    add(blocks*R.block, blocks?blocks+' muri':null);
+    add(aces*R.ace, aces?aces+' ace':null);
+    add(-servErr*R.servErrPen, servErr?servErr+' err.batt':null);
   } else {
-    add(attackPts(attEff,1.0)+volBonus(attEff),'Attacco '+effPct);
-    add(recPts, recLbl);
-    add(aces*0.15, aces?aces+' ace':null);
-    add(blocks*0.25, blocks?blocks+' muri':null);
-    add(-servErr*0.30, servErr?servErr+' err.batt':null);
+    add(attackPts(attEff,R.att)+volBonus(attEff),'Attacco '+effPct);
+    add(recPts(), recLbl);
+    add(blocks*R.block, blocks?blocks+' muri'+(R.blockNote||''):null);
+    add(aces*R.ace, aces?aces+' ace':null);
+    add(-servErr*R.servErrPen, servErr?servErr+' err.batt':null);
   }
   return { voto: clampVoto(v), parts };
+}
+
+/* =========================================================
+   TUTORIAL SCOUT (Fase 2) — spiega uso + come nasce il voto,
+   generato dai PESI REALI così resta sempre aggiornato.
+   ========================================================= */
+const ROLE_ORDER=['Palleggiatore','Schiacciatore','Centrale','Opposto','Libero'];
+function openScoutTutorial(){
+  weightsCSS();
+  const sport=curSport();
+  const isVolley = sport==='pallavolo';
+  const uso = isVolley ? `
+    <ol class="tut-steps">
+      <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
+      <li>Scegli il <b>fondamentale</b> (Ricezione / Attacco / Battuta / Muro).</li>
+      <li>Tocca il <b>grado</b> del tocco: <b>#</b> perfetto · <b>+</b> positivo · <b>!</b> ok · <b>−</b> negativo · <b>=</b> errore.</li>
+      <li>Ogni tocco aggiorna subito le percentuali e il voto del giocatore.</li>
+      <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
+      <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
+    </ol>` : `
+    <ol class="tut-steps">
+      <li>Compila la <b>tabella</b> fondamentale per fondamentale, riga per riga.</li>
+      <li>Il <b>voto</b> di ogni atleta si calcola da solo mentre digiti.</li>
+      <li><b>Registra statistiche</b> per salvare nello storico.</li>
+    </ol>`;
+  const voto = isVolley ? weightsExplainerHTML() : `<p class="tut-p">Il voto parte da 6.0 e sale o scende in base al rendimento nei fondamentali registrati.</p>`;
+  openModal(`
+    <div class="modal-head"><h3><i class="fa-solid fa-circle-question" style="color:var(--brand)"></i> Come funziona lo Scout</h3>
+      <button class="icon-btn" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="tut-body">
+      <div class="tut-sec"><h4><i class="fa-solid fa-hand-pointer"></i> Come si usa</h4>${uso}</div>
+      <div class="tut-sec"><h4><i class="fa-solid fa-scale-balanced"></i> Come nasce il voto</h4>${voto}
+        <p class="tut-note">I pesi qui sopra sono quelli attualmente in uso. Si regolano da <b>Impostazioni → Motore voto</b> (area riservata).</p>
+      </div>
+    </div>`, true);
+}
+/* spiega, ruolo per ruolo, cosa pesa — leggendo i pesi correnti */
+function weightsExplainerHTML(){
+  const W=getVolleyWeights();
+  const pct=n=>Math.round(n*100);
+  const rows=ROLE_ORDER.map(role=>{
+    const R=W.roles[role]; const bits=[];
+    if(role==='Libero'){
+      bits.push(`ricezione peso <b>${R.rec}×</b> (fino al 10 se non sbaglia mai)`);
+      bits.push(`ogni attacco a punto <b>+${R.attPt}</b>, muro <b>+${R.block}</b>, ace <b>+${R.ace}</b>`);
+    } else {
+      bits.push(`attacco peso <b>${R.att}×</b> (su Eff%)`);
+      bits.push(`ricezione peso <b>${R.rec}×</b> (su Pos%${role==='Palleggiatore'||role==='Centrale'||role==='Opposto'?', conta poco ma non zero':''})`);
+      bits.push(`muro <b>+${R.block}</b>${R.blockNote||''}, ace <b>+${R.ace}</b>`);
+    }
+    bits.push(`errore battuta <b>−${R.servErrPen}</b>`);
+    return `<tr><td class="tut-role">${role}</td><td>${bits.join(' · ')}</td></tr>`;
+  }).join('');
+  return `<p class="tut-p">Il voto parte da <b>${W.base.toFixed(1)}</b>. Poi ogni fondamentale aggiunge o toglie in base al ruolo:</p>
+    <table class="tut-table"><tbody>${rows}</tbody></table>`;
+}
+
+/* =========================================================
+   PANNELLO ADMIN — MOTORE VOTO (Fase 3)
+   Regola i pesi per ruolo + curve, con anteprima live, reset e password.
+   Soft-lock lato browser: protegge da modifiche accidentali, non è crittografia.
+   ========================================================= */
+const ADMIN_PASS='coach173';   /* password admin di default — cambiabile qui */
+let WADRAFT=null;              /* copia di lavoro dei pesi durante l'editing */
+function openWeightsAdmin(){
+  const tries=prompt('Password admin per regolare il motore voto:');
+  if(tries===null) return;
+  if(tries!==ADMIN_PASS){ toast('Password errata','info'); return; }
+  WADRAFT=JSON.parse(JSON.stringify(getVolleyWeights()));
+  WEIGHTS_OVERRIDE=WADRAFT;
+  weightsCSS();
+  renderWeightsEditor();
+}
+function closeWeightsAdmin(){ WEIGHTS_OVERRIDE=null; WADRAFT=null; closeModal(); }
+function renderWeightsEditor(){
+  const W=WADRAFT;
+  const slider=(path,label,min,max,step)=>{
+    const val=wGet(path);
+    return `<div class="w-row"><span class="w-lbl">${label}</span>
+      <input type="range" min="${min}" max="${max}" step="${step}" value="${val}" oninput="wSet('${path}',this.value)">
+      <span class="w-val" id="wv-${cssId(path)}">${(+val).toFixed(2)}</span></div>`;
+  };
+  const roleBlock=role=>{
+    const R=W.roles[role]; const p=`roles.${role}`;
+    let s=`<div class="w-role"><div class="w-role-h"><b>${role}</b>
+      <button class="w-reset" onclick="wResetRole('${role}')"><i class="fa-solid fa-rotate-left"></i> default</button></div>`;
+    if(role==='Libero'){
+      s+=slider(p+'.rec','Ricezione ×',0,3,0.05)+slider(p+'.attPt','Attacco a punto +',0,1.5,0.05)
+        +slider(p+'.attErrPen','Errore attacco −',0,1,0.05)+slider(p+'.block','Muro +',0,1,0.05)
+        +slider(p+'.ace','Ace +',0,1,0.05)+slider(p+'.servErrPen','Err. battuta −',0,1,0.05);
+    } else {
+      s+=slider(p+'.att','Attacco ×',0,2,0.05)+slider(p+'.rec','Ricezione ×',0,2.5,0.05)
+        +slider(p+'.block','Muro +',0,1,0.05)+slider(p+'.ace','Ace +',0,1,0.05)
+        +slider(p+'.servErrPen','Err. battuta −',0,1,0.05);
+    }
+    s+=`<div class="w-prev" id="wp-${role}"></div></div>`;
+    return s;
+  };
+  const curveRows=(arr,path,unit)=>arr.map((pair,i)=>`
+    <div class="w-curve-row">
+      <span>${unit} ≥ <input type="number" step="0.01" value="${pair[0]}" onchange="wSetCurve('${path}',${i},0,this.value)"></span>
+      <span>→ <input type="number" step="0.05" value="${pair[1]}" onchange="wSetCurve('${path}',${i},1,this.value)"> punti</span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-head"><h3><i class="fa-solid fa-sliders" style="color:var(--brand)"></i> Motore voto · admin</h3>
+      <button class="icon-btn" onclick="closeWeightsAdmin()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="w-body">
+      <p class="w-intro">Regola quanto pesa ogni fondamentale per ruolo. L'anteprima sotto ogni ruolo mostra il voto di un caso d'esempio, aggiornato mentre muovi gli slider. Le partite già registrate si ricalcolano da sole quando salvi.</p>
+      <div class="w-roles">${ROLE_ORDER.map(roleBlock).join('')}</div>
+      <details class="w-adv"><summary>Curve e parametri avanzati</summary>
+        <div class="w-adv-body">
+          ${slider('base','Voto di partenza',4,7,0.1)}
+          ${slider('recVolumeDenom','Ricezioni per "volume pieno"',6,30,1)}
+          <h5>Curva ricezione (Pos% → punti)</h5>${curveRows(W.recCurve,'recCurve','Pos%')}
+          <div class="w-curve-row"><span>sotto tutte → <input type="number" step="0.05" value="${W.recFloor}" onchange="wSetScalar('recFloor',this.value)"> punti</span></div>
+          <h5>Curva attacco (Eff% → punti)</h5>${curveRows(W.attackCurve,'attackCurve','Eff%')}
+          <div class="w-curve-row"><span>sotto tutte → <input type="number" step="0.05" value="${W.attackFloor}" onchange="wSetScalar('attackFloor',this.value)"> punti</span></div>
+        </div>
+      </details>
+      <div class="w-actions">
+        <button class="btn btn-ghost" onclick="wResetAll()"><i class="fa-solid fa-rotate-left"></i> Ripristina tutti i default</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" onclick="closeWeightsAdmin()">Annulla</button>
+        <button class="btn btn-accent" onclick="wSave()"><i class="fa-solid fa-floppy-disk"></i> Salva</button>
+      </div>
+    </div>`, true);
+  wPreviewAll();
+}
+/* get/set su WADRAFT via path tipo "roles.Libero.rec" */
+function wGet(path){ return path.split('.').reduce((o,k)=>o[k],WADRAFT); }
+function wSetRaw(path,val){ const ks=path.split('.'); const last=ks.pop(); ks.reduce((o,k)=>o[k],WADRAFT)[last]=val; }
+function cssId(s){ return s.replace(/[^a-zA-Z0-9]/g,'-'); }
+function wSet(path,val){ wSetRaw(path,+val); const el=document.getElementById('wv-'+cssId(path)); if(el)el.textContent=(+val).toFixed(2); wPreviewAll(); }
+function wSetScalar(key,val){ WADRAFT[key]=+val; wPreviewAll(); }
+function wSetCurve(path,i,j,val){ wGet(path)[i][j]=+val; wPreviewAll(); }
+function wResetRole(role){ WADRAFT.roles[role]=JSON.parse(JSON.stringify(DEFAULT_VOLLEY_WEIGHTS.roles[role])); renderWeightsEditor(); }
+function wResetAll(){ WADRAFT=JSON.parse(JSON.stringify(DEFAULT_VOLLEY_WEIGHTS)); WEIGHTS_OVERRIDE=WADRAFT; renderWeightsEditor(); }
+function wSave(){ DB.settings=DB.settings||{}; DB.settings.volleyWeights=JSON.parse(JSON.stringify(WADRAFT)); WEIGHTS_OVERRIDE=null; WADRAFT=null; save(); closeModal(); toast('Pesi salvati — voti aggiornati'); if(document.getElementById('roster').classList.contains('active')) renderRoster(); }
+/* casi d'esempio per l'anteprima, uno per ruolo */
+const WPREVIEW_CASE={
+  Palleggiatore:{aTot:6,aPt:3,aErr:1,mPt:1,bAce:1,rTot:2,rPrf:1},
+  Schiacciatore:{aTot:20,aPt:9,aErr:3,rTot:14,rPrf:8,rPos:2},
+  Centrale:{aTot:12,aPt:8,aErr:1,mPt:3},
+  Opposto:{aTot:22,aPt:11,aErr:4,mPt:2},
+  Libero:{rTot:18,rPrf:11,rPos:3}
+};
+function wPreviewAll(){
+  ROLE_ORDER.forEach(role=>{
+    const box=document.getElementById('wp-'+role); if(!box) return;
+    const s=Object.assign(blankStat('pallavolo'),WPREVIEW_CASE[role]);
+    const v=computeVoto(s,'pallavolo',role);
+    const rec=s.rTot?Math.round((s.rPos+s.rPrf)/s.rTot*100):null;
+    const eff=s.aTot?Math.round((s.aPt-s.aErr)/s.aTot*100):null;
+    box.innerHTML=`Esempio${eff!=null?' · Att '+eff+'%':''}${rec!=null?' · Ric '+rec+'%':''} → <b>voto ${v.toFixed(1)}</b>`;
+  });
+}
+function weightsCSS(){
+  if(document.getElementById('weights-css')) return;
+  const st=document.createElement('style'); st.id='weights-css';
+  st.textContent=`
+  .tut-body,.w-body{max-height:70vh;overflow:auto;padding:4px 2px;}
+  .tut-sec{margin-bottom:1.2rem;} .tut-sec h4{display:flex;align-items:center;gap:8px;margin:.2rem 0 .6rem;font-size:1rem;}
+  .tut-steps{margin:0 0 0 1.1rem;padding:0;display:flex;flex-direction:column;gap:.45rem;} .tut-steps li{line-height:1.4;}
+  .tut-p{margin:.2rem 0 .7rem;color:var(--muted);} .tut-note{margin-top:.7rem;font-size:.82rem;color:var(--muted);}
+  .tut-table{width:100%;border-collapse:collapse;font-size:.86rem;} .tut-table td{border-top:1px solid var(--border,rgba(255,255,255,.1));padding:.5rem .4rem;vertical-align:top;line-height:1.4;}
+  .tut-role{font-weight:800;color:var(--brand);white-space:nowrap;padding-right:.7rem!important;}
+  .w-intro{color:var(--muted);font-size:.88rem;margin-bottom:1rem;}
+  .w-roles{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
+  .w-role{border:1px solid var(--border,rgba(255,255,255,.12));border-radius:14px;padding:12px;background:var(--surface-2,rgba(255,255,255,.03));}
+  .w-role-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem;} .w-role-h b{font-size:1rem;color:var(--brand);}
+  .w-reset{background:none;border:1px solid var(--border,rgba(255,255,255,.18));color:var(--muted);border-radius:8px;padding:3px 8px;font-size:.72rem;cursor:pointer;}
+  .w-row{display:grid;grid-template-columns:1fr 110px 42px;align-items:center;gap:8px;margin:.35rem 0;font-size:.82rem;}
+  .w-row input[type=range]{width:100%;} .w-val{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted);}
+  .w-prev{margin-top:.6rem;padding-top:.6rem;border-top:1px dashed var(--border,rgba(255,255,255,.14));font-size:.82rem;color:var(--muted);} .w-prev b{color:var(--text,#fff);}
+  .w-adv{margin-top:1rem;border:1px solid var(--border,rgba(255,255,255,.12));border-radius:12px;padding:.4rem .8rem;}
+  .w-adv summary{cursor:pointer;font-weight:600;padding:.4rem 0;} .w-adv-body h5{margin:.9rem 0 .3rem;font-size:.85rem;color:var(--brand);}
+  .w-curve-row{display:flex;gap:14px;flex-wrap:wrap;font-size:.82rem;color:var(--muted);margin:.25rem 0;align-items:center;}
+  .w-curve-row input{width:70px;padding:3px 6px;border-radius:7px;border:1px solid var(--border,rgba(255,255,255,.18));background:var(--surface,rgba(0,0,0,.2));color:inherit;}
+  .w-actions{display:flex;align-items:center;gap:8px;margin-top:1.2rem;flex-wrap:wrap;}
+  `;
+  document.head.appendChild(st);
 }
 
 /* ---------- SEED (dati d'esempio per non partire vuoti) ---------- */
@@ -165,7 +354,7 @@ function seedDB(){
         {id:206,type:'Partita',date:'2026-07-04',notes:'vs Ferrini',result:null}
     ];
     // tabellini d'esempio
-    const mk = (pId,o)=>{const s=Object.assign(blankStat(),o);return{pId,...s,voto:+computeVoto(s).toFixed(1)};};
+    const mk = (pId,o)=>{const s=Object.assign(blankStat(),o);return{pId,...s};};
     const scoutHistory = [
         {matchId:201,date:'2026-06-07',opponent:'vs San Pio X',rows:[
             mk(1,{bAce:2,bErr:1,aTot:18,aErr:3,aPt:11,mPt:4}),
@@ -236,7 +425,7 @@ function getPlayerVoti(pId){
     const out=[];
     DB.scoutHistory.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(m=>{
         const r=m.rows.find(x=>x.pId===pId);
-        if(r) out.push({date:m.date,voto:r.voto,opp:m.opponent});
+        if(r) out.push({date:m.date,voto:rowVoto(r,m.sport),opp:m.opponent});
     });
     return out;
 }
@@ -247,7 +436,7 @@ function getSeasonStats(pId){
     DB.scoutHistory.forEach(m=>{
         const r=m.rows.find(x=>x.pId===pId);
         if(!r) return;
-        acc.matches++; acc.voti.push(r.voto);
+        acc.matches++; acc.voti.push(rowVoto(r,m.sport));
         fields.forEach(k=>acc[k]+=r[k]||0);
     });
     acc.avgVoto = acc.voti.length? (acc.voti.reduce((a,b)=>a+b,0)/acc.voti.length):null;
@@ -275,7 +464,7 @@ function playerAttendance(pId){
     return tot? Math.round(pres/tot*100):null;
 }
 function teamAvgVoto(){
-    const all=DB.scoutHistory.flatMap(m=>m.rows.map(r=>r.voto));
+    const all=DB.scoutHistory.flatMap(m=>m.rows.map(r=>rowVoto(r,m.sport)));
     return all.length? (all.reduce((a,b)=>a+b,0)/all.length):null;
 }
 function teamRecord(){
@@ -418,8 +607,11 @@ function buildLayout(){
         <div class="page-head"><div><div class="eyebrow">Analisi</div><h2>Scout Gara</h2>
             <p class="sub">Inserisci il tabellino fondamentale per fondamentale: voti e statistiche vengono salvati nello storico di ogni atleta.</p></div></div>
         <div class="card">
-            <div class="fg" style="max-width:420px"><label>Partita da analizzare</label>
-                <select id="scout-select" onchange="setupScout()"><option value="">Scegli una partita…</option></select></div>
+            <div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap">
+                <div class="fg" style="max-width:420px;flex:1"><label>Partita da analizzare</label>
+                    <select id="scout-select" onchange="setupScout()"><option value="">Scegli una partita…</option></select></div>
+                <button class="btn btn-ghost" onclick="openScoutTutorial()"><i class="fa-solid fa-circle-question"></i> Come funziona</button>
+            </div>
         </div>
         <div class="card" id="scout-panel" style="display:none">
             <h3 id="scout-title"><i class="fa-solid fa-clipboard-list"></i> Tabellino</h3>
@@ -555,6 +747,9 @@ function buildLayout(){
         <div class="card"><h3 style="color:var(--flame)"><i class="fa-solid fa-trash-can" style="color:var(--flame)"></i> Azzera tutto</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Cancella ogni dato e riparte da zero. Operazione irreversibile.</p>
             <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-bomb"></i> Reset completo</button></div>
+        <div class="card"><h3><i class="fa-solid fa-sliders"></i> Motore voto <span class="pill" style="margin-left:6px">admin</span></h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Regola quanto pesa ogni fondamentale per ruolo (ricezione, attacco, muro, ace…), con anteprima live. Le partite già registrate si ricalcolano da sole. Area riservata: richiede password.</p>
+            <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
     </section>`;
 }
 
@@ -908,7 +1103,7 @@ function setupScout(){
         const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
         const cells=fields.map(k=>`<td><input data-k="${k}" type="number" min="0" value="${g[k]||0}" oninput="calcRow(${p.id})"></td>`).join('');
         const tr=document.createElement('tr');tr.dataset.pid=p.id;
-        tr.innerHTML=`<td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>${cells}<td class="voto num" id="voto-${p.id}" style="color:var(--brand)">${ex?ex.voto.toFixed(1):'6.0'}</td>`;
+        tr.innerHTML=`<td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>${cells}<td class="voto num" id="voto-${p.id}" style="color:var(--brand)">${ex?rowVoto(ex,sport).toFixed(1):"6.0"}</td>`;
         body.appendChild(tr);
     });
     renderScoutLegend(sport);
@@ -1393,7 +1588,7 @@ function buildPlayerPackage(id, photo){
     const matches=DB.scoutHistory.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(m=>{
         const r=m.rows.find(x=>x.pId===id); if(!r) return null;
         const ev=DB.events.find(e=>e.id===m.matchId);
-        return {d:m.date,o:m.opponent,res:(ev&&ev.result)||null,voto:+(+r.voto).toFixed(1),cells:SCOUT[sport].season(r).slice(0,3)};
+        return {d:m.date,o:m.opponent,res:(ev&&ev.result)||null,voto:+rowVoto(r,m.sport).toFixed(1),cells:SCOUT[sport].season(r).slice(0,3)};
     }).filter(Boolean);
     const att=DB.events.filter(e=>e.type==='Allenamento').sort((a,b)=>new Date(a.date)-new Date(b.date)).map(e=>{
         const a=DB.attendance[e.id]; const st=a&&a[id]?a[id]:null; if(!st) return null;
