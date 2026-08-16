@@ -615,6 +615,7 @@ function buildLayout(){
                 <button class="btn btn-ghost" onclick="openScoutTutorial()"><i class="fa-solid fa-circle-question"></i> Come funziona</button>
             </div>
         </div>
+        <div id="scout-rot-summary" style="display:none"></div>
         <div class="card" id="scout-panel" style="display:none">
             <h3 id="scout-title"><i class="fa-solid fa-clipboard-list"></i> Tabellino</h3>
             <!-- MODALITÀ NUMERICA (calcio/basket + fallback): tabella per fondamentale -->
@@ -629,26 +630,9 @@ function buildLayout(){
             </div>
             <!-- MODALITÀ TAP A TOCCHI (pallavolo): tap giocatore → tap grado -->
             <div id="scout-tap" style="display:none"></div>
+            <!-- ROTAZIONI di questa gara (solo pallavolo) -->
+            <div id="scout-rot" style="display:none"></div>
             <div class="legend-grid" id="scout-legend"></div>
-        </div>
-    </section>
-
-    <!-- ROTAZIONI -->
-    <section id="rotazioni" class="section">
-        <div class="page-head"><div><div class="eyebrow">Tattica avanzata</div><h2>Analisi Rotazioni</h2>
-            <p class="sub">Registra punti fatti e subiti in ciascuna rotazione (P1–P6) durante la gara. Scopri subito qual è la rotazione critica della squadra.</p></div></div>
-        <div class="card">
-            <div class="fg" style="max-width:420px"><label>Partita</label>
-                <select id="rot-select" onchange="renderRotation()"><option value="">Scegli una partita…</option></select></div>
-        </div>
-        <div id="rot-panel" style="display:none">
-            <div class="card"><h3><i class="fa-solid fa-arrows-spin"></i> Punti per rotazione</h3>
-                <div class="rot-grid" id="rot-grid"></div>
-            </div>
-            <div class="card"><h3><i class="fa-solid fa-chart-simple"></i> Differenziale per rotazione</h3>
-                <div id="rot-chart"></div>
-                <p class="hint" id="rot-insight"></p>
-            </div>
         </div>
     </section>
 
@@ -768,7 +752,7 @@ function buildLayout(){
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>pwaMarkSettings(!!(swReg&&swReg.waiting)),
+    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>pwaMarkSettings(!!(swReg&&swReg.waiting)),
     formazione:renderFormazione
 };
 function go(sec){
@@ -1068,7 +1052,13 @@ function matchOptions(selId){
     });
     sel.value=cur;
 }
-function populateScout(){ matchOptions('scout-select'); }
+function populateScout(){
+    matchOptions('scout-select');
+    const summaryEl=document.getElementById('scout-rot-summary'), rotEl=document.getElementById('scout-rot');
+    if(rotEl) rotEl.style.display='none';
+    if(curSport()==='pallavolo'){ renderRotAggregate(); if(summaryEl)summaryEl.style.display='block'; }
+    else if(summaryEl){ summaryEl.style.display='none'; }
+}
 function buildScoutHead(sport){
     const gs=SCOUT[sport].groups, head=document.getElementById('scout-head');
     let r1='<tr><th rowspan="2" style="text-align:left">Giocatore</th>';
@@ -1106,21 +1096,30 @@ function renderScoutLegend(sport){
 function setupScout(){
     const id=parseInt(document.getElementById('scout-select').value);
     const panel=document.getElementById('scout-panel'), body=document.getElementById('scout-body');
-    if(!id){panel.style.display='none';return;}
     const sport=curSport();
+    const summaryEl=document.getElementById('scout-rot-summary'), rotEl=document.getElementById('scout-rot');
+    if(!id){
+        panel.style.display='none';
+        if(sport==='pallavolo'){ renderRotAggregate(); if(summaryEl)summaryEl.style.display='block'; }
+        else if(summaryEl){ summaryEl.style.display='none'; }
+        return;
+    }
+    if(summaryEl) summaryEl.style.display='none';   /* partita aperta → nascondi il riepilogo di squadra */
     const match=DB.events.find(e=>e.id===id);
     const existing=DB.scoutHistory.find(s=>s.matchId===id);
     document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
     panel.style.display='block';
     const numEl=document.getElementById('scout-numeric'), tapEl=document.getElementById('scout-tap');
-    /* PALLAVOLO → scout a tocchi (versione A). Altri sport → tabella numerica. */
+    /* PALLAVOLO → scout a tocchi (versione A) + rotazioni di gara. Altri sport → tabella numerica. */
     if(sport==='pallavolo'){
         numEl.style.display='none'; tapEl.style.display='block';
         buildScoutTap(id, existing);
+        if(rotEl){ rotEl.style.display='block'; renderRotGrid(id); }
         renderScoutLegend(sport);
         return;
     }
     numEl.style.display='block'; tapEl.style.display='none';
+    if(rotEl) rotEl.style.display='none';   /* niente rotazioni per calcio/basket */
     buildScoutHead(sport);
     const fields=scoutFields(sport), colspan=fields.length+2;
     body.innerHTML='';
@@ -1408,39 +1407,45 @@ function scoutTapCSS(){
 /* =========================================================
    ROTAZIONI
    ========================================================= */
-function populateRot(){ matchOptions('rot-select'); renderRotation(); }
-function renderRotation(){
-    const id=parseInt(document.getElementById('rot-select').value);
-    const panel=document.getElementById('rot-panel');
-    if(!id){panel.style.display='none';return;}
-    panel.style.display='block';
-    if(!DB.rotationStats[id]) DB.rotationStats[id]={P1:{f:0,s:0},P2:{f:0,s:0},P3:{f:0,s:0},P4:{f:0,s:0},P5:{f:0,s:0},P6:{f:0,s:0}};
-    const data=DB.rotationStats[id];
-    const grid=document.getElementById('rot-grid');grid.innerHTML='';
-    const POS={P1:'Zona 1 · battuta',P2:'Zona 2',P3:'Zona 3 · centro',P4:'Zona 4',P5:'Zona 5',P6:'Zona 6'};
-    Object.keys(data).forEach(k=>{
-        const d=data[k], diff=d.f-d.s;
-        const cell=document.createElement('div');cell.className='rot-cell';
-        cell.innerHTML=`<h4>${k}</h4><div class="pos">${POS[k]}</div>
+const ROT_POS={P1:'Zona 1 · battuta',P2:'Zona 2',P3:'Zona 3 · centro',P4:'Zona 4',P5:'Zona 5',P6:'Zona 6'};
+function rotData(id){ if(!DB.rotationStats[id]) DB.rotationStats[id]={P1:{f:0,s:0},P2:{f:0,s:0},P3:{f:0,s:0},P4:{f:0,s:0},P5:{f:0,s:0},P6:{f:0,s:0}}; return DB.rotationStats[id]; }
+/* Griglia rotazioni della singola gara, dentro lo scout pallavolo */
+function renderRotGrid(id){
+    const box=document.getElementById('scout-rot'); if(!box) return;
+    const data=rotData(id);
+    const cells=Object.keys(data).map(k=>{const d=data[k],diff=d.f-d.s;
+        return `<div class="rot-cell"><h4>${k}</h4><div class="pos">${ROT_POS[k]}</div>
             <div class="rot-counters">
                 <div class="rot-c"><div class="n fatti num">${d.f}</div><div class="k">Fatti</div>
                     <div class="stepper"><button onclick="rotStep(${id},'${k}','f',-1)">−</button><button onclick="rotStep(${id},'${k}','f',1)">+</button></div></div>
                 <div class="rot-c"><div class="n subiti num">${d.s}</div><div class="k">Subiti</div>
                     <div class="stepper"><button onclick="rotStep(${id},'${k}','s',-1)">−</button><button onclick="rotStep(${id},'${k}','s',1)">+</button></div></div>
             </div>
-            <div class="rot-diff" style="color:${diff>0?'var(--ok)':diff<0?'var(--bad)':'var(--muted)'}">${diff>0?'+':''}${diff}</div>`;
-        grid.appendChild(cell);
-    });
+            <div class="rot-diff" style="color:${diff>0?'var(--ok)':diff<0?'var(--bad)':'var(--muted)'}">${diff>0?'+':''}${diff}</div></div>`;}).join('');
     const items=Object.keys(data).map(k=>{const diff=data[k].f-data[k].s;return{label:k,value:diff,display:(diff>0?'+':'')+diff,color:diff>=0?'var(--brand)':'var(--flame)'};});
-    document.getElementById('rot-chart').innerHTML=svgBars(items);
+    const totF=Object.values(data).reduce((a,d)=>a+d.f,0), totS=Object.values(data).reduce((a,d)=>a+d.s,0);
     const worst=Object.keys(data).reduce((w,k)=>(data[k].f-data[k].s)<(data[w].f-data[w].s)?k:w,'P1');
     const best=Object.keys(data).reduce((b,k)=>(data[k].f-data[k].s)>(data[b].f-data[b].s)?k:b,'P1');
-    const totF=Object.values(data).reduce((a,d)=>a+d.f,0), totS=Object.values(data).reduce((a,d)=>a+d.s,0);
-    document.getElementById('rot-insight').innerHTML= totF+totS===0 ? 'Tocca i pulsanti + e − per registrare punti fatti e subiti in ogni rotazione durante la gara.'
-        : `Rotazione più forte: <b style="color:var(--ok)">${best}</b> · rotazione critica: <b style="color:var(--flame)">${worst}</b>. Lavora sul cambio-palla in ${worst}.`;
+    box.innerHTML=`<div class="card"><h3><i class="fa-solid fa-arrows-spin"></i> Rotazioni · questa gara</h3>
+            <div class="rot-grid">${cells}</div></div>
+        <div class="card"><h3><i class="fa-solid fa-chart-simple"></i> Differenziale per rotazione</h3>${svgBars(items)}
+            <p class="hint">${totF+totS===0?'Tocca + e − per registrare punti fatti e subiti in ogni rotazione durante la gara.':`Rotazione più forte: <b style="color:var(--ok)">${best}</b> · rotazione critica: <b style="color:var(--flame)">${worst}</b>. Lavora sul cambio-palla in ${worst}.`}</p></div>`;
 }
-function rotStep(id,k,key,delta){
-    const d=DB.rotationStats[id][k];d[key]=Math.max(0,d[key]+delta);save();renderRotation();
+function rotStep(id,k,key,delta){ const d=rotData(id)[k]; d[key]=Math.max(0,d[key]+delta); save(); renderRotGrid(id); }
+/* Riepilogo aggregato su TUTTE le gare, mostrato all'ingresso dello scout */
+function renderRotAggregate(){
+    const box=document.getElementById('scout-rot-summary'); if(!box) return;
+    const zones=['P1','P2','P3','P4','P5','P6'], agg={}; zones.forEach(z=>agg[z]={f:0,s:0});
+    let any=false, nMatch=0;
+    Object.values(DB.rotationStats||{}).forEach(m=>{ let used=false; zones.forEach(z=>{ if(m[z]){ agg[z].f+=m[z].f; agg[z].s+=m[z].s; if(m[z].f||m[z].s){any=true;used=true;} } }); if(used)nMatch++; });
+    if(!any){ box.innerHTML=`<div class="card"><h3><i class="fa-solid fa-arrows-spin"></i> Rotazioni · media squadra</h3>
+        <p class="hint">Ancora nessuna rotazione registrata. Seleziona una partita qui sopra e segna i punti fatti/subiti per zona: qui comparirà il quadro complessivo con la rotazione più critica della squadra.</p></div>`; return; }
+    const items=zones.map(z=>{const diff=agg[z].f-agg[z].s;return{label:z,value:diff,display:(diff>0?'+':'')+diff,color:diff>=0?'var(--brand)':'var(--flame)'};});
+    const worst=zones.reduce((w,z)=>(agg[z].f-agg[z].s)<(agg[w].f-agg[w].s)?z:w,'P1');
+    const best=zones.reduce((b,z)=>(agg[z].f-agg[z].s)>(agg[b].f-agg[b].s)?z:b,'P1');
+    box.innerHTML=`<div class="card"><h3><i class="fa-solid fa-arrows-spin"></i> Rotazioni · media squadra <span class="pill" style="margin-left:6px">${nMatch} ${nMatch===1?'gara':'gare'}</span></h3>
+        ${svgBars(items)}
+        <p class="hint">Su tutte le gare, la rotazione più critica è <b style="color:var(--flame)">${worst}</b> (${ROT_POS[worst]}); la più forte è <b style="color:var(--ok)">${best}</b>. Scegli una partita qui sopra per registrare o correggere le rotazioni.</p></div>`;
 }
 
 /* =========================================================
