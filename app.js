@@ -1658,7 +1658,7 @@ renderDashboard();
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='v5';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='v6';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -1717,7 +1717,7 @@ if('serviceWorker' in navigator){
     if(pwaRefreshing) return; pwaRefreshing=true; location.reload();
   });
   window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js').then(reg=>{
+    navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(reg=>{
       swReg=reg;
       if(reg.waiting) pwaShowBanner();                 /* update già pronto all'avvio */
       reg.addEventListener('updatefound',()=>{
