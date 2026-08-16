@@ -116,9 +116,11 @@ function getVolleyWeights(){
 }
 /* Voto di una riga di scout, RICALCOLATO live da stat + ruolo + pesi correnti */
 function rowVoto(row, sport){
+  if(row && typeof row.votoOverride==='number' && !isNaN(row.votoOverride)) return row.votoOverride;
   const p=playerById(row.pId);
   return computeVoto(row, sport||curSport(), p?p.role:null);
 }
+function computeWhy(s, sport, role){ const sc=SCOUT[sport||curSport()]; return sc && sc.why ? sc.why(s,role) : []; }
 function volleyVoto(s, role){
   const W=getVolleyWeights();
   role = W.roles[role] ? role : 'Schiacciatore';
@@ -704,6 +706,10 @@ function buildLayout(){
                 <h3><i class="fa-solid fa-star-half-stroke"></i> Voti per giocatore <span style="color:var(--muted);font-weight:600;font-size:.82rem">(1–10, lascia vuoto se non valutato)</span></h3>
                 <div class="table-wrap"><table class="scout-table" id="grade-table"></table></div>
                 <p class="hint">Tocca l'icona nota accanto al giocatore per lasciargli un commento sulla seduta.</p>
+                <div class="legend-grid" style="margin-top:.8rem">
+                    <div class="legend-item"><strong>SCALA VOTO</strong><b>≤4</b> insufficiente · <b>6</b> sufficiente · <b>7</b> buono · <b>8</b> ottimo · <b>9-10</b> eccellente</div>
+                    <div class="legend-item"><strong>NOTA</strong>Il voto dell'allenamento è a giudizio del mister e non entra nella media delle partite.</div>
+                </div>
             </div>
         </div>
     </section>
@@ -747,6 +753,10 @@ function buildLayout(){
         <div class="card"><h3 style="color:var(--flame)"><i class="fa-solid fa-trash-can" style="color:var(--flame)"></i> Azzera tutto</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Cancella ogni dato e riparte da zero. Operazione irreversibile.</p>
             <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-bomb"></i> Reset completo</button></div>
+        <div class="card"><h3><i class="fa-solid fa-arrows-rotate"></i> Aggiornamenti</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Quando esce una versione nuova compare un avviso: puoi aggiornare subito o più tardi. Qui puoi controllare o applicare un aggiornamento in attesa in qualsiasi momento. I tuoi dati (rosa, statistiche) non vengono toccati.</p>
+            <div class="pwa-state" id="pwa-settings-state"></div>
+            <button class="btn btn-ghost" onclick="pwaCheckNow()"><i class="fa-solid fa-magnifying-glass"></i> Cerca aggiornamenti</button></div>
         <div class="card"><h3><i class="fa-solid fa-sliders"></i> Motore voto <span class="pill" style="margin-left:6px">admin</span></h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Regola quanto pesa ogni fondamentale per ruolo (ricezione, attacco, muro, ace…), con anteprima live. Le partite già registrate si ricalcolano da sole. Area riservata: richiede password.</p>
             <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
@@ -758,7 +768,7 @@ function buildLayout(){
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{},
+    scout:populateScout, rotazioni:populateRot, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>pwaMarkSettings(!!(swReg&&swReg.waiting)),
     formazione:renderFormazione
 };
 function go(sec){
@@ -1070,9 +1080,28 @@ function buildScoutHead(sport){
     r1+='<th rowspan="2">Voto</th></tr>'; r2+='</tr>';
     head.innerHTML=r1+r2;
 }
+const SCOUT_ABBR={
+  Ace:'Ace (servizio punto)',Err:'Errore',Tot:'Totale',Pos:'Positiva',Prf:'Perfetta',Pt:'Punto',
+  Ass:'Assist','In porta':'Tiri in porta',Amm:'Ammonizione',Esp:'Espulsione',Subiti:'Gol subiti',Min:'Minuti',
+  Off:'Rimbalzi offensivi',Dif:'Rimbalzi difensivi',Rub:'Palle rubate',Perse:'Palle perse',Stop:'Stoppate',
+  Fatti:'Realizzati',Tent:'Tentati'
+};
 function renderScoutLegend(sport){
-    const el=document.getElementById('scout-legend'); if(!el) return;
-    el.innerHTML=`<div class="legend-item" style="grid-column:1/-1"><strong>NOTA</strong>${SCOUT[sport].note||''}</div>`;
+  const el=document.getElementById('scout-legend'); if(!el) return;
+  let items='';
+  if(sport==='pallavolo'){
+    const sym=[['#','Perfetto'],['+','Positivo'],['!','Ok'],['−','Negativo'],['=','Errore']];
+    items=`<div class="legend-item" style="grid-column:1/-1"><strong>SIMBOLI</strong> `+
+      sym.map(s=>`<b>${s[0]}</b> ${s[1]}`).join(' · ')+`</div>`;
+  } else {
+    const groups=(SCOUT[sport].groups||[]).map(g=>{
+      const fs=g.fields.map(f=>SCOUT_ABBR[f[1]]?`<b>${f[1]}</b>=${SCOUT_ABBR[f[1]]}`:`<b>${f[1]}</b>`)
+        .filter(Boolean).join(' · ');
+      return g.label?`<div class="legend-item"><strong>${g.label}</strong>${fs}</div>`:`<div class="legend-item">${fs}</div>`;
+    }).join('');
+    items=groups;
+  }
+  el.innerHTML=items+`<div class="legend-item" style="grid-column:1/-1"><strong>NOTA</strong>${SCOUT[sport].note||''}</div>`;
 }
 function setupScout(){
     const id=parseInt(document.getElementById('scout-select').value);
@@ -1170,9 +1199,9 @@ function tapPct(row){
 }
 function buildScoutTap(matchId, existing){
   scoutTapCSS();
-  const base={};
-  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('pallavolo'); scoutFields('pallavolo').forEach(k=>b[k]=r[k]||0); base[r.pId]=b; }); }
-  TAP={ matchId, base, events:[], sel:null, fund:'R', seq:1 };
+  const base={}, override={};
+  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('pallavolo'); scoutFields('pallavolo').forEach(k=>b[k]=r[k]||0); base[r.pId]=b; if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride; }); }
+  TAP={ matchId, base, override, events:[], sel:null, fund:'R', seq:1 };
   const el=document.getElementById('scout-tap');
   el.innerHTML=`
     <div class="stap-wrap">
@@ -1206,12 +1235,13 @@ function tapRenderPlayers(){
   if(!roster.length){ box.innerHTML='<div class="empty-row" style="padding:1rem">Nessun atleta in rosa.</div>'; return; }
   box.innerHTML=roster.map(p=>{
     const row=tapDeriveRow(p.id), {rec,eff}=tapPct(row);
-    const v=computeVoto(row,'pallavolo',p.role);
+    const ov=TAP.override[p.id];
+    const v=(typeof ov==='number')?ov:computeVoto(row,'pallavolo',p.role);
     const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
     const vClass=v>=7?'hi':v>=5.5?'md':'lo';
     return `<button class="stap-player${TAP.sel===p.id?' sel':''}" onclick="tapSelect(${p.id})">
       <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
-      <div class="stap-p-stat"><span>Ric ${rec==null?'—':rec+'%'}</span><span>Att ${eff==null?'—':eff+'%'}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}</span></div>
+      <div class="stap-p-stat"><span>Ric ${rec==null?'—':rec+'%'}</span><span>Att ${eff==null?'—':eff+'%'}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
     </button>`;
   }).join('');
 }
@@ -1250,6 +1280,38 @@ function tapRenderDetail(){
          <span class="stap-chip-f">${fShort[e.fund]||e.fund}</span><b>${e.grade}</b><i class="fa-solid fa-xmark"></i></button>`).join('')
     : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione${baseRow?' (oltre a quelli già salvati)':''}.</div>`;
   box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div>${baseInfo}<div class="stap-chips">${chips}</div>`;
+  /* PERCHÉ (scomposizione) + OVERRIDE manuale del mister */
+  const row=tapDeriveRow(TAP.sel);
+  const calc=computeVoto(row,'pallavolo',p.role);
+  const why=computeWhy(row,'pallavolo',p.role);
+  const ov=TAP.override[TAP.sel];
+  const whyHtml = why && why.length
+    ? `<div class="stap-why"><div class="stap-why-h">Perché <b>${calc.toFixed(1)}</b></div>`+
+      why.map(w=>`<span class="stap-why-b">${w}</span>`).join('')+`</div>`
+    : `<div class="stap-why"><div class="stap-why-h">Voto calcolato <b>${calc.toFixed(1)}</b></div></div>`;
+  const ovHtml=`<div class="stap-ov">
+      <label>Voto manuale del mister</label>
+      <div class="stap-ov-row">
+        <input type="number" min="1" max="10" step="0.1" id="stap-ov-in" placeholder="auto ${calc.toFixed(1)}" value="${typeof ov==='number'?ov:''}">
+        <button class="btn btn-accent" onclick="tapApplyOverride()">Imposta</button>
+        ${typeof ov==='number'?`<button class="btn btn-ghost" onclick="tapClearOverride()">Auto</button>`:''}
+      </div>
+      ${typeof ov==='number'?`<div class="stap-ov-note">Ora vale <b>${(+ov).toFixed(1)}</b> (manuale). "Auto" ripristina ${calc.toFixed(1)}.</div>`:`<div class="stap-ov-note">Lascia vuoto per usare il voto automatico.</div>`}
+    </div>`;
+  box.innerHTML += whyHtml + ovHtml;
+}
+function tapApplyOverride(){
+  if(!TAP||!TAP.sel) return;
+  const inp=document.getElementById('stap-ov-in'); if(!inp) return;
+  const raw=inp.value.trim();
+  if(raw===''){ delete TAP.override[TAP.sel]; }
+  else { let v=Math.max(1,Math.min(10,parseFloat(raw))); if(isNaN(v)){ toast('Voto non valido','info'); return; } TAP.override[TAP.sel]=v; }
+  tapRenderPlayers(); tapRenderSel();
+}
+function tapClearOverride(){
+  if(!TAP||!TAP.sel) return;
+  delete TAP.override[TAP.sel];
+  tapRenderPlayers(); tapRenderSel();
 }
 function tapRemoveEvent(id){
   if(!TAP) return;
@@ -1277,7 +1339,10 @@ function saveScoutTap(){
   const rows=[];
   activePlayers().forEach(p=>{
     const s=tapDeriveRow(p.id);
-    rows.push({pId:p.id, ...s, voto:+computeVoto(s,'pallavolo',p.role).toFixed(1)});
+    const ov=TAP.override[p.id];
+    const row={pId:p.id, ...s, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'pallavolo').toFixed(1)};
+    if(typeof ov==='number') row.votoOverride=ov;
+    rows.push(row);
   });
   DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==TAP.matchId);
   DB.scoutHistory.push({matchId:TAP.matchId, date:match.date, opponent:match.notes, sport:'pallavolo', rows});
@@ -1312,6 +1377,14 @@ function scoutTapCSS(){
   .stap-grade:disabled{opacity:.32;cursor:not-allowed;}
   .stap-grade.g-perf{background:#5fd06f;} .stap-grade.g-pos{background:#8fe388;} .stap-grade.g-ok{background:#ffd166;} .stap-grade.g-neg{background:#f4a259;} .stap-grade.g-err{background:#ef6461;color:#fff;}
   .stap-detail{display:flex;flex-direction:column;gap:6px;}
+  .stap-ovm{font-style:normal;font-size:.6rem;font-weight:800;background:#0b1220;color:#ffd166;border-radius:4px;padding:0 3px;margin-left:3px;vertical-align:top;}
+  .stap-why{margin-top:.6rem;padding-top:.5rem;border-top:1px dashed var(--border,rgba(255,255,255,.14));display:flex;flex-wrap:wrap;gap:5px;align-items:center;}
+  .stap-why-h{width:100%;font-size:.78rem;color:var(--muted);} .stap-why-h b{color:var(--text,#fff);}
+  .stap-why-b{font-size:.72rem;background:var(--surface,rgba(255,255,255,.05));border:1px solid var(--border,rgba(255,255,255,.12));border-radius:8px;padding:2px 7px;color:var(--muted);}
+  .stap-ov{margin-top:.7rem;padding-top:.6rem;border-top:1px dashed var(--border,rgba(255,255,255,.14));}
+  .stap-ov label{font-size:.78rem;color:var(--muted);display:block;margin-bottom:.35rem;}
+  .stap-ov-row{display:flex;gap:8px;align-items:center;} .stap-ov-row input{width:92px;padding:8px 10px;border-radius:9px;border:1px solid var(--border,rgba(255,255,255,.2));background:var(--surface,rgba(0,0,0,.2));color:inherit;font-size:1rem;}
+  .stap-ov-row .btn{padding:8px 12px;} .stap-ov-note{font-size:.72rem;color:var(--muted);margin-top:.4rem;}
   .stap-detail-h{font-size:.8rem;color:var(--muted);display:flex;align-items:center;gap:6px;}
   .stap-detail-h .stap-detail-n{margin-left:auto;background:var(--brand);color:#04140A;border-radius:20px;padding:0 8px;font-weight:800;font-size:.72rem;}
   .stap-base{font-size:.72rem;color:var(--muted);} .stap-base-note{opacity:.7;}
@@ -1575,8 +1648,82 @@ buildLayout();
 renderTeamName();
 renderDashboard();
 
+/* =========================================================
+   AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
+   Il nuovo codice si scarica in background e resta in attesa;
+   l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
+   ========================================================= */
+const APP_VERSION='v5';   /* combacia col CACHE_VERSION di sw.js */
+let swReg=null, pwaRefreshing=false;
+function pwaCSS(){
+  if(document.getElementById('pwa-css')) return;
+  const st=document.createElement('style'); st.id='pwa-css';
+  st.textContent=`
+  #pwa-banner{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 74px);z-index:9999;
+    display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:14px;max-width:calc(100% - 24px);
+    background:var(--surface-2,#161a22);color:var(--text,#fff);border:1px solid var(--brand);box-shadow:0 8px 30px rgba(0,0,0,.45);animation:pwaUp .25s ease;}
+  @keyframes pwaUp{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+  #pwa-banner .pwa-msg{font-weight:600;font-size:.9rem;display:flex;align-items:center;gap:8px;}
+  #pwa-banner .pwa-msg i{color:var(--brand);}
+  #pwa-banner .pwa-acts{display:flex;gap:8px;margin-left:auto;}
+  #pwa-banner button{border:none;border-radius:9px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:.82rem;}
+  #pwa-banner .pwa-later{background:transparent;color:var(--muted);border:1px solid var(--border,rgba(255,255,255,.18));}
+  #pwa-banner .pwa-now{background:var(--brand);color:#04140a;}
+  @media(min-width:900px){#pwa-banner{bottom:24px;}}
+  .pwa-state{margin-bottom:1rem;font-size:.9rem;} .pwa-ok{color:var(--muted);}
+  .pwa-badge-new{display:inline-block;background:var(--brand);color:#04140a;font-weight:800;border-radius:20px;padding:2px 10px;font-size:.78rem;margin-right:8px;}
+  `;
+  document.head.appendChild(st);
+}
+function pwaShowBanner(){
+  pwaCSS();
+  if(document.getElementById('pwa-banner')) return;
+  const b=document.createElement('div'); b.id='pwa-banner';
+  b.innerHTML=`<span class="pwa-msg"><i class="fa-solid fa-arrows-rotate"></i> Nuova versione disponibile</span>
+    <div class="pwa-acts">
+      <button class="pwa-later" onclick="pwaDismissBanner()">Più tardi</button>
+      <button class="pwa-now" onclick="pwaApplyUpdate()">Aggiorna ora</button>
+    </div>`;
+  document.body.appendChild(b);
+  pwaMarkSettings(true);
+}
+function pwaDismissBanner(){ const b=document.getElementById('pwa-banner'); if(b)b.remove(); }
+function pwaApplyUpdate(){
+  const w = swReg && swReg.waiting;
+  if(w){ w.postMessage({type:'SKIP_WAITING'}); }   /* controllerchange → reload */
+  else { location.reload(); }
+}
+function pwaMarkSettings(available){
+  const el=document.getElementById('pwa-settings-state'); if(!el) return;
+  el.innerHTML = available
+    ? `<span class="pwa-badge-new">Aggiornamento pronto</span><button class="btn btn-accent" onclick="pwaApplyUpdate()"><i class="fa-solid fa-arrows-rotate"></i> Aggiorna adesso</button>`
+    : `<span class="pwa-ok">Sei alla versione più recente (${APP_VERSION}).</span>`;
+}
+function pwaCheckNow(){
+  if(!swReg){ toast('Aggiornamenti non disponibili in questa modalità','info'); return; }
+  toast('Controllo aggiornamenti…');
+  swReg.update().then(()=>setTimeout(()=>{
+    if(swReg.waiting){ pwaShowBanner(); pwaMarkSettings(true); toast('Aggiornamento trovato'); }
+    else { pwaMarkSettings(false); toast('Sei già aggiornato'); }
+  },900)).catch(()=>toast('Controllo non riuscito','info'));
+}
 if('serviceWorker' in navigator){
-    window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(err=>console.warn('SW non registrato',err)));
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{
+    if(pwaRefreshing) return; pwaRefreshing=true; location.reload();
+  });
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('sw.js').then(reg=>{
+      swReg=reg;
+      if(reg.waiting) pwaShowBanner();                 /* update già pronto all'avvio */
+      reg.addEventListener('updatefound',()=>{
+        const nw=reg.installing; if(!nw) return;
+        nw.addEventListener('statechange',()=>{
+          if(nw.state==='installed' && navigator.serviceWorker.controller) pwaShowBanner();
+        });
+      });
+      pwaMarkSettings(!!reg.waiting);
+    }).catch(err=>console.warn('SW non registrato',err));
+  });
 }
 
 /* =========================================================

@@ -1,6 +1,8 @@
-/* VolleyTeam Manager - Service Worker
-   Bump CACHE_VERSION ad ogni rilascio per forzare l'aggiornamento. */
-const CACHE_VERSION = 'volleyteam-v3';
+/* VolleyTeam Manager (Coach) - Service Worker
+   Aggiornamento controllato: il nuovo SW resta in attesa finché l'utente
+   non conferma (banner o pulsante in Impostazioni). skipWaiting solo su richiesta.
+   Bump CACHE_VERSION ad ogni rilascio. I dati utente (localStorage) non vengono mai toccati. */
+const CACHE_VERSION = 'volleyteam-v5';
 const APP_SHELL = [
   './',
   './index.html',
@@ -13,34 +15,33 @@ const APP_SHELL = [
   './icons/favicon-32.png'
 ];
 
-// Installazione: pre-cache dell'app shell
+// Installazione: pre-cache dell'app shell. NON attiva subito: aspetta conferma.
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL))
   );
-  self.skipWaiting();
 });
 
-// Attivazione: pulizia delle cache vecchie
+// Attivazione: pulizia delle cache vecchie e presa di controllo
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch:
-//  - stesso dominio  -> cache-first (l'app funziona offline)
-//  - CDN esterni     -> stale-while-revalidate (font, icone)
+// La pagina chiede di applicare l'aggiornamento in attesa
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// Fetch: same-origin cache-first (offline), CDN stale-while-revalidate
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-
   const url = new URL(req.url);
   const sameOrigin = url.origin === self.location.origin;
-
   if (sameOrigin) {
     event.respondWith(
       caches.match(req).then((cached) =>
