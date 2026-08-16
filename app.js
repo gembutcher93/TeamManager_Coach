@@ -677,11 +677,13 @@ function buildLayout(){
         </div>
         <div id="tr-panel" style="display:none">
             <div class="card">
-                <h3><i class="fa-solid fa-list-check"></i> Esercizi della seduta</h3>
-                <form onsubmit="addExercise(event)"><div class="form-row">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                    <h3 style="margin:0"><i class="fa-solid fa-list-check"></i> Esercizi della seduta</h3>
+                    <button type="button" class="btn btn-ghost" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button>
+                </div>
+                <form onsubmit="addExercise(event)"><div class="form-row" style="margin-top:.8rem">
                     <div class="fg"><label>Nome esercizio</label><input id="ex-name" placeholder="Es. Ricezione in bagher zona 5" required></div>
-                    <div class="fg" style="max-width:190px"><label>Categoria</label><select id="ex-cat">
-                        <option>Riscaldamento</option><option>Battuta</option><option>Ricezione</option><option>Palleggio</option><option>Attacco</option><option>Muro</option><option>Difesa</option><option>Fisico</option><option>Tattica</option></select></div>
+                    <div class="fg" style="max-width:190px"><label>Categoria</label><select id="ex-cat"></select></div>
                     <div class="fg" style="flex:0"><label>&nbsp;</label><button class="btn btn-accent" type="submit"><i class="fa-solid fa-plus"></i> Aggiungi</button></div>
                 </div></form>
                 <div id="ex-chips" style="margin-top:1rem"></div>
@@ -1793,7 +1795,136 @@ async function downloadPlayerPkg(id){
 /* =========================================================
    ALLENAMENTI & VOTI
    ========================================================= */
-const CAT_COLOR={Riscaldamento:'#8395B4',Battuta:'#F0463C',Ricezione:'#22C55E',Palleggio:'#5b9dff',Attacco:'#F5B301',Muro:'#a78bfa',Difesa:'#2dd4bf',Fisico:'#fb923c',Tattica:'#e879f9'};
+const CAT_COLOR={Riscaldamento:'#8395B4',Battuta:'#F0463C',Ricezione:'#22C55E',Palleggio:'#5b9dff',Attacco:'#F5B301',Muro:'#a78bfa',Difesa:'#2dd4bf',Fisico:'#fb923c',Tattica:'#e879f9',
+  Tecnica:'#5b9dff',Possesso:'#34d399',Finalizzazione:'#F5B301',Transizioni:'#f472b6','Palle inattive':'#c084fc',Portieri:'#38bdf8','Partite a tema':'#fb7185',
+  Tiro:'#F5B301',Passaggio:'#5b9dff','1 contro 1':'#f472b6',Transizione:'#f472b6',Rimbalzo:'#2dd4bf'};
+/* Categorie di allenamento per sport (la prima è il default del menu) */
+const SPORT_CATS={
+  pallavolo:['Riscaldamento','Battuta','Ricezione','Palleggio','Attacco','Muro','Difesa','Fisico','Tattica'],
+  calcio:['Riscaldamento','Tecnica','Possesso','Finalizzazione','Difesa','Transizioni','Palle inattive','Portieri','Fisico','Partite a tema'],
+  basket:['Riscaldamento','Palleggio','Tiro','Passaggio','1 contro 1','Difesa','Transizione','Rimbalzo','Tattica','Fisico']
+};
+const SPORT_LABEL={pallavolo:'Pallavolo',calcio:'Calcio',basket:'Basket'};
+/* Libreria esercizi curata per sport → categoria (senza gif, in italiano). Espandibile con quelli custom del mister. */
+const EXERCISE_LIB={
+  pallavolo:{
+    Riscaldamento:['Corsa e mobilità articolare','Andature coordinative','Attivazione con palla a coppie','Spostamenti e scivolamenti','Salti e atterraggi controllati','Reattività e cambi di direzione'],
+    Battuta:['Battuta float da fondo','Battuta in salto (spin)','Battuta mirata a zone','Battuta sotto punteggio','Serie di precisione','Battuta e transizione in difesa'],
+    Ricezione:['Ricezione in bagher zona 5','Ricezione float a coppie','Ricezione e appoggio al palleggiatore','Ricezione con spostamento','Ricezione 3 zone a rotazione','Ricezione sotto battuta in salto'],
+    Palleggio:['Palleggio in salto','Palleggio dietro la testa','Alzata di seconda linea','Precisione a bersaglio','Palleggio in sospensione a coppie','Alzata in transizione veloce'],
+    Attacco:['Attacco da posto 4','Attacco da posto 2','Primo tempo al centro','Pipe da seconda linea','Attacco su palla staccata','Colpi di controllo e pallonetto'],
+    Muro:['Muro di reparto a due','Spostamento e muro a uno','Muro su primo tempo','Lettura e timing a muro','Muro-difesa combinato','Muro sull\'ala esterna'],
+    Difesa:['Difesa in tuffo','Copertura dell\'attacco','Difesa su pallonetto','Bagher di controllo in movimento','Difesa a rombo','Rimessa dopo muro avversario'],
+    Fisico:['Forza esplosiva arti inferiori','Pliometria e salti','Core stability','Rapidità e cambi di direzione','Resistenza specifica','Mobilità e prevenzione spalle'],
+    Tattica:['Cambio-palla completo','Fase break point','Ricezione-attacco per rotazione','Situazioni di punteggio','Sistema muro-difesa','Gestione del set punto a punto']
+  },
+  calcio:{
+    Riscaldamento:['Attivazione tecnica con palla','Corsa e mobilità articolare','Torello 4 contro 2','Andature coordinative','Attivazione neuromuscolare','Rondo di riscaldamento'],
+    Tecnica:['Controllo orientato','Conduzione tra i coni','Passaggio e ricezione a coppie','Trasmissione a un tocco','Guida della palla in slalom','Colpo di testa a coppie'],
+    Possesso:['Possesso palla 4 contro 4','Rondo 5 contro 2','Mantenimento sotto pressione','Possesso a tema con sponde','Gioco di posizione a 3 linee','Cambio gioco e ampiezza'],
+    Finalizzazione:['Tiro in porta dopo controllo','Conclusione da fuori area','Uno contro uno col portiere','Cross e finalizzazione','Combinazione e tiro','Finalizzazione in transizione'],
+    Difesa:['Marcatura 1 contro 1','Contrasto e recupero palla','Movimento della linea difensiva','Pressing organizzato','Chiusure e coperture','Difesa 2 contro 2'],
+    Transizioni:['Transizione dopo recupero','Ripartenza in contropiede','Riaggressione immediata','Situazione 3 contro 2','Cambio fase su palla persa','Contropiede a campo aperto'],
+    'Palle inattive':['Calcio d\'angolo offensivo','Punizione dalla trequarti','Rimessa laterale organizzata','Difesa sui calci piazzati','Schema su punizione','Rigori sotto pressione'],
+    Portieri:['Presa alta e bassa','Tuffi e respinte','Uscite sui cross','Gioco coi piedi','Rinvio e costruzione','Uno contro uno in uscita'],
+    Fisico:['Forza e potenza','Rapidità e agilità','Resistenza aerobica','Cambi di direzione','Navette a intensità','Core e prevenzione'],
+    'Partite a tema':['Partitella a due tocchi','Small sided game 5 contro 5','Gioco a tema pressing','Partita con jolly','Superiorità numerica','Partita a campo ridotto']
+  },
+  basket:{
+    Riscaldamento:['Palleggio in movimento','Andature e scivolamenti','Attivazione a coppie','Ball handling stazionario','Corsa e mobilità','Riscaldamento ai tiri liberi'],
+    Palleggio:['Palleggio a due palle','Partenze in palleggio','Cambi di mano e direzione','Palleggio-arresto-tiro','Palleggio in traffico','Coordinazione mano debole'],
+    Tiro:['Tiro in corsa (terzo tempo)','Arresto e tiro','Tiro da tre posizioni','Tiro dopo palleggio','Catch and shoot','Serie di tiri liberi'],
+    Passaggio:['Passaggio a due mani','Passaggio in transizione','Smistamento e taglio','Passaggio no-look controllato','Ricezione e apertura','Passaggio dal post'],
+    '1 contro 1':['1 contro 1 dalla punta','1 contro 1 in post basso','Lettura del difensore','Finte e cambi di ritmo','1 contro 1 dal palleggio','Attacco del recupero'],
+    Difesa:['Scivolamenti difensivi','Difesa sull\'uomo con palla','Aiuti e recuperi','Difesa 1 contro 1','Chiusure a canestro','Contestazione del tiro'],
+    Transizione:['Contropiede 2 contro 1','Transizione 3 contro 2','Difesa in transizione','Correre il campo','Cambio canestro rapido','Ripartenza dopo rimbalzo'],
+    Rimbalzo:['Tagliafuori a coppie','Rimbalzo offensivo e tap-in','Rimbalzo difensivo e apertura','Lotta a rimbalzo 3 contro 3','Timing di salto','Rimbalzo e contropiede'],
+    Tattica:['Dai e vai (give and go)','Penetra e scarica','Blocco sulla palla','Tagli e smarcamenti','Gioco in post','Situazioni 5 contro 5'],
+    Fisico:['Forza esplosiva','Rapidità e agilità','Salto e pliometria','Resistenza specifica','Cambi di direzione','Core stability']
+  }
+};
+function catsFor(sport){ return SPORT_CATS[sport||curSport()] || SPORT_CATS.pallavolo; }
+/* Libreria dello sport corrente = built-in + esercizi custom del mister, come array {name,cat,custom} */
+function exLibFor(sport){
+  sport=sport||curSport();
+  const out=[]; const seen=new Set();
+  const push=(name,cat,custom)=>{ const key=(cat+'|'+name).toLowerCase(); if(seen.has(key))return; seen.add(key); out.push({name,cat,custom:!!custom}); };
+  const lib=EXERCISE_LIB[sport]||{};
+  Object.keys(lib).forEach(cat=>lib[cat].forEach(n=>push(n,cat,false)));
+  const custom=((DB.settings||{}).customExercises||{})[sport]||{};
+  Object.keys(custom).forEach(cat=>(custom[cat]||[]).forEach(n=>push(n,cat,true)));
+  return out;
+}
+function rememberCustomExercise(sport,name,cat){
+  const lib=EXERCISE_LIB[sport]||{};
+  if((lib[cat]||[]).some(n=>n.toLowerCase()===name.toLowerCase())) return; // già built-in
+  DB.settings=DB.settings||{}; DB.settings.customExercises=DB.settings.customExercises||{};
+  const cs=DB.settings.customExercises; cs[sport]=cs[sport]||{}; cs[sport][cat]=cs[sport][cat]||[];
+  if(!cs[sport][cat].some(n=>n.toLowerCase()===name.toLowerCase())) cs[sport][cat].push(name);
+}
+/* --- Modale libreria esercizi --- */
+let EXLIB_FILTER={cat:'',q:''};
+function openExLibrary(){
+  if(!currentTraining()){ toast('Scegli prima una seduta','info'); return; }
+  exLibCSS(); EXLIB_FILTER={cat:'',q:''};
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-book-open" style="color:var(--brand)"></i> Libreria esercizi · ${SPORT_LABEL[curSport()]||''}</h3>
+      <button class="icon-btn" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="exlib">
+      <input class="exlib-search" id="exlib-q" placeholder="Cerca un esercizio…" oninput="exLibSet('q',this.value)">
+      <div class="exlib-cats" id="exlib-cats"></div>
+      <div class="exlib-list" id="exlib-list"></div>
+      <p class="exlib-hint">Tocca <b>+</b> per aggiungere l'esercizio alla seduta. Puoi aggiungerne più di uno.</p>
+    </div>`, true);
+  renderExLibCats(); renderExLibList();
+}
+function exLibSet(k,v){ EXLIB_FILTER[k]=v; if(k==='cat') renderExLibCats(); renderExLibList(); }
+function renderExLibCats(){
+  const box=document.getElementById('exlib-cats'); if(!box) return;
+  const cats=catsFor(curSport());
+  box.innerHTML=`<button class="exlib-chip${EXLIB_FILTER.cat===''?' on':''}" onclick="exLibSet('cat','')">Tutte</button>`+
+    cats.map(c=>`<button class="exlib-chip${EXLIB_FILTER.cat===c?' on':''}" style="--c:${CAT_COLOR[c]||'#8395B4'}" onclick="exLibSet('cat','${c.replace(/'/g,"\\'")}')">${c}</button>`).join('');
+}
+function renderExLibList(){
+  const box=document.getElementById('exlib-list'); if(!box) return;
+  const q=(EXLIB_FILTER.q||'').toLowerCase().trim();
+  const items=exLibFor(curSport()).filter(e=>(!EXLIB_FILTER.cat||e.cat===EXLIB_FILTER.cat) && (!q||e.name.toLowerCase().includes(q)||e.cat.toLowerCase().includes(q)));
+  if(!items.length){ box.innerHTML='<p class="exlib-empty">Nessun esercizio trovato. Puoi comunque aggiungerne uno tuo dal modulo qui sotto.</p>'; return; }
+  box.innerHTML=items.map(e=>`<div class="exlib-row">
+      <span class="exlib-dot" style="background:${CAT_COLOR[e.cat]||'#8395B4'}"></span>
+      <span class="exlib-name">${e.name}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
+      <span class="exlib-cat">${e.cat}</span>
+      <button class="exlib-add" onclick="addExFromLib('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-plus"></i></button>
+    </div>`).join('');
+}
+function addExFromLib(name,cat){
+  const c=currentTraining(); if(!c) return;
+  if(c.tr.exercises.some(x=>x.name.toLowerCase()===name.toLowerCase())){ toast('Già presente nella seduta','info'); return; }
+  const id=(c.tr.exercises.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
+  c.tr.exercises.push({id,name,cat}); save(); renderTraining(); toast('Aggiunto: '+name);
+}
+function refreshExCats(){
+  const sel=document.getElementById('ex-cat'); if(!sel) return;
+  const cur=sel.value, cats=catsFor(curSport());
+  sel.innerHTML=cats.map(c=>`<option${c===cur?' selected':''}>${c}</option>`).join('');
+}
+function exLibCSS(){
+  if(document.getElementById('exlib-css')) return;
+  const st=document.createElement('style'); st.id='exlib-css';
+  st.textContent=`
+  .exlib{max-height:70vh;display:flex;flex-direction:column;gap:10px;}
+  .exlib-search{width:100%;padding:11px 14px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.18));background:var(--surface,rgba(0,0,0,.2));color:inherit;font-size:1rem;}
+  .exlib-cats{display:flex;flex-wrap:wrap;gap:6px;}
+  .exlib-chip{border:1px solid var(--border,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:20px;padding:5px 11px;font-size:.78rem;font-weight:600;cursor:pointer;}
+  .exlib-chip.on{border-color:var(--c,var(--brand));color:#fff;background:color-mix(in srgb,var(--c,var(--brand)) 22%,transparent);}
+  .exlib-list{overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;}
+  .exlib-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:11px;background:var(--surface-2,rgba(255,255,255,.03));}
+  .exlib-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
+  .exlib-name{font-weight:600;font-size:.9rem;flex:1;} .exlib-custom{font-style:normal;font-size:.62rem;background:var(--brand);color:#04140a;border-radius:5px;padding:0 5px;vertical-align:middle;}
+  .exlib-cat{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;}
+  .exlib-add{flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:none;background:var(--brand);color:#04140a;font-weight:800;cursor:pointer;}
+  .exlib-hint{font-size:.76rem;color:var(--muted);margin:0;} .exlib-empty{color:var(--muted);font-style:italic;font-size:.86rem;}`;
+  document.head.appendChild(st);
+}
 function currentTraining(){
     const eid=parseInt(document.getElementById('tr-select').value);
     if(!eid) return null;
@@ -1812,6 +1943,7 @@ function renderTraining(){
     const c=currentTraining(); const panel=document.getElementById('tr-panel');
     if(!c){panel.style.display='none';return;}
     panel.style.display='block';
+    refreshExCats();
     // chips esercizi
     const chips=document.getElementById('ex-chips');
     if(!c.tr.exercises.length){chips.innerHTML='<p style="color:var(--muted-2);font-style:italic;font-size:.88rem">Nessun esercizio ancora. Aggiungine uno qui sopra.</p>';}
@@ -1841,8 +1973,10 @@ function addExercise(e){
     e.preventDefault(); const c=currentTraining(); if(!c)return;
     const name=document.getElementById('ex-name').value.trim(); if(!name)return;
     const id=(c.tr.exercises.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
-    c.tr.exercises.push({id,name,cat:document.getElementById('ex-cat').value});
-    save(); e.target.reset(); renderTraining(); toast('Esercizio aggiunto');
+    const cat=document.getElementById('ex-cat').value;
+    c.tr.exercises.push({id,name,cat});
+    rememberCustomExercise(curSport(),name,cat);
+    save(); e.target.reset(); refreshExCats(); renderTraining(); toast('Esercizio aggiunto');
 }
 function removeExercise(exId){
     const c=currentTraining(); if(!c)return;
