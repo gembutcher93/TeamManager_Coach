@@ -885,8 +885,13 @@ function renderDashboard(){
     let upcoming=up.length? `<ul class="mini-list">`+up.map(e=>`<li><span><span class="status-dot" style="background:${e.type==='Partita'?'var(--brand)':'var(--muted)'}"></span>${e.notes}</span><span style="color:var(--muted);font-size:.82rem">${fmtDate(e.date)}</span></li>`).join('')+`</ul>`
         : `<div class="empty-state" style="padding:1.5rem"><i class="fa-solid fa-calendar"></i>Nessun evento futuro</div>`;
 
+    brandCSS();
     document.getElementById('dash-content').innerHTML=`
-        <div class="page-head"><div><div class="eyebrow">Bentornato, mister</div><h2>Centro di controllo</h2></div></div>
+        <div class="page-head dash-head">
+            <div class="dash-badge" onclick="pickTeamLogo()" title="Carica / cambia lo stemma">${TEAM_LOGO?`<img src="${TEAM_LOGO}" alt="stemma">`:`<i class="fa-solid fa-shield-halved"></i>`}</div>
+            <div><div class="eyebrow">Bentornato, mister</div><h2 style="margin:0">${DB.teamName}</h2>
+                <div style="color:var(--muted);font-size:.82rem">${TEAM_LOGO?'Tocca lo stemma per cambiarlo':'Tocca lo scudetto per caricare lo stemma della squadra'}</div></div>
+        </div>
         <div class="hero">${court}<div class="hero-inner">${cd}</div></div>
         ${kpis}
         <div class="dash-cols">
@@ -894,6 +899,18 @@ function renderDashboard(){
             <div class="card"><h3><i class="fa-solid fa-calendar-week"></i> Prossimi impegni</h3>${upcoming}</div>
         </div>`;
 }
+function brandCSS(){
+    if(document.getElementById('brand-css')) return;
+    const st=document.createElement('style'); st.id='brand-css';
+    st.textContent=`
+    .dash-head{display:flex;align-items:center;gap:14px;}
+    .dash-badge{width:66px;height:66px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
+    .dash-badge:hover{border-color:var(--brand);}
+    .dash-badge img{width:100%;height:100%;object-fit:contain;}
+    .dash-badge i{font-size:1.7rem;color:var(--muted);}`;
+    document.head.appendChild(st);
+}
+function applyTeamLogo(){ const bl=document.getElementById('brand-logo'); if(bl) bl.src=TEAM_LOGO||'icons/logo-badge.png'; }
 
 /* =========================================================
    ROSTER
@@ -1770,7 +1787,7 @@ window.addEventListener('resize',()=>{if(document.getElementById('tattica').clas
 buildLayout();
 renderTeamName();
 renderDashboard();
-ensureTeamLogo();
+ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 
 /* =========================================================
    AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
@@ -2230,9 +2247,10 @@ async function saveTeamLogo(){
   const L=window.__logo; if(!L) return;
   await cIdbSet('teamlogo', L.current); TEAM_LOGO=L.current; _logoLoaded=true;
   closeModal(); toast('Logo salvato');
+  applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
   if(CARD_STUDIO) renderCardStudioPreview();
 }
-async function removeTeamLogo(){ await cIdbDel('teamlogo'); TEAM_LOGO=null; _logoLoaded=true; toast('Logo rimosso'); if(CARD_STUDIO) renderCardStudioPreview(); }
+async function removeTeamLogo(){ await cIdbDel('teamlogo'); TEAM_LOGO=null; _logoLoaded=true; toast('Logo rimosso'); applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); if(CARD_STUDIO) renderCardStudioPreview(); }
 function cphAbbr(r){ return (r||'').replace(/[^A-Za-zÀ-ÿ]/g,'').slice(0,3).toUpperCase()||'—'; }
 function cphInitials(n){ return (n||'?').trim().split(/\s+/).map(x=>x[0]).slice(0,2).join('').toUpperCase()||'?'; }
 function cphOverall(a){ return a? Math.max(1,Math.min(100,Math.round(a*10))):null; }
