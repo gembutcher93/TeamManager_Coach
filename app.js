@@ -2177,9 +2177,12 @@ function repositionCoach(srcDataURL, onConfirm){
         <img id="rp-img" src="${srcDataURL}" style="position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;pointer-events:none;max-width:none"></div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:14px"><i class="fa-solid fa-magnifying-glass-minus" style="color:var(--muted)"></i>
         <input id="rp-zoom" type="range" min="100" max="300" value="100" style="flex:1"><i class="fa-solid fa-magnifying-glass-plus" style="color:var(--muted)"></i></div>
-      <label class="cs-toggle" style="justify-content:center;margin-top:12px"><input type="checkbox" onchange="rpcToggleBg(this.checked)"> <i class="fa-solid fa-wand-magic-sparkles" style="color:var(--brand)"></i> Rimuovi sfondo</label>
-      <div id="rp-tolrow" style="display:none;align-items:center;gap:10px;margin-top:4px"><span style="font-size:.75rem;color:var(--muted)">Intensità</span><input id="rp-tol" type="range" min="25" max="150" value="72" style="flex:1" oninput="rpcTol(this.value)"></div>
-      <p style="color:var(--muted);font-size:.78rem;margin-top:6px">Trascina per spostare, slider per lo zoom. Se la foto ha già lo sfondo trasparente, lasciala così.</p>
+      <div style="margin-top:12px">
+        <button class="btn btn-ghost" id="rp-bgbtn" style="width:100%" onclick="rpcAiRemove()"><i class="fa-solid fa-wand-magic-sparkles" style="color:var(--brand)"></i> Rimuovi sfondo</button>
+        <div id="rp-bgstatus" style="display:none;font-size:.78rem;color:var(--muted);margin-top:8px"></div>
+        <button class="btn btn-ghost btn-sm" id="rp-bgreset" style="display:none;margin-top:6px" onclick="rpcReset()"><i class="fa-solid fa-rotate-left"></i> Ripristina originale</button>
+      </div>
+      <p style="color:var(--muted);font-size:.78rem;margin-top:8px">Trascina per spostare, slider per lo zoom. Se la foto ha già lo sfondo trasparente, lasciala così.</p>
       <button class="btn btn-accent" style="width:100%;margin-top:12px" onclick="confirmCoachPhoto()"><i class="fa-solid fa-check"></i> Conferma</button>
     </div>`, true);
   const frame=document.getElementById('rp-frame'), img=document.getElementById('rp-img');
@@ -2198,9 +2201,30 @@ function repositionCoach(srcDataURL, onConfirm){
   frame.addEventListener('pointerup',()=>drag=false); frame.addEventListener('pointercancel',()=>drag=false);
   window.__rpc={st,Fw,Fh,img,onConfirm,original:srcDataURL,bg:false,tol:72};
 }
-function rpcRefreshBg(){ const R=window.__rpc; if(!R)return; if(R.bg){ chromaKeyDataURL(R.original,R.tol).then(u=>{R.img.src=u;}); } else { R.img.src=R.original; } }
-function rpcToggleBg(on){ const R=window.__rpc; if(!R)return; R.bg=on; const row=document.getElementById('rp-tolrow'); if(row) row.style.display=on?'flex':'none'; rpcRefreshBg(); }
-function rpcTol(v){ const R=window.__rpc; if(!R)return; R.tol=+v; if(R.bg) rpcRefreshBg(); }
+/* rimuovi-sfondo: AI (segmentazione soggetto, @imgly in-browser) con fallback chroma-key */
+let _imglyRemove=null;
+async function loadImgly(){ if(_imglyRemove) return _imglyRemove; const m=await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.8/+esm'); _imglyRemove=m.removeBackground||m.default; return _imglyRemove; }
+function blobToDataURL(b){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(b); }); }
+async function aiRemoveBg(src,onProgress){
+  const rem=await loadImgly();
+  const blob=await rem(src,{ output:{format:'image/png'}, progress:(k,c,t)=>{ try{ if(onProgress&&t) onProgress(c/t); }catch(_){} } });
+  return await blobToDataURL(blob);
+}
+async function rpcAiRemove(){
+  const R=window.__rpc; if(!R) return;
+  const btn=document.getElementById('rp-bgbtn'), status=document.getElementById('rp-bgstatus'), reset=document.getElementById('rp-bgreset');
+  if(btn) btn.disabled=true; if(status){ status.style.display='block'; status.textContent='Preparo il ritaglio…'; }
+  try{
+    const out=await aiRemoveBg(R.original, p=>{ if(status) status.textContent = p<1?`Elaboro… ${Math.round(p*100)}%`:'Quasi fatto…'; });
+    R.img.src=out; if(status) status.textContent='Sfondo rimosso ✓'; if(reset) reset.style.display='block';
+  }catch(e){
+    if(status) status.textContent='AI non disponibile, uso il metodo veloce…';
+    try{ const out=await chromaKeyDataURL(R.original,72); R.img.src=out; if(status) status.textContent='Sfondo rimosso (metodo veloce) ✓'; if(reset) reset.style.display='block'; }
+    catch(_){ if(status) status.textContent='Non riesco a rimuovere lo sfondo qui. Prova con connessione attiva.'; }
+  }
+  if(btn) btn.disabled=false;
+}
+function rpcReset(){ const R=window.__rpc; if(!R)return; R.img.src=R.original; const s=document.getElementById('rp-bgstatus'); if(s) s.style.display='none'; const b=document.getElementById('rp-bgreset'); if(b) b.style.display='none'; }
 function confirmCoachPhoto(){
   const R=window.__rpc; if(!R){closeModal();return;}
   const {st,Fw,Fh,img,onConfirm}=R, Tw=480,Th=640, s=st.cover*st.zoom;
