@@ -731,7 +731,8 @@ function buildLayout(){
                 </div>
                 <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
                 <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
-                <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni P1–P6. Capitano in oro 👑, vice in argento 🥈.</p>
+                <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Nel calcio partono dalla tua formazione salvata.</p>
+                <div id="bench-area" style="margin-top:14px;display:none"></div>
             </div>
         </div>
     </section>
@@ -757,6 +758,9 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-sliders"></i> Motore voto <span class="pill" style="margin-left:6px">admin</span></h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Regola quanto pesa ogni fondamentale per ruolo (ricezione, attacco, muro, ace…), con anteprima live. Le partite già registrate si ricalcolano da sole. Area riservata: richiede password.</p>
             <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
+        <div class="card"><h3><i class="fa-solid fa-shield-halved"></i> Logo squadra</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica il logo della società (PNG, meglio senza sfondo). Comparirà sulle card sopra il numero di maglia; puoi posizionarlo dall'Officina card.</p>
+            <button class="btn btn-ghost" onclick="pickTeamLogo()"><i class="fa-solid fa-upload"></i> Carica / cambia logo</button></div>
         <div class="card"><h3><i class="fa-solid fa-id-badge"></i> Officina card</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Posiziona foto, nome, numero, ruolo e overall su ogni tier (GOAT, Mythic, Diamond, Gold, Silver) con anteprima live. Salvi per il tuo dispositivo, o esporti il JSON per renderlo ufficiale nel deploy.</p>
             <button class="btn btn-ghost" onclick="openCardStudio()"><i class="fa-solid fa-sliders"></i> Apri officina card</button></div>
@@ -1648,13 +1652,23 @@ function placeTokens(){
     area.querySelectorAll('.token').forEach(t=>t.remove());
     const r=area.getBoundingClientRect();
     const sp=(typeof DB!=='undefined'&&DB&&DB.sport)||'pallavolo';
+    const base=courtRect(r.width,r.height,sp);
+    if(sp==='calcio'){
+        const {slots}=soccerLineup();
+        slots.forEach(s=>{ if(!s.player) return; const p=s.player;
+            const t=document.createElement('div');
+            t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
+            t.textContent=p.number; t.title=p.name;
+            t.style.left=(base.x+s.x*base.w-23)+'px'; t.style.top=(base.y+s.y*base.h-23)+'px';
+            makeDraggable(t); area.appendChild(t);
+        });
+        renderBench(); return;
+    }
     const FORM={
         pallavolo:[[0.75,0.8],[0.75,0.55],[0.5,0.3],[0.25,0.3],[0.25,0.55],[0.5,0.8]],
-        calcio:[[0.5,0.9],[0.2,0.75],[0.4,0.78],[0.6,0.78],[0.8,0.75],[0.3,0.55],[0.5,0.55],[0.7,0.55],[0.25,0.32],[0.5,0.28],[0.75,0.32]],
         basket:[[0.5,0.75],[0.22,0.62],[0.78,0.62],[0.32,0.4],[0.6,0.38]]
     };
     const spots=FORM[sp]||FORM.pallavolo;
-    const base=courtRect(r.width,r.height,sp);
     const roster=activePlayers().slice(0,spots.length);
     roster.forEach((p,i)=>{
         const t=document.createElement('div');
@@ -1664,6 +1678,24 @@ function placeTokens(){
         t.style.left=(base.x+pos[0]*base.w-23)+'px';t.style.top=(base.y+pos[1]*base.h-23)+'px';
         makeDraggable(t);area.appendChild(t);
     });
+    renderBench();
+}
+function renderBench(){
+    const host=document.getElementById('bench-area'); if(!host) return;
+    if(curSport()!=='calcio'){ host.style.display='none'; host.innerHTML=''; return; }
+    soccerFieldCSS(); host.style.display='block';
+    const {bench}=soccerLineup();
+    host.innerHTML=`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700;margin-bottom:8px"><i class="fa-solid fa-chair"></i> Panchina</div>`+
+      (bench.length ? `<div class="bench-chips">`+bench.map(b=>`<button class="bench-chip" onclick="benchSubstitute(${b.p.id})"><span class="bench-num">${b.p.number}</span> ${(b.p.name||'').split(' ').slice(-1)[0]}</button>`).join('')+`</div>`
+                    : '<p class="hint" style="margin:0">Tutti in campo.</p>');
+}
+function benchSubstitute(pid){
+    const {slots}=soccerLineup(); const inField=slots.filter(s=>s.player);
+    const opts=inField.map(s=>`<button class="sub-opt" onclick="setLineupSub(${s.i},${pid});closeModal();placeTokens()"><span class="fmz-num">#${s.player.number}</span> ${s.player.name} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Chi fai uscire?</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body"><p class="hint" style="margin-bottom:10px">Esce il giocatore che scegli, entra quello dalla panchina.</p>
+        <div class="sub-list">${opts||'<p class="hint">Nessun titolare in campo.</p>'}</div></div>`, true);
 }
 function makeDraggable(token){
     token.addEventListener('pointerdown',e=>{
@@ -1689,7 +1721,10 @@ function bindDraw(w,h){
 }
 function setPen(c,el){penColor=c;document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
 function clearDraw(){const r=document.getElementById('court-area').getBoundingClientRect();drawCourt(r.width,r.height);}
-function resetTokens(){tokensInit=false;placeTokens();tokensInit=true;toast('Posizioni ripristinate','info');}
+function resetTokens(){
+    if(curSport()==='calcio'){ const L=getLineupCalcio(); L.pos={}; L.subs={}; save(); }
+    tokensInit=false;placeTokens();tokensInit=true;toast('Posizioni ripristinate','info');
+}
 
 /* =========================================================
    BACKUP
@@ -1735,6 +1770,7 @@ window.addEventListener('resize',()=>{if(document.getElementById('tattica').clas
 buildLayout();
 renderTeamName();
 renderDashboard();
+ensureTeamLogo();
 
 /* =========================================================
    AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
@@ -2151,6 +2187,52 @@ function cIdb(){ return new Promise((res,rej)=>{const r=indexedDB.open('pm-media
 async function cIdbGet(k){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img').objectStore('img').get(k); t.onsuccess=()=>res(t.result||null); t.onerror=()=>res(null);});}catch(e){return null;} }
 async function cIdbSet(k,v){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img','readwrite').objectStore('img').put(v,k); t.onsuccess=()=>res(true); t.onerror=()=>res(false);});}catch(e){return false;} }
 async function cIdbDel(k){ try{const db=await cIdb(); db.transaction('img','readwrite').objectStore('img').delete(k);}catch(e){} }
+/* ---- LOGO SQUADRA (PNG con alfa, sulla card sopra il numero + posizionabile nell'officina) ---- */
+var TEAM_LOGO=null, _logoLoaded=false;
+function ensureTeamLogo(cb){ if(_logoLoaded){ cb&&cb(); return; } cIdbGet('teamlogo').then(d=>{ TEAM_LOGO=d||null; _logoLoaded=true; cb&&cb(); }); }
+function pickTeamLogo(){
+  const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
+  inp.onchange=e=>{ const f=e.target.files[0]; if(!f) return; const rd=new FileReader();
+    rd.onload=()=>{ const im=new Image(); im.onload=()=>{
+      const max=512, sc=Math.min(1,max/Math.max(im.width,im.height));
+      const cv=document.createElement('canvas'); cv.width=Math.round(im.width*sc); cv.height=Math.round(im.height*sc);
+      cv.getContext('2d').drawImage(im,0,0,cv.width,cv.height);
+      logoModal(cv.toDataURL('image/png'));
+    }; im.src=rd.result; };
+    rd.readAsDataURL(f); };
+  inp.click();
+}
+function logoModal(dataURL){
+  coachMediaCSS();
+  window.__logo={original:dataURL, current:dataURL};
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-shield-halved" style="color:var(--brand)"></i> Logo squadra</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body" style="text-align:center">
+      <div class="rp-checker" style="width:180px;height:180px;margin:0 auto;border-radius:16px;display:flex;align-items:center;justify-content:center;overflow:hidden;border:2px solid var(--brand)">
+        <img id="logo-prev" src="${dataURL}" style="max-width:100%;max-height:100%;object-fit:contain"></div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:14px" id="logo-bgbtn" onclick="logoRemoveBg()"><i class="fa-solid fa-wand-magic-sparkles" style="color:var(--brand)"></i> Rimuovi sfondo</button>
+      <div id="logo-status" style="display:none;font-size:.78rem;color:var(--muted);margin-top:8px"></div>
+      <p style="color:var(--muted);font-size:.78rem;margin-top:8px">Meglio un PNG già senza sfondo. Comparirà sulla card sopra il numero.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="saveTeamLogo()"><i class="fa-solid fa-check"></i> Salva logo</button>
+    </div>`, true);
+}
+async function logoRemoveBg(){
+  const L=window.__logo; if(!L) return;
+  const st=document.getElementById('logo-status'), btn=document.getElementById('logo-bgbtn'), prev=document.getElementById('logo-prev');
+  if(btn) btn.disabled=true; if(st){ st.style.display='block'; st.textContent='Elaboro…'; }
+  try{ const out=await aiRemoveBg(L.original, p=>{ if(st) st.textContent=p<1?`Elaboro… ${Math.round(p*100)}%`:'Quasi fatto…'; });
+    L.current=out; if(prev) prev.src=out; if(st) st.textContent='Sfondo rimosso ✓'; }
+  catch(e){ try{ const out=await chromaKeyDataURL(L.original,72); L.current=out; if(prev) prev.src=out; if(st) st.textContent='Sfondo rimosso (metodo veloce) ✓'; }
+    catch(_){ if(st) st.textContent='Non riesco a rimuovere lo sfondo qui.'; } }
+  if(btn) btn.disabled=false;
+}
+async function saveTeamLogo(){
+  const L=window.__logo; if(!L) return;
+  await cIdbSet('teamlogo', L.current); TEAM_LOGO=L.current; _logoLoaded=true;
+  closeModal(); toast('Logo salvato');
+  if(CARD_STUDIO) renderCardStudioPreview();
+}
+async function removeTeamLogo(){ await cIdbDel('teamlogo'); TEAM_LOGO=null; _logoLoaded=true; toast('Logo rimosso'); if(CARD_STUDIO) renderCardStudioPreview(); }
 function cphAbbr(r){ return (r||'').replace(/[^A-Za-zÀ-ÿ]/g,'').slice(0,3).toUpperCase()||'—'; }
 function cphInitials(n){ return (n||'?').trim().split(/\s+/).map(x=>x[0]).slice(0,2).join('').toUpperCase()||'?'; }
 function cphOverall(a){ return a? Math.max(1,Math.min(100,Math.round(a*10))):null; }
@@ -2281,10 +2363,11 @@ function chromaKeyDataURL(srcDataURL,tol){ return new Promise(res=>{ const im=ne
    ========================================================= */
 const TIER_ORDER=['goat','mythic','diamond','gold','silver'];
 const TIER_LABEL={goat:'GOAT',mythic:'MYTHIC',diamond:'DIAMOND',gold:'GOLD',silver:'SILVER'};
-const CARD_ELEMENTS=[['photo','Foto'],['overall','Overall'],['name','Nome'],['number','Numero'],['role','Ruolo'],['attrs','Statistiche'],['tierName','Nome tier']];
+const CARD_ELEMENTS=[['photo','Foto'],['logo','Logo squadra'],['overall','Overall'],['name','Nome'],['number','Numero'],['role','Ruolo'],['attrs','Statistiche'],['tierName','Nome tier']];
 /* layout base (percentuali). Gem lo rifinisce per tier dall'officina. */
 const BASE_CARD_LAYOUT={
   photo:{show:1,x:50,y:40,w:66,h:44},
+  logo:{show:1,x:72,y:9,w:15},
   overall:{show:1,x:22,y:15,size:12,color:'#ffffff',align:'center'},
   role:{show:1,x:22,y:24,size:4.6,color:'#ffffff',align:'center'},
   number:{show:1,x:78,y:15,size:9,color:'#ffffff',align:'center'},
@@ -2371,10 +2454,12 @@ function renderTierCard(id, width){
   const txt=(key,val)=>{ const e=L[key]; if(!e||!e.show||val==null||val==='')return '';
     return `<div class="tc-el" style="left:${e.x}%;top:${e.y}%;transform:translate(${alignT(e.align)},-50%);font-size:${(e.size/100*width).toFixed(1)}px;color:${e.color};text-align:${e.align}">${val}</div>`; };
   const ph=L.photo; const photoEl = ph&&ph.show ? `<div class="tc-photo" style="left:${ph.x}%;top:${ph.y}%;width:${ph.w}%;height:${(ph.h/100*H/width*100).toFixed(2)}%"><img src="${photoSrc}"></div>`:'';
+  const lg=L.logo; const logoEl = (lg&&lg.show&&TEAM_LOGO) ? `<div class="tc-logo" style="left:${lg.x}%;top:${lg.y}%;width:${lg.w}%"><img src="${TEAM_LOGO}"></div>`:'';
   const cands=frameCandidates(tier);
   return `<div class="tiercard tier-${tier}" style="width:${width}px;height:${H}px">
     <img class="tc-frame" src="${cands[0]}" data-fb="${cands.slice(1).join('|')}" onerror="tcFrameFallback(this)" alt="">
     ${photoEl}
+    ${logoEl}
     ${txt('overall',ovr!=null?ovr:'—')}
     ${txt('role',cphAbbr(p.role))}
     ${txt('number','#'+(p.number||''))}
@@ -2386,7 +2471,7 @@ function renderTierCard(id, width){
 /* ---- OFFICINA CARD (studio) ---- */
 let CARD_STUDIO=null;
 function openCardStudio(){
-  cardStudioCSS();
+  cardStudioCSS(); ensureTeamLogo(()=>{ if(CARD_STUDIO) renderCardStudioPreview(); });
   const sample=activePlayers()[0]||DB.players[0];
   CARD_STUDIO={tier:'goat', el:'photo', draft:{}, forceId:sample?sample.id:null};
   // carica nel draft il layout attuale (device o base) del tier iniziale
@@ -2428,6 +2513,10 @@ function renderCardStudioProps(){
   let h=`<label class="cs-toggle"><input type="checkbox" ${el.show?'checked':''} onchange="cardStudioSet('show',this.checked?1:0)"> Mostra elemento</label>`;
   if(CARD_STUDIO.el==='photo'){
     h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Larghezza','w',10,100,0.5)+row('Altezza','h',10,100,0.5);
+  } else if(CARD_STUDIO.el==='logo'){
+    h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Larghezza','w',4,60,0.5);
+    h+=`<button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="pickTeamLogo()"><i class="fa-solid fa-upload"></i> ${TEAM_LOGO?'Cambia logo':'Carica logo'}</button>`;
+    if(TEAM_LOGO) h+=`<button class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="removeTeamLogo()"><i class="fa-solid fa-trash"></i> Rimuovi logo</button>`;
   } else {
     h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Dimensione','size',2,20,0.2);
     if(el.align!==undefined) h+=`<div class="cs-row"><span>Allineamento</span><select onchange="cardStudioSet('align',this.value)">${['left','center','right'].map(a=>`<option value="${a}" ${el.align===a?'selected':''}>${a}</option>`).join('')}</select><span></span></div>`;
@@ -2460,6 +2549,8 @@ function cardStudioCSS(){
   .tiercard{position:relative;border-radius:12px;font-family:'Outfit',sans-serif;font-weight:900;flex:0 0 auto;overflow:hidden;}
   .tiercard .tc-frame{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:0;pointer-events:none;}
   .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:1;}
+  .tiercard .tc-logo{position:absolute;transform:translate(-50%,-50%);z-index:3;pointer-events:none;}
+  .tiercard .tc-logo img{width:100%;height:auto;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
   .tiercard .tc-photo img{width:100%;height:100%;object-fit:contain;object-position:bottom;}
   .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;z-index:2;}
   .tiercard .tc-attrs{position:absolute;z-index:2;text-shadow:0 2px 6px rgba(0,0,0,.55);font-family:'Outfit',sans-serif;}
@@ -2483,7 +2574,7 @@ function cardStudioCSS(){
 }
 
 function openPlayerCard(id){
-  coachMediaCSS(); cardStudioCSS();
+  coachMediaCSS(); cardStudioCSS(); ensureTeamLogo();
   const p=playerById(id), s=getSeasonStats(id), sport=curSport();
   const tier=playerTier(id);
   openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${p.name} <span class="pill" style="margin-left:6px">${TIER_LABEL[tier]}</span></h3>
@@ -2637,7 +2728,9 @@ function soccerFieldCSS(){
   .ftk-num{font-family:'Outfit',sans-serif;font-weight:900;font-size:.9rem;line-height:1;} .ftk-name{font-size:.5rem;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;}
   .fbench{display:flex;flex-wrap:wrap;gap:8px;} .fbench-chip{display:flex;align-items:center;gap:6px;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;padding:7px 11px;font-size:.85rem;font-weight:600;}
   .sub-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto;} .sub-opt{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.12));border-radius:10px;padding:10px 12px;color:inherit;font-size:.9rem;font-weight:600;cursor:pointer;}
-  .sub-opt:hover{border-color:var(--brand);}`;
+  .sub-opt:hover{border-color:var(--brand);}
+  .bench-chips{display:flex;flex-wrap:wrap;gap:6px;} .bench-chip{display:flex;align-items:center;gap:6px;background:var(--surface-2,rgba(255,255,255,.04));border:1px solid var(--line,rgba(255,255,255,.14));border-radius:20px;padding:5px 11px 5px 5px;color:inherit;font-size:.82rem;font-weight:600;cursor:pointer;}
+  .bench-chip:hover{border-color:var(--brand);} .bench-num{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:var(--brand);color:#04140a;font-weight:900;font-size:.72rem;font-family:'Outfit',sans-serif;}`;
   document.head.appendChild(st);
 }
 function injectFmzCSS(){
