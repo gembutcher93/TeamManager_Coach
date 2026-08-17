@@ -2130,15 +2130,16 @@ function confirmCoachPhoto(){
    ========================================================= */
 const TIER_ORDER=['goat','mythic','diamond','gold','silver'];
 const TIER_LABEL={goat:'GOAT',mythic:'MYTHIC',diamond:'DIAMOND',gold:'GOLD',silver:'SILVER'};
-const CARD_ELEMENTS=[['photo','Foto'],['overall','Overall'],['name','Nome'],['number','Numero'],['role','Ruolo'],['tierName','Nome tier']];
+const CARD_ELEMENTS=[['photo','Foto'],['overall','Overall'],['name','Nome'],['number','Numero'],['role','Ruolo'],['attrs','Statistiche'],['tierName','Nome tier']];
 /* layout base (percentuali). Gem lo rifinisce per tier dall'officina. */
 const BASE_CARD_LAYOUT={
-  photo:{show:1,x:50,y:42,w:66,h:48},
+  photo:{show:1,x:50,y:40,w:66,h:44},
   overall:{show:1,x:22,y:15,size:12,color:'#ffffff',align:'center'},
   role:{show:1,x:22,y:24,size:4.6,color:'#ffffff',align:'center'},
   number:{show:1,x:78,y:15,size:9,color:'#ffffff',align:'center'},
-  name:{show:1,x:50,y:72,size:7.4,color:'#ffffff',align:'center'},
-  tierName:{show:0,x:50,y:90,size:4,color:'#ffffff',align:'center'}
+  name:{show:1,x:50,y:66,size:7.4,color:'#ffffff',align:'center'},
+  attrs:{show:1,x:50,y:82,size:5,color:'#ffffff'},
+  tierName:{show:0,x:50,y:94,size:4,color:'#ffffff',align:'center'}
 };
 /* Incolla qui il JSON esportato dall'officina per renderlo ufficiale per tutti. */
 const DEPLOY_CARD_LAYOUTS={};
@@ -2169,6 +2170,44 @@ function frameCandidates(tier){ const C=tier.charAt(0).toUpperCase()+tier.slice(
   return [`cards/${tier}.png`,`cards/${C}_.png`,`cards/${C}.png`,`cards/${tier}_.png`]; }
 function tcFrameFallback(img){ const fb=(img.getAttribute('data-fb')||'').split('|').filter(Boolean);
   if(fb.length){ img.src=fb[0]; img.setAttribute('data-fb',fb.slice(1).join('|')); } else { img.style.opacity=0; } }
+/* ---- ATTRIBUTI stile FIFA, calcolati dai voti allenamento per categoria ×10 ---- */
+/* [labelLunga, sigla, [categorie sorgente]] — categorie = nomi esatti di SPORT_CATS */
+const ATTR_MAP={
+  pallavolo:[['Attacco','ATT',['Attacco']],['Battuta','BAT',['Battuta']],['Ricezione','RIC',['Ricezione']],['Muro','MUR',['Muro']],['Difesa','DIF',['Difesa']],['Atletismo','ATL',['Fisico','Riscaldamento']]],
+  calcio:[['Finalizzazione','FIN',['Finalizzazione']],['Difesa','DIF',['Difesa']],['Tecnica','TEC',['Tecnica']],['Velocità','VEL',['Riscaldamento','Fisico']],['Possesso','POS',['Possesso']],['Transizioni','TRA',['Transizioni','Partite a tema']]],
+  calcio_gk:[['Portiere','POR',['Portieri']],['Difesa','DIF',['Difesa']],['Tecnica','TEC',['Tecnica']],['Velocità','VEL',['Riscaldamento','Fisico']],['Possesso','POS',['Possesso']],['Finalizzazione','FIN',['Finalizzazione']]],
+  basket:[['Tiro','TIR',['Tiro']],['Palleggio','PAL',['Palleggio']],['Difesa','DIF',['Difesa']],['Velocità','VEL',['Riscaldamento','Fisico']],['Rimbalzo','RIM',['Rimbalzo']],['Tattica','TAT',['Tattica','Transizione']]]
+};
+/* media dei voti allenamento del giocatore, per categoria di esercizio */
+function playerCatRatings(id){
+  const acc={};
+  Object.values(DB.trainings||{}).forEach(tr=>{
+    const g=(tr.grades||{})[id]; if(!g) return;
+    (tr.exercises||[]).forEach(x=>{ const v=g[x.id]; if(v!=null){ const c=x.cat||'?'; (acc[c]=acc[c]||{s:0,n:0}); acc[c].s+=v; acc[c].n++; } });
+  });
+  const out={}; Object.keys(acc).forEach(c=>out[c]=acc[c].s/acc[c].n); return out;
+}
+/* attributi della card: valore = media categorie ×10; se nessun voto → stima dall'overall */
+function playerAttributes(id, sport){
+  sport=sport||curSport();
+  const cats=playerCatRatings(id);
+  const p=playerById(id);
+  const ovr=cphOverall(getSeasonStats(id).avgVoto)||60;
+  let defs=ATTR_MAP[sport]||ATTR_MAP.pallavolo;
+  if(sport==='calcio'){ const gk=/portier|^\s*p\s*$|^por/i.test((p&&p.role)||''); defs = gk?ATTR_MAP.calcio_gk:ATTR_MAP.calcio; }
+  return defs.map(([label,short,src])=>{
+    const vals=src.map(c=>cats[c]).filter(v=>v!=null);
+    let rating, est=false;
+    if(vals.length){ rating=Math.round(vals.reduce((a,b)=>a+b,0)/vals.length*10); }
+    else { rating=ovr; est=true; }
+    return {label,short,rating:Math.max(1,Math.min(100,rating)),est};
+  });
+}
+function renderCardAttrs(id, sport, el, width){
+  if(!el||!el.show) return '';
+  const cells=playerAttributes(id,sport).map(a=>`<div class="tc-attr"><b>${a.rating}</b><span>${a.short}</span></div>`).join('');
+  return `<div class="tc-attrs" style="left:${el.x}%;top:${el.y}%;transform:translate(-50%,-50%);font-size:${(el.size/100*width).toFixed(1)}px;color:${el.color}"><div class="tc-attr-grid">${cells}</div></div>`;
+}
 /* Render di una card a tier. width in px (default 300). */
 function renderTierCard(id, width){
   width=width||300; const H=width*1.4;
@@ -2189,6 +2228,7 @@ function renderTierCard(id, width){
     ${txt('role',cphAbbr(p.role))}
     ${txt('number','#'+(p.number||''))}
     ${txt('name',(p.name||'').toUpperCase())}
+    ${renderCardAttrs(id, curSport(), L.attrs, width)}
     ${txt('tierName',TIER_LABEL[tier])}
   </div>`;
 }
@@ -2238,9 +2278,9 @@ function renderCardStudioProps(){
   if(CARD_STUDIO.el==='photo'){
     h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Larghezza','w',10,100,0.5)+row('Altezza','h',10,100,0.5);
   } else {
-    h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Dimensione','size',2,20,0.2)
-      +`<div class="cs-row"><span>Allineamento</span><select onchange="cardStudioSet('align',this.value)">${['left','center','right'].map(a=>`<option value="${a}" ${el.align===a?'selected':''}>${a}</option>`).join('')}</select><span></span></div>`
-      +`<div class="cs-row"><span>Colore</span><input type="color" value="${el.color}" oninput="cardStudioSet('color',this.value)"><span></span></div>`;
+    h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Dimensione','size',2,20,0.2);
+    if(el.align!==undefined) h+=`<div class="cs-row"><span>Allineamento</span><select onchange="cardStudioSet('align',this.value)">${['left','center','right'].map(a=>`<option value="${a}" ${el.align===a?'selected':''}>${a}</option>`).join('')}</select><span></span></div>`;
+    h+=`<div class="cs-row"><span>Colore</span><input type="color" value="${el.color}" oninput="cardStudioSet('color',this.value)"><span></span></div>`;
   }
   box.innerHTML=h;
 }
@@ -2271,6 +2311,10 @@ function cardStudioCSS(){
   .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:1;}
   .tiercard .tc-photo img{width:100%;height:100%;object-fit:contain;object-position:bottom;}
   .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;z-index:2;}
+  .tiercard .tc-attrs{position:absolute;z-index:2;text-shadow:0 2px 6px rgba(0,0,0,.55);font-family:'Outfit',sans-serif;}
+  .tc-attr-grid{display:grid;grid-template-columns:auto auto;gap:.15em 1.1em;}
+  .tc-attr{display:flex;align-items:baseline;gap:.3em;line-height:1;}
+  .tc-attr b{font-weight:900;font-variant-numeric:tabular-nums;} .tc-attr span{font-weight:800;opacity:.72;font-size:.7em;letter-spacing:.5px;}
   .cs-wrap{display:grid;grid-template-columns:260px 1fr;gap:18px;align-items:start;}
   .cs-preview{display:flex;justify-content:center;padding:6px;background:repeating-conic-gradient(#0000 0% 25%,rgba(255,255,255,.04) 0% 50%) 0/22px 22px;border-radius:14px;position:sticky;top:10px;}
   .cs-lb{display:block;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:.6rem 0 .35rem;}
