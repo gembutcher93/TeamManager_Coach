@@ -746,6 +746,9 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-sliders"></i> Motore voto <span class="pill" style="margin-left:6px">admin</span></h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Regola quanto pesa ogni fondamentale per ruolo (ricezione, attacco, muro, ace…), con anteprima live. Le partite già registrate si ricalcolano da sole. Area riservata: richiede password.</p>
             <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
+        <div class="card"><h3><i class="fa-solid fa-id-badge"></i> Officina card</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Posiziona foto, nome, numero, ruolo e overall su ogni tier (GOAT, Mythic, Diamond, Gold, Silver) con anteprima live. Salvi per il tuo dispositivo, o esporti il JSON per renderlo ufficiale nel deploy.</p>
+            <button class="btn btn-ghost" onclick="openCardStudio()"><i class="fa-solid fa-sliders"></i> Apri officina card</button></div>
     </section>`;
 }
 
@@ -2044,7 +2047,7 @@ async function cIdbSet(k,v){ try{const db=await cIdb(); return await new Promise
 async function cIdbDel(k){ try{const db=await cIdb(); db.transaction('img','readwrite').objectStore('img').delete(k);}catch(e){} }
 function cphAbbr(r){ return (r||'').replace(/[^A-Za-zÀ-ÿ]/g,'').slice(0,3).toUpperCase()||'—'; }
 function cphInitials(n){ return (n||'?').trim().split(/\s+/).map(x=>x[0]).slice(0,2).join('').toUpperCase()||'?'; }
-function cphOverall(a){ return a? Math.max(40,Math.min(99,Math.round((a-2)/8*59+40))):null; }
+function cphOverall(a){ return a? Math.max(1,Math.min(100,Math.round(a*10))):null; }
 function coachMediaCSS(){
   if(document.getElementById('coach-media-css'))return;
   const st=document.createElement('style'); st.id='coach-media-css';
@@ -2119,7 +2122,176 @@ function confirmCoachPhoto(){
   c.getContext('2d').drawImage(img,(-st.tx)/s,(-st.ty)/s,Fw/s,Fh/s,0,0,Tw,Th);
   onConfirm(c.toDataURL('image/jpeg',0.78));
 }
+/* =========================================================
+   CARD A TIER + OFFICINA (studio layout)
+   5 frame (cards/<tier>.png), overall stile FIFA (voto ×10).
+   Layout posizionabile dall'officina → salvato in DB.settings.cardLayouts
+   e/o incollato nel deploy come DEPLOY_CARD_LAYOUTS (export JSON).
+   ========================================================= */
+const TIER_ORDER=['goat','mythic','diamond','gold','silver'];
+const TIER_LABEL={goat:'GOAT',mythic:'MYTHIC',diamond:'DIAMOND',gold:'GOLD',silver:'SILVER'};
+const CARD_ELEMENTS=[['photo','Foto'],['overall','Overall'],['name','Nome'],['number','Numero'],['role','Ruolo'],['tierName','Nome tier']];
+/* layout base (percentuali). Gem lo rifinisce per tier dall'officina. */
+const BASE_CARD_LAYOUT={
+  photo:{show:1,x:50,y:42,w:66,h:48},
+  overall:{show:1,x:22,y:15,size:12,color:'#ffffff',align:'center'},
+  role:{show:1,x:22,y:24,size:4.6,color:'#ffffff',align:'center'},
+  number:{show:1,x:78,y:15,size:9,color:'#ffffff',align:'center'},
+  name:{show:1,x:50,y:72,size:7.4,color:'#ffffff',align:'center'},
+  tierName:{show:0,x:50,y:90,size:4,color:'#ffffff',align:'center'}
+};
+/* Incolla qui il JSON esportato dall'officina per renderlo ufficiale per tutti. */
+const DEPLOY_CARD_LAYOUTS={};
+function deepMerge(base,over){ const o=JSON.parse(JSON.stringify(base)); if(over) Object.keys(over).forEach(k=>{ o[k]=(typeof over[k]==='object'&&!Array.isArray(over[k]))?deepMerge(o[k]||{},over[k]):over[k]; }); return o; }
+function getCardLayout(tier){
+  let l=deepMerge(BASE_CARD_LAYOUT, DEPLOY_CARD_LAYOUTS[tier]);
+  const dev=((DB.settings||{}).cardLayouts||{})[tier];
+  if(CARD_STUDIO && CARD_STUDIO.tier===tier) return deepMerge(l, CARD_STUDIO.draft); // anteprima live officina
+  return deepMerge(l, dev);
+}
+/* assegnazione tier per ranking (voto medio); Silver ≥ Gold nei dispari */
+function playerTierMap(){
+  const ranked=activePlayers().map(p=>({id:p.id,v:getSeasonStats(p.id).avgVoto}))
+    .sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const n=ranked.length, map={};
+  ranked.forEach((r,i)=>{
+    let tier;
+    if(i===0)tier='goat'; else if(i===1)tier='mythic'; else if(i===2)tier='diamond';
+    else { const rest=n-3, gold=Math.floor(rest/2); tier=(i-3)<gold?'gold':'silver'; }
+    map[r.id]=tier;
+  });
+  return map;
+}
+function playerTier(id){ return playerTierMap()[id]||'silver'; }
+const CARD_SILHOUETTE="data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 130"><g fill="rgba(255,255,255,.22)"><circle cx="50" cy="42" r="24"/><path d="M12 130c0-24 17-42 38-42s38 18 38 42z"/></g></svg>');
+/* Render di una card a tier. width in px (default 300). */
+function renderTierCard(id, width){
+  width=width||300; const H=width*1.4;
+  const p=playerById(id); if(!p) return '';
+  const tier=(CARD_STUDIO&&CARD_STUDIO.forceId===id)?CARD_STUDIO.tier:playerTier(id);
+  const L=getCardLayout(tier);
+  const s=getSeasonStats(id); const ovr=cphOverall(s.avgVoto);
+  const photoSrc=(typeof COACH_PHOTOS!=='undefined'&&COACH_PHOTOS[id])?COACH_PHOTOS[id]:CARD_SILHOUETTE;
+  const alignT=a=>a==='left'?'0':a==='right'?'-100%':'-50%';
+  const txt=(key,val)=>{ const e=L[key]; if(!e||!e.show||val==null||val==='')return '';
+    return `<div class="tc-el" style="left:${e.x}%;top:${e.y}%;transform:translate(${alignT(e.align)},-50%);font-size:${(e.size/100*width).toFixed(1)}px;color:${e.color};text-align:${e.align}">${val}</div>`; };
+  const ph=L.photo; const photoEl = ph&&ph.show ? `<div class="tc-photo" style="left:${ph.x}%;top:${ph.y}%;width:${ph.w}%;height:${(ph.h/100*H/width*100).toFixed(2)}%"><img src="${photoSrc}"></div>`:'';
+  return `<div class="tiercard tier-${tier}" style="width:${width}px;height:${H}px;background-image:url('cards/${tier}.png')">
+    ${photoEl}
+    ${txt('overall',ovr!=null?ovr:'—')}
+    ${txt('role',cphAbbr(p.role))}
+    ${txt('number','#'+(p.number||''))}
+    ${txt('name',(p.name||'').toUpperCase())}
+    ${txt('tierName',TIER_LABEL[tier])}
+  </div>`;
+}
+/* ---- OFFICINA CARD (studio) ---- */
+let CARD_STUDIO=null;
+function openCardStudio(){
+  cardStudioCSS();
+  const sample=activePlayers()[0]||DB.players[0];
+  CARD_STUDIO={tier:'goat', el:'photo', draft:{}, forceId:sample?sample.id:null};
+  // carica nel draft il layout attuale (device o base) del tier iniziale
+  cardStudioLoadDraft();
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Officina card</h3>
+      <button class="icon-btn" onclick="closeCardStudio()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="cs-wrap">
+      <div class="cs-preview" id="cs-preview"></div>
+      <div class="cs-ctrl">
+        <label class="cs-lb">Tier</label><div class="cs-chips" id="cs-tiers"></div>
+        <label class="cs-lb">Elemento</label><div class="cs-chips" id="cs-els"></div>
+        <div id="cs-props"></div>
+        <div class="cs-actions">
+          <button class="btn btn-ghost" onclick="cardStudioResetTier()"><i class="fa-solid fa-rotate-left"></i> Reset tier</button>
+          <button class="btn btn-ghost" onclick="cardStudioExport()"><i class="fa-solid fa-file-export"></i> Esporta JSON</button>
+          <button class="btn btn-accent" onclick="cardStudioSave()"><i class="fa-solid fa-floppy-disk"></i> Salva</button>
+        </div>
+        <p class="cs-hint">Salva = applica su questo dispositivo. Esporta JSON = per renderlo ufficiale nel deploy (te lo spiego lì).</p>
+      </div>
+    </div>`, true);
+  renderCardStudio();
+}
+function closeCardStudio(){ CARD_STUDIO=null; closeModal(); }
+function cardStudioLoadDraft(){ // draft = layout corrente del tier (device merge), da editare
+  const dev=((DB.settings||{}).cardLayouts||{})[CARD_STUDIO.tier];
+  CARD_STUDIO.draft=deepMerge(deepMerge(BASE_CARD_LAYOUT,DEPLOY_CARD_LAYOUTS[CARD_STUDIO.tier]), dev);
+}
+function renderCardStudio(){
+  const t=document.getElementById('cs-tiers'); if(t) t.innerHTML=TIER_ORDER.map(tr=>`<button class="cs-chip${CARD_STUDIO.tier===tr?' on':''}" onclick="cardStudioTier('${tr}')">${TIER_LABEL[tr]}</button>`).join('');
+  const e=document.getElementById('cs-els'); if(e) e.innerHTML=CARD_ELEMENTS.map(([k,lb])=>`<button class="cs-chip${CARD_STUDIO.el===k?' on':''}" onclick="cardStudioEl('${k}')">${lb}</button>`).join('');
+  renderCardStudioProps();
+  renderCardStudioPreview();
+}
+function renderCardStudioPreview(){ const box=document.getElementById('cs-preview'); if(box) box.innerHTML=renderTierCard(CARD_STUDIO.forceId, 260); }
+function renderCardStudioProps(){
+  const box=document.getElementById('cs-props'); if(!box) return;
+  const el=CARD_STUDIO.draft[CARD_STUDIO.el]; if(!el){ box.innerHTML=''; return; }
+  const row=(lb,key,min,max,step)=>`<div class="cs-row"><span>${lb}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${el[key]}" oninput="cardStudioSet('${key}',this.value)"><span class="cs-v">${(+el[key]).toFixed(key==='color'?0:1)}</span></div>`;
+  let h=`<label class="cs-toggle"><input type="checkbox" ${el.show?'checked':''} onchange="cardStudioSet('show',this.checked?1:0)"> Mostra elemento</label>`;
+  if(CARD_STUDIO.el==='photo'){
+    h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Larghezza','w',10,100,0.5)+row('Altezza','h',10,100,0.5);
+  } else {
+    h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Dimensione','size',2,20,0.2)
+      +`<div class="cs-row"><span>Allineamento</span><select onchange="cardStudioSet('align',this.value)">${['left','center','right'].map(a=>`<option value="${a}" ${el.align===a?'selected':''}>${a}</option>`).join('')}</select><span></span></div>`
+      +`<div class="cs-row"><span>Colore</span><input type="color" value="${el.color}" oninput="cardStudioSet('color',this.value)"><span></span></div>`;
+  }
+  box.innerHTML=h;
+}
+function cardStudioTier(tr){ CARD_STUDIO.tier=tr; cardStudioLoadDraft(); renderCardStudio(); }
+function cardStudioEl(k){ CARD_STUDIO.el=k; renderCardStudioProps(); }
+function cardStudioSet(key,val){ const el=CARD_STUDIO.draft[CARD_STUDIO.el]; if(!el)return; el[key]=(key==='color'||key==='align')?val:(key==='show'?val:parseFloat(val)); if(key==='show')el[key]=val; renderCardStudioProps(); renderCardStudioPreview(); }
+function cardStudioResetTier(){ CARD_STUDIO.draft=deepMerge(BASE_CARD_LAYOUT,DEPLOY_CARD_LAYOUTS[CARD_STUDIO.tier]); renderCardStudio(); }
+function cardStudioSave(){ DB.settings=DB.settings||{}; DB.settings.cardLayouts=DB.settings.cardLayouts||{}; DB.settings.cardLayouts[CARD_STUDIO.tier]=JSON.parse(JSON.stringify(CARD_STUDIO.draft)); save(); toast('Layout '+TIER_LABEL[CARD_STUDIO.tier]+' salvato'); }
+function cardStudioExport(){
+  // salva prima il tier corrente nel device, poi esporta TUTTI i layout salvati
+  cardStudioSave();
+  const all=JSON.parse(JSON.stringify((DB.settings||{}).cardLayouts||{}));
+  const json=JSON.stringify(all,null,2);
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-export" style="color:var(--brand)"></i> Layout card · JSON</h3>
+      <button class="icon-btn" onclick="openCardStudio()"><i class="fa-solid fa-arrow-left"></i></button></div>
+    <div style="padding:4px 2px">
+      <p style="color:var(--muted);font-size:.88rem">Per rendere questo layout ufficiale per <b>tutti</b>: copia il testo qui sotto e incollalo nel deploy dentro <code>const DEPLOY_CARD_LAYOUTS = …</code> (in app.js del coach e del player). Poi bumpa la versione del <code>sw.js</code>. Sul tuo dispositivo è già attivo col Salva.</p>
+      <textarea readonly onclick="this.select()" style="width:100%;height:230px;border-radius:12px;padding:12px;background:var(--surface,rgba(0,0,0,.25));color:inherit;border:1px solid var(--border,rgba(255,255,255,.18));font-family:monospace;font-size:.8rem">${json.replace(/</g,'&lt;')}</textarea>
+      <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="navigator.clipboard&&navigator.clipboard.writeText(this.previousElementSibling.value);toast('Copiato negli appunti')"><i class="fa-solid fa-copy"></i> Copia negli appunti</button>
+    </div>`, true);
+}
+function cardStudioCSS(){
+  if(document.getElementById('card-studio-css')) return;
+  const st=document.createElement('style'); st.id='card-studio-css';
+  st.textContent=`
+  .tiercard{position:relative;background-size:contain;background-repeat:no-repeat;background-position:center;border-radius:12px;font-family:'Outfit',sans-serif;font-weight:900;flex:0 0 auto;}
+  .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .tiercard .tc-photo img{width:100%;height:100%;object-fit:contain;object-position:bottom;}
+  .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;}
+  .cs-wrap{display:grid;grid-template-columns:260px 1fr;gap:18px;align-items:start;}
+  .cs-preview{display:flex;justify-content:center;padding:6px;background:repeating-conic-gradient(#0000 0% 25%,rgba(255,255,255,.04) 0% 50%) 0/22px 22px;border-radius:14px;position:sticky;top:10px;}
+  .cs-lb{display:block;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:.6rem 0 .35rem;}
+  .cs-chips{display:flex;flex-wrap:wrap;gap:6px;}
+  .cs-chip{border:1px solid var(--border,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:9px;padding:5px 10px;font-size:.78rem;font-weight:700;cursor:pointer;}
+  .cs-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}
+  .cs-toggle{display:flex;align-items:center;gap:8px;font-size:.85rem;margin:.8rem 0 .4rem;}
+  .cs-row{display:grid;grid-template-columns:92px 1fr 42px;align-items:center;gap:8px;margin:.3rem 0;font-size:.8rem;}
+  .cs-row input[type=range]{width:100%;} .cs-row input[type=color]{width:44px;height:28px;border:none;background:none;} .cs-row select{padding:5px;border-radius:8px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--border,rgba(255,255,255,.18));}
+  .cs-v{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .cs-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:1rem;} .cs-hint{font-size:.74rem;color:var(--muted);margin-top:.6rem;}
+  @media(max-width:760px){.cs-wrap{grid-template-columns:1fr;}.cs-preview{position:static;}}
+  `;
+  document.head.appendChild(st);
+}
+
 function openPlayerCard(id){
+  coachMediaCSS(); cardStudioCSS();
+  const p=playerById(id), s=getSeasonStats(id), sport=curSport();
+  const tier=playerTier(id);
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${p.name} <span class="pill" style="margin-left:6px">${TIER_LABEL[tier]}</span></h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body fc-wrap">
+      ${renderTierCard(id, 300)}
+      <button class="btn btn-accent" style="width:100%;margin-top:16px" onclick="pickPhotoCoach(${id})"><i class="fa-solid fa-camera"></i> ${COACH_PHOTOS[id]?'Cambia foto':'Aggiungi foto'}</button>
+      ${COACH_PHOTOS[id]?`<button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="removePhotoCoach(${id})"><i class="fa-solid fa-trash"></i> Rimuovi foto</button>`:''}
+    </div>`, true);
+}
+function _openPlayerCardOld(id){
   coachMediaCSS();
   const p=playerById(id), s=getSeasonStats(id), sport=curSport();
   const ovr=cphOverall(s.avgVoto);
