@@ -597,10 +597,21 @@ function buildLayout(){
             </div></form>
         </div>
         <div class="card">
-            <h3><i class="fa-solid fa-list-check"></i> Prossimi e passati</h3>
-            <div class="table-wrap"><table>
-                <thead><tr><th>Tipo</th><th>Data</th><th style="text-align:left">Dettagli</th><th>Risultato</th><th>Azioni</th></tr></thead>
-                <tbody id="cal-body"></tbody></table></div>
+            <div class="cal-top">
+                <button class="cal-nav" onclick="calShift(-1)" aria-label="Mese precedente"><i class="fa-solid fa-chevron-left"></i></button>
+                <h3 id="cal-title" style="margin:0;text-align:center;flex:1"></h3>
+                <button class="cal-nav" onclick="calShift(1)" aria-label="Mese successivo"><i class="fa-solid fa-chevron-right"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="calToday()">Oggi</button>
+            </div>
+            <div class="cal-legend">
+                <span><i class="cal-dot cal-dot-match"></i> Partita</span>
+                <span><i class="cal-dot cal-dot-train"></i> Allenamento</span>
+            </div>
+            <div class="cal-grid" id="cal-grid"></div>
+        </div>
+        <div class="card">
+            <h3 id="cal-day-title"><i class="fa-solid fa-calendar-day"></i> Eventi del giorno</h3>
+            <div id="cal-day"></div>
         </div>
     </section>
 
@@ -993,35 +1004,102 @@ function openPlayer(id){
 /* =========================================================
    CALENDARIO
    ========================================================= */
-function renderCalendar(){
-    const body=document.getElementById('cal-body');
-    if(!DB.events.length){body.innerHTML=`<tr class="empty-row"><td colspan="5">Agenda vuota. Aggiungi un evento.</td></tr>`;return;}
-    body.innerHTML='';
-    const t=today();
-    DB.events.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(ev=>{
-        const isMatch=ev.type==='Partita', past=new Date(ev.date)<t;
-        let res='—';
-        if(isMatch){
-            if(ev.result){const win=ev.result.w>ev.result.l;res=`<span class="pill ${win?'win':'loss'}">${ev.result.w}-${ev.result.l}</span>`;}
-            else res=`<button class="btn btn-ghost btn-sm" onclick="editResult(${ev.id})">Aggiungi</button>`;
-        }
-        const tr=document.createElement('tr');
-        tr.innerHTML=`
-            <td><span class="pill ${isMatch?'match':'train'}">${ev.type}</span></td>
-            <td class="num"${past?' style="color:var(--muted-2)"':''}>${fmtDate(ev.date)}</td>
-            <td style="text-align:left;font-weight:600">${ev.notes}</td>
-            <td>${res}</td>
-            <td><div class="row-actions">
-                ${isMatch?`<button class="btn btn-ghost btn-icon" onclick="editResult(${ev.id})" title="Risultato"><i class="fa-solid fa-pen"></i></button>`:''}
-                <button class="btn btn-danger btn-icon" onclick="removeEvent(${ev.id})"><i class="fa-solid fa-trash-can"></i></button></div></td>`;
-        body.appendChild(tr);
-    });
+function calendarCSS(){
+  if(document.getElementById('calendar-css')) return;
+  const st=document.createElement('style'); st.id='calendar-css';
+  st.textContent=`
+  .cal-top{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .cal-nav{width:36px;height:36px;border-radius:10px;border:1px solid var(--line,rgba(255,255,255,.14));background:transparent;color:inherit;cursor:pointer;}
+  .cal-nav:hover{background:rgba(255,255,255,.06);}
+  .cal-legend{display:flex;gap:16px;font-size:.8rem;color:var(--muted);margin-bottom:12px;}
+  .cal-dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;}
+  .cal-dot-match{background:var(--flame,#F97316);} .cal-dot-train{background:var(--brand,#22C55E);}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;}
+  .cal-wd{text-align:center;font-size:.7rem;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding-bottom:4px;}
+  .cal-cell{min-height:56px;border-radius:10px;border:1px solid var(--line,rgba(255,255,255,.08));background:var(--surface-2,rgba(255,255,255,.02));padding:5px 6px;cursor:pointer;display:flex;flex-direction:column;gap:3px;transition:border-color .15s,background .15s;}
+  .cal-cell:hover{border-color:var(--brand);}
+  .cal-cell.out{opacity:.32;}
+  .cal-cell.today{box-shadow:inset 0 0 0 1.5px var(--brand);}
+  .cal-cell.sel{background:color-mix(in srgb,var(--brand) 18%,transparent);border-color:var(--brand);}
+  .cal-cell.has .cal-d{font-weight:800;}
+  .cal-d{font-size:.82rem;font-variant-numeric:tabular-nums;}
+  .cal-dots{display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-top:auto;}
+  .cal-more{font-size:.62rem;color:var(--muted);font-weight:700;}
+  .cal-empty{color:var(--muted-2,var(--muted));font-style:italic;font-size:.9rem;}
+  .cal-ev{padding:12px 0;border-bottom:1px solid var(--line,rgba(255,255,255,.08));}
+  .cal-ev:last-child{border-bottom:none;}
+  .cal-ev-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+  .cal-ev-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  @media(max-width:560px){.cal-cell{min-height:48px;padding:4px;}.cal-d{font-size:.75rem;}}
+  `;
+  document.head.appendChild(st);
 }
+let CAL_Y=null, CAL_M=null, CAL_SEL=null;
+const MONTHS_IT=['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
+const WD_IT=['Lun','Mar','Mer','Gio','Ven','Sab','Dom'];
+function isoOf(y,m,d){ return `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`; }
+function eventsOn(iso){ return DB.events.filter(e=>e.date===iso); }
+function renderCalendar(){
+    calendarCSS();
+    const grid=document.getElementById('cal-grid'); if(!grid) return;
+    const t=today();
+    if(CAL_Y===null){ CAL_Y=t.getFullYear(); CAL_M=t.getMonth(); }
+    if(!CAL_SEL){ CAL_SEL=isoOf(t.getFullYear(),t.getMonth(),t.getDate()); }
+    const title=document.getElementById('cal-title'); if(title) title.textContent=`${MONTHS_IT[CAL_M]} ${CAL_Y}`;
+    const first=new Date(CAL_Y,CAL_M,1);
+    const startWd=(first.getDay()+6)%7;                 // lunedì = 0
+    const daysInMonth=new Date(CAL_Y,CAL_M+1,0).getDate();
+    const prevDays=new Date(CAL_Y,CAL_M,0).getDate();
+    const todayIso=isoOf(t.getFullYear(),t.getMonth(),t.getDate());
+    let html=WD_IT.map(w=>`<div class="cal-wd">${w}</div>`).join('');
+    for(let i=0;i<42;i++){
+        let dayNum,y=CAL_Y,m=CAL_M,out=false;
+        if(i<startWd){ dayNum=prevDays-startWd+1+i; m=CAL_M-1; out=true; if(m<0){m=11;y--;} }
+        else if(i>=startWd+daysInMonth){ dayNum=i-(startWd+daysInMonth)+1; m=CAL_M+1; out=true; if(m>11){m=0;y++;} }
+        else { dayNum=i-startWd+1; }
+        const iso=isoOf(y,m,dayNum), evs=eventsOn(iso);
+        const dots=evs.slice(0,4).map(e=>`<i class="cal-dot ${e.type==='Partita'?'cal-dot-match':'cal-dot-train'}"></i>`).join('');
+        const cls=['cal-cell']; if(out)cls.push('out'); if(iso===todayIso)cls.push('today'); if(iso===CAL_SEL)cls.push('sel'); if(evs.length)cls.push('has');
+        html+=`<div class="${cls.join(' ')}" onclick="calSelect('${iso}')"><span class="cal-d">${dayNum}</span><div class="cal-dots">${dots}${evs.length>4?`<span class="cal-more">+${evs.length-4}</span>`:''}</div></div>`;
+    }
+    grid.innerHTML=html;
+    renderCalDay();
+}
+function calSelect(iso){ CAL_SEL=iso; const d=new Date(iso); if(d.getMonth()!==CAL_M||d.getFullYear()!==CAL_Y){ CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); } renderCalendar(); }
+function calShift(delta){ CAL_M+=delta; if(CAL_M<0){CAL_M=11;CAL_Y--;} if(CAL_M>11){CAL_M=0;CAL_Y++;} renderCalendar(); }
+function calToday(){ const t=today(); CAL_Y=t.getFullYear(); CAL_M=t.getMonth(); CAL_SEL=isoOf(t.getFullYear(),t.getMonth(),t.getDate()); renderCalendar(); }
+function renderCalDay(){
+    const box=document.getElementById('cal-day'); if(!box) return;
+    const title=document.getElementById('cal-day-title'); if(title) title.innerHTML=`<i class="fa-solid fa-calendar-day"></i> ${fmtDateLong(CAL_SEL)}`;
+    const evs=eventsOn(CAL_SEL).slice().sort((a,b)=>a.type.localeCompare(b.type));
+    if(!evs.length){ box.innerHTML=`<p class="cal-empty">Nessun evento in questo giorno. Aggiungine uno qui sopra, o tocca un altro giorno del calendario.</p>`; return; }
+    box.innerHTML=evs.map(ev=>{
+        const isMatch=ev.type==='Partita';
+        let res='';
+        if(isMatch) res = ev.result?`<span class="pill ${ev.result.w>ev.result.l?'win':'loss'}">${ev.result.w}-${ev.result.l}</span>`:`<span class="pill" style="opacity:.6">da giocare</span>`;
+        const actions = isMatch
+          ? `<button class="btn btn-accent btn-sm" onclick="calOpenScout(${ev.id})"><i class="fa-solid fa-clipboard-list"></i> Scout</button>
+             <button class="btn btn-ghost btn-sm" onclick="editResult(${ev.id})"><i class="fa-solid fa-pen"></i> Risultato</button>`
+          : `<button class="btn btn-accent btn-sm" onclick="calOpenTraining(${ev.id})"><i class="fa-solid fa-dumbbell"></i> Allenamento</button>
+             <button class="btn btn-ghost btn-sm" onclick="calOpenAttendance(${ev.id})"><i class="fa-solid fa-clipboard-user"></i> Presenze</button>`;
+        return `<div class="cal-ev">
+            <div class="cal-ev-head"><span class="pill ${isMatch?'match':'train'}">${ev.type}</span> <b>${ev.notes||''}</b> ${res}</div>
+            <div class="cal-ev-actions">${actions}
+                <button class="btn btn-danger btn-icon btn-sm" onclick="removeEvent(${ev.id})" title="Elimina"><i class="fa-solid fa-trash-can"></i></button></div>
+        </div>`;
+    }).join('');
+}
+function calOpenScout(id){ go('scout'); const s=document.getElementById('scout-select'); if(s){ s.value=id; setupScout(); } }
+function calOpenTraining(id){ go('allenamenti'); const s=document.getElementById('tr-select'); if(s){ s.value=id; renderTraining(); } }
+function calOpenAttendance(id){ go('presenze'); const s=document.getElementById('att-select'); if(s){ s.value=id; renderAttendance(); } }
 function addEvent(e){
     e.preventDefault();
-    DB.events.push({id:uid(),type:document.getElementById('e-type').value,date:document.getElementById('e-date').value,
+    const date=document.getElementById('e-date').value;
+    DB.events.push({id:uid(),type:document.getElementById('e-type').value,date,
         notes:document.getElementById('e-notes').value.trim(),result:null});
-    save();e.target.reset();renderCalendar();toast('Evento aggiunto');
+    save();e.target.reset();
+    const d=new Date(date); if(!isNaN(d.getTime())){ CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); CAL_SEL=date; }
+    renderCalendar();toast('Evento aggiunto');
 }
 function removeEvent(id){
     confirmAction('Eliminare questo evento dal calendario?',()=>{DB.events=DB.events.filter(e=>e.id!==id);save();renderCalendar();toast('Evento rimosso','info');});
