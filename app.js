@@ -2130,6 +2130,7 @@ function coachMediaCSS(){
   if(document.getElementById('coach-media-css'))return;
   const st=document.createElement('style'); st.id='coach-media-css';
   st.textContent=`
+  .rp-checker{background:conic-gradient(#3a3f47 25%,#262a30 0 50%,#3a3f47 0 75%,#262a30 0) 0 0/22px 22px;}
   #cph-av{overflow:visible!important;position:relative;cursor:pointer;}
   #cph-av .cph-im{width:100%;height:100%;border-radius:50%;overflow:hidden;display:flex;align-items:center;justify-content:center;}
   #cph-av .cph-im img{width:100%;height:100%;object-fit:cover;}
@@ -2160,7 +2161,7 @@ function pickPhotoCoach(id){
     const rd=new FileReader(); rd.onload=()=>{ const im=new Image(); im.onload=()=>{
       const MAX=1000, r=Math.min(MAX/im.width,MAX/im.height,1), w=Math.round(im.width*r), h=Math.round(im.height*r);
       const cv=document.createElement('canvas'); cv.width=w; cv.height=h; cv.getContext('2d').drawImage(im,0,0,w,h);
-      repositionCoach(cv.toDataURL('image/jpeg',0.85), async data=>{ await cIdbSet('p'+id,data); COACH_PHOTOS[id]=data; closeModal(); openPlayerCard(id); toast('Foto aggiornata'); });
+      repositionCoach(cv.toDataURL('image/png'), async data=>{ await cIdbSet('p'+id,data); COACH_PHOTOS[id]=data; closeModal(); openPlayerCard(id); toast('Foto aggiornata'); });
     }; im.src=rd.result; };
     rd.readAsDataURL(f);
   };
@@ -2172,11 +2173,13 @@ function repositionCoach(srcDataURL, onConfirm){
   openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crop-simple" style="color:var(--brand)"></i> Posiziona la foto</h3>
       <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body" style="text-align:center">
-      <div id="rp-frame" style="width:${Fw}px;height:${Fh}px;margin:0 auto;border-radius:16px;overflow:hidden;position:relative;background:#000;touch-action:none;border:2px solid var(--brand)">
+      <div id="rp-frame" class="rp-checker" style="width:${Fw}px;height:${Fh}px;margin:0 auto;border-radius:16px;overflow:hidden;position:relative;touch-action:none;border:2px solid var(--brand)">
         <img id="rp-img" src="${srcDataURL}" style="position:absolute;left:0;top:0;transform-origin:0 0;user-select:none;pointer-events:none;max-width:none"></div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:14px"><i class="fa-solid fa-magnifying-glass-minus" style="color:var(--muted)"></i>
         <input id="rp-zoom" type="range" min="100" max="300" value="100" style="flex:1"><i class="fa-solid fa-magnifying-glass-plus" style="color:var(--muted)"></i></div>
-      <p style="color:var(--muted);font-size:.78rem;margin-top:6px">Trascina per spostare, usa lo slider per lo zoom.</p>
+      <label class="cs-toggle" style="justify-content:center;margin-top:12px"><input type="checkbox" onchange="rpcToggleBg(this.checked)"> <i class="fa-solid fa-wand-magic-sparkles" style="color:var(--brand)"></i> Rimuovi sfondo</label>
+      <div id="rp-tolrow" style="display:none;align-items:center;gap:10px;margin-top:4px"><span style="font-size:.75rem;color:var(--muted)">Intensità</span><input id="rp-tol" type="range" min="25" max="150" value="72" style="flex:1" oninput="rpcTol(this.value)"></div>
+      <p style="color:var(--muted);font-size:.78rem;margin-top:6px">Trascina per spostare, slider per lo zoom. Se la foto ha già lo sfondo trasparente, lasciala così.</p>
       <button class="btn btn-accent" style="width:100%;margin-top:12px" onclick="confirmCoachPhoto()"><i class="fa-solid fa-check"></i> Conferma</button>
     </div>`, true);
   const frame=document.getElementById('rp-frame'), img=document.getElementById('rp-img');
@@ -2185,21 +2188,39 @@ function repositionCoach(srcDataURL, onConfirm){
   const clamp=()=>{ st.tx=Math.min(0,Math.max(Fw-dW(),st.tx)); st.ty=Math.min(0,Math.max(Fh-dH(),st.ty)); };
   const apply=()=>{ img.style.transform=`translate(${st.tx}px,${st.ty}px) scale(${st.cover*st.zoom})`; };
   const init=()=>{ st.imgW=img.naturalWidth; st.imgH=img.naturalHeight; st.cover=Math.max(Fw/st.imgW,Fh/st.imgH); st.zoom=1; st.tx=(Fw-dW())/2; st.ty=(Fh-dH())/2; clamp(); apply(); };
-  img.onload=init; if(img.complete && img.naturalWidth) init();
+  let firstInit=true;
+  img.onload=()=>{ if(firstInit){ init(); firstInit=false; } else { clamp(); apply(); } };
+  if(img.complete && img.naturalWidth){ init(); firstInit=false; }
   document.getElementById('rp-zoom').oninput=e=>{ const z=e.target.value/100, cx=Fw/2-st.tx, cy=Fh/2-st.ty, ratio=z/st.zoom; st.zoom=z; st.tx=Fw/2-cx*ratio; st.ty=Fh/2-cy*ratio; clamp(); apply(); };
   let px,py,drag=false;
   frame.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY;try{frame.setPointerCapture(e.pointerId);}catch(_){}});
   frame.addEventListener('pointermove',e=>{ if(!drag)return; st.tx+=e.clientX-px; st.ty+=e.clientY-py; px=e.clientX; py=e.clientY; clamp(); apply(); });
   frame.addEventListener('pointerup',()=>drag=false); frame.addEventListener('pointercancel',()=>drag=false);
-  window.__rpc={st,Fw,Fh,img,onConfirm};
+  window.__rpc={st,Fw,Fh,img,onConfirm,original:srcDataURL,bg:false,tol:72};
 }
+function rpcRefreshBg(){ const R=window.__rpc; if(!R)return; if(R.bg){ chromaKeyDataURL(R.original,R.tol).then(u=>{R.img.src=u;}); } else { R.img.src=R.original; } }
+function rpcToggleBg(on){ const R=window.__rpc; if(!R)return; R.bg=on; const row=document.getElementById('rp-tolrow'); if(row) row.style.display=on?'flex':'none'; rpcRefreshBg(); }
+function rpcTol(v){ const R=window.__rpc; if(!R)return; R.tol=+v; if(R.bg) rpcRefreshBg(); }
 function confirmCoachPhoto(){
   const R=window.__rpc; if(!R){closeModal();return;}
   const {st,Fw,Fh,img,onConfirm}=R, Tw=480,Th=640, s=st.cover*st.zoom;
   const c=document.createElement('canvas'); c.width=Tw; c.height=Th;
   c.getContext('2d').drawImage(img,(-st.tx)/s,(-st.ty)/s,Fw/s,Fh/s,0,0,Tw,Th);
-  onConfirm(c.toDataURL('image/jpeg',0.78));
+  onConfirm(c.toDataURL('image/png'));
 }
+/* rimozione sfondo (chroma-key sui 4 angoli) — leggero, offline, per sfondi uniformi */
+function chromaApply(p,w,h,tol){
+  const corners=[[0,0],[w-1,0],[0,h-1],[w-1,h-1]];
+  let br=0,bg=0,bb=0; corners.forEach(([x,y])=>{const i=(y*w+x)*4; br+=p[i];bg+=p[i+1];bb+=p[i+2];}); br/=4;bg/=4;bb/=4;
+  const T=tol*tol;
+  for(let i=0;i<p.length;i+=4){ const dr=p[i]-br,dg=p[i+1]-bg,db=p[i+2]-bb, dist=dr*dr+dg*dg+db*db;
+    if(dist<T) p[i+3]=0; else if(dist<T*2.2) p[i+3]=Math.round(p[i+3]*Math.min(1,(dist-T)/(T*1.2))); }
+  return p;
+}
+function chromaKeyDataURL(srcDataURL,tol){ return new Promise(res=>{ const im=new Image(); im.onload=()=>{
+  const c=document.createElement('canvas'); c.width=im.naturalWidth||im.width; c.height=im.naturalHeight||im.height;
+  const ctx=c.getContext('2d'); ctx.drawImage(im,0,0); const d=ctx.getImageData(0,0,c.width,c.height);
+  chromaApply(d.data,c.width,c.height,tol); ctx.putImageData(d,0,0); res(c.toDataURL('image/png')); }; im.src=srcDataURL; }); }
 /* =========================================================
    CARD A TIER + OFFICINA (studio layout)
    5 frame (cards/<tier>.png), overall stile FIFA (voto ×10).
