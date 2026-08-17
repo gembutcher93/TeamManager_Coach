@@ -1943,6 +1943,11 @@ function rememberCustomExercise(sport,name,cat){
   const cs=DB.settings.customExercises; cs[sport]=cs[sport]||{}; cs[sport][cat]=cs[sport][cat]||[];
   if(!cs[sport][cat].some(n=>n.toLowerCase()===name.toLowerCase())) cs[sport][cat].push(name);
 }
+function exerciseKnown(sport,name,cat){
+  const lib=EXERCISE_LIB[sport]||{}, custom=((DB.settings||{}).customExercises||{})[sport]||{};
+  const has=arr=>(arr||[]).some(n=>n.toLowerCase()===name.toLowerCase());
+  return has(lib[cat])||has(custom[cat]);
+}
 /* --- Modale libreria esercizi --- */
 let EXLIB_FILTER={cat:'',q:''};
 function openExLibrary(){
@@ -1954,9 +1959,29 @@ function openExLibrary(){
       <input class="exlib-search" id="exlib-q" placeholder="Cerca un esercizio…" oninput="exLibSet('q',this.value)">
       <div class="exlib-cats" id="exlib-cats"></div>
       <div class="exlib-list" id="exlib-list"></div>
-      <p class="exlib-hint">Tocca <b>+</b> per aggiungere l'esercizio alla seduta. Puoi aggiungerne più di uno.</p>
+      <div class="exlib-new">
+        <p class="exlib-hint" style="margin-bottom:6px">Non c'è l'esercizio che ti serve? Crealo e resterà nella tua libreria.</p>
+        <input class="exlib-search" id="exlib-newname" placeholder="Es. Attacco primo tempo per centrali…">
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <select class="exlib-search" id="exlib-newcat" style="flex:1"></select>
+          <button class="btn btn-accent" style="flex:0 0 auto;white-space:nowrap" onclick="createLibExercise()"><i class="fa-solid fa-plus"></i> Salva</button>
+        </div>
+      </div>
+      <p class="exlib-hint">Tocca <b>+</b> per aggiungere alla seduta. Gli esercizi che scrivi a mano nella seduta finiscono qui in automatico.</p>
     </div>`, true);
   renderExLibCats(); renderExLibList();
+  const nc=document.getElementById('exlib-newcat'); if(nc) nc.innerHTML=catsFor(curSport()).map(c=>`<option>${c}</option>`).join('');
+}
+function createLibExercise(){
+  const name=(document.getElementById('exlib-newname').value||'').trim();
+  const cat=document.getElementById('exlib-newcat').value;
+  if(!name){ toast('Scrivi il nome dell\'esercizio','info'); return; }
+  if(exerciseKnown(curSport(),name,cat)){ toast('Esercizio già in libreria','info'); return; }
+  rememberCustomExercise(curSport(),name,cat); save();
+  document.getElementById('exlib-newname').value='';
+  EXLIB_FILTER.cat=cat; EXLIB_FILTER.q=''; const qEl=document.getElementById('exlib-q'); if(qEl) qEl.value='';
+  renderExLibCats(); renderExLibList();
+  toast('Salvato in libreria: '+name);
 }
 function exLibSet(k,v){ EXLIB_FILTER[k]=v; if(k==='cat') renderExLibCats(); renderExLibList(); }
 function renderExLibCats(){
@@ -2003,7 +2028,8 @@ function exLibCSS(){
   .exlib-name{font-weight:600;font-size:.9rem;flex:1;} .exlib-custom{font-style:normal;font-size:.62rem;background:var(--brand);color:#04140a;border-radius:5px;padding:0 5px;vertical-align:middle;}
   .exlib-cat{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;}
   .exlib-add{flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:none;background:var(--brand);color:#04140a;font-weight:800;cursor:pointer;}
-  .exlib-hint{font-size:.76rem;color:var(--muted);margin:0;} .exlib-empty{color:var(--muted);font-style:italic;font-size:.86rem;}`;
+  .exlib-hint{font-size:.76rem;color:var(--muted);margin:0;} .exlib-empty{color:var(--muted);font-style:italic;font-size:.86rem;}
+  .exlib-new{border-top:1px solid var(--border,rgba(255,255,255,.12));padding-top:12px;margin-top:2px;}`;
   document.head.appendChild(st);
 }
 function currentTraining(){
@@ -2055,9 +2081,11 @@ function addExercise(e){
     const name=document.getElementById('ex-name').value.trim(); if(!name)return;
     const id=(c.tr.exercises.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
     const cat=document.getElementById('ex-cat').value;
+    const known=exerciseKnown(curSport(),name,cat);
     c.tr.exercises.push({id,name,cat});
     rememberCustomExercise(curSport(),name,cat);
-    save(); e.target.reset(); refreshExCats(); renderTraining(); toast('Esercizio aggiunto');
+    save(); e.target.reset(); refreshExCats(); renderTraining();
+    toast(known?'Esercizio aggiunto':'Aggiunto e salvato in libreria ✓');
 }
 function removeExercise(exId){
     const c=currentTraining(); if(!c)return;
@@ -2498,6 +2526,120 @@ const FORMATION = {
   calcio:    [['Portiere',1],['Difensore',4],['Centrocampista',3],['Attaccante',3]],
   basket:    [['Playmaker',1],['Guardia',1],['Ala piccola',1],['Ala grande',1],['Centro',1]]
 };
+/* ---- Formazione CALCIO visuale: moduli, campo, drag, panchina, sostituzioni ---- */
+/* slot: [ruolo, x(0-1 sx→dx), y(0 alto/attacco → 1 basso/porta propria)] */
+const SOCCER_MODULES={
+  '4-4-2':[['Portiere',.5,.93],['Difensore',.15,.73],['Difensore',.38,.76],['Difensore',.62,.76],['Difensore',.85,.73],['Centrocampista',.15,.48],['Centrocampista',.38,.5],['Centrocampista',.62,.5],['Centrocampista',.85,.48],['Attaccante',.38,.22],['Attaccante',.62,.22]],
+  '4-3-3':[['Portiere',.5,.93],['Difensore',.15,.73],['Difensore',.38,.76],['Difensore',.62,.76],['Difensore',.85,.73],['Centrocampista',.3,.52],['Centrocampista',.5,.56],['Centrocampista',.7,.52],['Attaccante',.2,.24],['Attaccante',.5,.2],['Attaccante',.8,.24]],
+  '3-5-2':[['Portiere',.5,.93],['Difensore',.28,.75],['Difensore',.5,.77],['Difensore',.72,.75],['Centrocampista',.1,.53],['Centrocampista',.33,.53],['Centrocampista',.5,.57],['Centrocampista',.67,.53],['Centrocampista',.9,.53],['Attaccante',.38,.24],['Attaccante',.62,.24]],
+  '4-2-3-1':[['Portiere',.5,.93],['Difensore',.15,.73],['Difensore',.38,.76],['Difensore',.62,.76],['Difensore',.85,.73],['Centrocampista',.35,.6],['Centrocampista',.65,.6],['Centrocampista',.22,.38],['Centrocampista',.5,.4],['Centrocampista',.78,.38],['Attaccante',.5,.2]]
+};
+function getLineupCalcio(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.calcio=DB.settings.lineup.calcio||{module:'4-3-3',pos:{},subs:{}}; const L=DB.settings.lineup.calcio; L.pos=L.pos||{}; L.subs=L.subs||{}; if(!L.module)L.module='4-3-3'; return L; }
+function soccerLineup(){
+  const L=getLineupCalcio(), mod=SOCCER_MODULES[L.module]||SOCCER_MODULES['4-3-3'];
+  const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
+  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const used=new Set(); Object.values(L.subs).forEach(pid=>{ if(pid!=null) used.add(pid); });
+  const pools={};
+  const slots=mod.map((s,i)=>{
+    const role=s[0]; let player=null;
+    if(L.subs[i]!=null){ const f=players.find(z=>z.p.id===L.subs[i]); player=f?f.p:null; }
+    else { pools[role]=pools[role]||byRole(role).filter(z=>!used.has(z.p.id)); const pick=pools[role].shift(); if(pick){ used.add(pick.p.id); player=pick.p; } }
+    const pos=L.pos[i]||[s[1],s[2]];
+    return {i,role,x:pos[0],y:pos[1],player};
+  });
+  const bench=players.filter(x=>!used.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v))).map(x=>({p:x.p,v:x.v}));
+  return {slots,bench,module:L.module};
+}
+function setLineupModule(key){ const L=getLineupCalcio(); L.module=key; L.pos={}; L.subs={}; save(); renderFormazione(); }
+function setLineupPos(i,x,y){ const L=getLineupCalcio(); L.pos[i]=[Math.max(0,Math.min(1,x)),Math.max(0,Math.min(1,y))]; save(); }
+function setLineupSub(i,pid){ const L=getLineupCalcio(); if(pid==null) delete L.subs[i]; else L.subs[i]=pid; save(); renderFormazione(); }
+function resetLineup(){ const L=getLineupCalcio(); L.pos={}; L.subs={}; save(); renderFormazione(); toast('Formazione ripristinata','info'); }
+function fmzBadge(v){ return v==null?'<span class="voto-badge nd">—</span>':`<span class="voto-badge ${v>=7?'hi':v>=5.5?'md':'lo'}">${v.toFixed(1)}</span>`; }
+function renderSoccerFormation(){
+  injectFmzCSS(); soccerFieldCSS();
+  const {slots,bench,module}=soccerLineup();
+  const mods=Object.keys(SOCCER_MODULES).map(m=>`<button class="mod-chip${m===module?' on':''}" onclick="setLineupModule('${m}')">${m}</button>`).join('');
+  const tokens=slots.map(s=>{
+    const p=s.player;
+    const inner = p ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${(p.name||'').split(' ').slice(-1)[0]}</span>`
+                    : `<span class="ftk-num">+</span>`;
+    return `<div class="ftk${p?'':' empty'}" style="left:${(s.x*100).toFixed(1)}%;top:${(s.y*100).toFixed(1)}%" data-i="${s.i}" onclick="soccerSlotTap(${s.i})">${inner}</div>`;
+  }).join('');
+  const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+  document.getElementById('formazione-content').innerHTML=`
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <h3 style="margin:0"><i class="fa-solid fa-futbol" style="color:var(--brand)"></i> Modulo</h3>
+        <div class="mod-chips">${mods}</div>
+      </div>
+      <div class="fpitch-wrap"><div class="fpitch" id="fpitch">
+        <svg viewBox="0 0 100 150" preserveAspectRatio="none" class="fpitch-svg">
+          <rect x="1" y="1" width="98" height="148" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+          <line x1="1" y1="75" x2="99" y2="75" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+          <circle cx="50" cy="75" r="11" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+          <rect x="26" y="1" width="48" height="20" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
+          <rect x="26" y="129" width="48" height="20" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
+          <rect x="38" y="1" width="24" height="8" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
+          <rect x="38" y="141" width="24" height="8" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
+        </svg>
+        ${tokens}
+      </div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn btn-ghost btn-sm" onclick="resetLineup()"><i class="fa-solid fa-rotate-left"></i> Ripristina</button>
+        <span class="hint" style="align-self:center">Trascina i giocatori per spostarli · tocca un giocatore per sostituirlo.</span>
+      </div>
+    </div>
+    <div class="card"><h3><i class="fa-solid fa-users" style="color:var(--muted)"></i> Panchina (per rendimento)</h3>
+      <div class="fbench">${benchHtml}</div>
+    </div>`;
+  bindSoccerDrag();
+}
+function bindSoccerDrag(){
+  const pitch=document.getElementById('fpitch'); if(!pitch) return;
+  pitch.querySelectorAll('.ftk').forEach(tk=>{
+    let moved=false,px,py;
+    tk.addEventListener('pointerdown',e=>{
+      e.stopPropagation(); moved=false; px=e.clientX; py=e.clientY; try{tk.setPointerCapture(e.pointerId);}catch(_){}
+      const r=pitch.getBoundingClientRect();
+      const mv=ev=>{ if(Math.abs(ev.clientX-px)+Math.abs(ev.clientY-py)>4) moved=true;
+        const x=(ev.clientX-r.left)/r.width, y=(ev.clientY-r.top)/r.height;
+        tk.style.left=(Math.max(0,Math.min(1,x))*100)+'%'; tk.style.top=(Math.max(0,Math.min(1,y))*100)+'%'; };
+      const up=ev=>{ tk.onpointermove=null;tk.onpointerup=null;tk.onpointercancel=null; try{tk.releasePointerCapture(e.pointerId);}catch(_){}
+        if(moved){ const x=(ev.clientX-r.left)/r.width, y=(ev.clientY-r.top)/r.height; setLineupPos(+tk.dataset.i,x,y); tk._moved=true; setTimeout(()=>tk._moved=false,50); } };
+      tk.onpointermove=mv; tk.onpointerup=up; tk.onpointercancel=up;
+    });
+  });
+}
+function soccerSlotTap(i){
+  const tk=document.querySelector('.ftk[data-i="'+i+'"]'); if(tk&&tk._moved) return; // era un drag, non un tap
+  const {slots,bench}=soccerLineup(); const slot=slots.find(s=>s.i===i); if(!slot) return;
+  const cur=slot.player;
+  const opts=bench.map(b=>`<button class="sub-opt" onclick="setLineupSub(${i},${b.p.id});closeModal()"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</button>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Sostituisci ${cur?cur.name:'slot vuoto'}</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body"><p class="hint" style="margin-bottom:10px">Scegli chi mettere in questo slot (${slot.role}).</p>
+      <div class="sub-list">${opts||'<p class="hint">Nessuna riserva disponibile.</p>'}</div>
+      ${cur?`<button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="setLineupSub(${i},null);closeModal()"><i class="fa-solid fa-wand-magic-sparkles"></i> Torna al titolare automatico</button>`:''}
+    </div>`, true);
+}
+function soccerFieldCSS(){
+  if(document.getElementById('fpitch-css')) return;
+  const st=document.createElement('style'); st.id='fpitch-css';
+  st.textContent=`
+  .mod-chips{display:flex;gap:6px;flex-wrap:wrap;} .mod-chip{border:1px solid var(--line,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:9px;padding:6px 12px;font-weight:800;font-family:'Outfit',sans-serif;font-size:.82rem;cursor:pointer;}
+  .mod-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}
+  .fpitch-wrap{display:flex;justify-content:center;}
+  .fpitch{position:relative;width:100%;max-width:360px;aspect-ratio:100/150;background:linear-gradient(180deg,#1f7a43,#176135);border-radius:14px;overflow:hidden;touch-action:none;}
+  .fpitch-svg{position:absolute;inset:0;width:100%;height:100%;}
+  .ftk{position:absolute;transform:translate(-50%,-50%);width:13%;aspect-ratio:1;border-radius:50%;background:var(--brand);color:#04140a;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:grab;box-shadow:0 2px 6px rgba(0,0,0,.4);user-select:none;border:2px solid rgba(255,255,255,.85);}
+  .ftk.empty{background:rgba(255,255,255,.18);color:#fff;border-style:dashed;}
+  .ftk-num{font-family:'Outfit',sans-serif;font-weight:900;font-size:.9rem;line-height:1;} .ftk-name{font-size:.5rem;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;}
+  .fbench{display:flex;flex-wrap:wrap;gap:8px;} .fbench-chip{display:flex;align-items:center;gap:6px;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;padding:7px 11px;font-size:.85rem;font-weight:600;}
+  .sub-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto;} .sub-opt{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.12));border-radius:10px;padding:10px 12px;color:inherit;font-size:.9rem;font-weight:600;cursor:pointer;}
+  .sub-opt:hover{border-color:var(--brand);}`;
+  document.head.appendChild(st);
+}
 function injectFmzCSS(){
   if(document.getElementById('fmz-css'))return;
   const st=document.createElement('style'); st.id='fmz-css';
@@ -2520,6 +2662,7 @@ function injectFmzCSS(){
   document.head.appendChild(st);
 }
 function renderFormazione(){
+  if(curSport()==='calcio'){ renderSoccerFormation(); return; }
   injectFmzCSS();
   const sport=curSport(), plan=FORMATION[sport]||FORMATION.pallavolo;
   const players=DB.players.map(p=>({p, v:getSeasonStats(p.id).avgVoto}));
