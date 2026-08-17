@@ -2164,6 +2164,11 @@ function playerTierMap(){
 }
 function playerTier(id){ return playerTierMap()[id]||'silver'; }
 const CARD_SILHOUETTE="data:image/svg+xml;utf8,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 130"><g fill="rgba(255,255,255,.22)"><circle cx="50" cy="42" r="24"/><path d="M12 130c0-24 17-42 38-42s38 18 38 42z"/></g></svg>');
+/* candidati nome-file del frame: copre varie convenzioni (goat.png, Goat_.png, Goat.png, goat_.png) */
+function frameCandidates(tier){ const C=tier.charAt(0).toUpperCase()+tier.slice(1);
+  return [`cards/${tier}.png`,`cards/${C}_.png`,`cards/${C}.png`,`cards/${tier}_.png`]; }
+function tcFrameFallback(img){ const fb=(img.getAttribute('data-fb')||'').split('|').filter(Boolean);
+  if(fb.length){ img.src=fb[0]; img.setAttribute('data-fb',fb.slice(1).join('|')); } else { img.style.opacity=0; } }
 /* Render di una card a tier. width in px (default 300). */
 function renderTierCard(id, width){
   width=width||300; const H=width*1.4;
@@ -2176,7 +2181,9 @@ function renderTierCard(id, width){
   const txt=(key,val)=>{ const e=L[key]; if(!e||!e.show||val==null||val==='')return '';
     return `<div class="tc-el" style="left:${e.x}%;top:${e.y}%;transform:translate(${alignT(e.align)},-50%);font-size:${(e.size/100*width).toFixed(1)}px;color:${e.color};text-align:${e.align}">${val}</div>`; };
   const ph=L.photo; const photoEl = ph&&ph.show ? `<div class="tc-photo" style="left:${ph.x}%;top:${ph.y}%;width:${ph.w}%;height:${(ph.h/100*H/width*100).toFixed(2)}%"><img src="${photoSrc}"></div>`:'';
-  return `<div class="tiercard tier-${tier}" style="width:${width}px;height:${H}px;background-image:url('cards/${tier}.png')">
+  const cands=frameCandidates(tier);
+  return `<div class="tiercard tier-${tier}" style="width:${width}px;height:${H}px">
+    <img class="tc-frame" src="${cands[0]}" data-fb="${cands.slice(1).join('|')}" onerror="tcFrameFallback(this)" alt="">
     ${photoEl}
     ${txt('overall',ovr!=null?ovr:'—')}
     ${txt('role',cphAbbr(p.role))}
@@ -2259,10 +2266,11 @@ function cardStudioCSS(){
   if(document.getElementById('card-studio-css')) return;
   const st=document.createElement('style'); st.id='card-studio-css';
   st.textContent=`
-  .tiercard{position:relative;background-size:contain;background-repeat:no-repeat;background-position:center;border-radius:12px;font-family:'Outfit',sans-serif;font-weight:900;flex:0 0 auto;}
-  .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;}
+  .tiercard{position:relative;border-radius:12px;font-family:'Outfit',sans-serif;font-weight:900;flex:0 0 auto;overflow:hidden;}
+  .tiercard .tc-frame{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:0;pointer-events:none;}
+  .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:1;}
   .tiercard .tc-photo img{width:100%;height:100%;object-fit:contain;object-position:bottom;}
-  .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;}
+  .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;z-index:2;}
   .cs-wrap{display:grid;grid-template-columns:260px 1fr;gap:18px;align-items:start;}
   .cs-preview{display:flex;justify-content:center;padding:6px;background:repeating-conic-gradient(#0000 0% 25%,rgba(255,255,255,.04) 0% 50%) 0/22px 22px;border-radius:14px;position:sticky;top:10px;}
   .cs-lb{display:block;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:.6rem 0 .35rem;}
