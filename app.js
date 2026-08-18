@@ -905,7 +905,7 @@ function brandCSS(){
     const st=document.createElement('style'); st.id='brand-css';
     st.textContent=`
     .dash-head{display:flex;align-items:center;gap:14px;}
-    .dash-badge{width:134px;height:134px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
+    .dash-badge{width:145px;height:145px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
     .dash-badge:hover{border-color:var(--brand);}
     .dash-badge img{width:100%;height:100%;object-fit:contain;}
     .dash-badge i{font-size:1.7rem;color:var(--muted);}`;
@@ -1240,6 +1240,123 @@ function impConfirm(){
   save(); closeModal();
   const d=new Date(list[0].date+'T00:00:00'); if(!isNaN(d.getTime())){ CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); CAL_SEL=list[0].date; }
   renderCalendar(); toast(list.length+' partite importate');
+}
+/* ================= EDITOR ESERCIZI SUL CAMPO ================= */
+let FE=null;
+function openFieldEditor(){
+  fieldEditorCSS();
+  const sport=curSport();
+  const host=document.createElement('div'); host.id='fe-overlay'; host.className='fe-overlay';
+  host.innerHTML=`
+    <div class="fe-bar">
+      <div class="fe-group">
+        <button class="fe-btn" onclick="feAdd('player')" title="Nostro giocatore"><span class="fe-dot" style="background:#22C55E"></span></button>
+        <button class="fe-btn" onclick="feAdd('opp')" title="Avversario"><span class="fe-dot" style="background:#EF4444"></span></button>
+        <button class="fe-btn" onclick="feAdd('ball')" title="Pallone"><i class="fa-solid fa-futbol"></i></button>
+        <button class="fe-btn" onclick="feAdd('cone')" title="Cono" style="font-weight:900;color:#F97316">▲</button>
+      </div>
+      <div class="fe-group">
+        <button class="fe-btn on" id="fe-move" onclick="feTool('move')" title="Sposta"><i class="fa-solid fa-up-down-left-right"></i></button>
+        <button class="fe-btn" id="fe-arrow" onclick="feTool('arrow')" title="Freccia movimento"><i class="fa-solid fa-arrow-right-long"></i></button>
+        <button class="fe-btn" id="fe-arrowd" onclick="feTool('arrowd')" title="Freccia passaggio (tratteggiata)"><i class="fa-solid fa-ellipsis"></i></button>
+        <button class="fe-btn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i></button>
+      </div>
+      <div class="fe-group">
+        <button class="fe-btn" onclick="feClear()" title="Pulisci tutto"><i class="fa-solid fa-trash-can"></i></button>
+        <button class="btn btn-accent btn-sm" onclick="feSave()"><i class="fa-solid fa-download"></i> Salva</button>
+        <button class="fe-btn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    </div>
+    <div class="fe-canvas-wrap"><canvas id="fe-canvas"></canvas></div>
+    <div class="fe-hint">Tocca un elemento in alto per aggiungerlo · trascina per spostare · scegli la freccia per disegnare i movimenti</div>`;
+  document.body.appendChild(host);
+  const cv=document.getElementById('fe-canvas'), wrap=host.querySelector('.fe-canvas-wrap');
+  const rect=wrap.getBoundingClientRect();
+  const W=Math.max(220,Math.min(rect.width-20, 520)), H=Math.max(300,Math.min(rect.height-20, W*1.5));
+  const dpr=window.devicePixelRatio||1;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
+  const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
+  FE={sport,tool:'move',elements:[],arrows:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,arrowStart:null};
+  feBindPointer(); feRedraw();
+}
+function closeFieldEditor(){ const o=document.getElementById('fe-overlay'); if(o) o.remove(); FE=null; }
+function feTool(t){ FE.tool=t; ['move','arrow','arrowd','erase'].forEach(x=>{const b=document.getElementById('fe-'+x); if(b) b.classList.toggle('on',x===t);}); }
+function feAdd(type){ const n=(type==='player'||type==='opp')?(++FE.seq[type]):0; FE.elements.push({type,x:FE.W/2,y:FE.H/2,n}); feRedraw(); }
+function feClear(){ FE.elements=[]; FE.arrows=[]; FE.seq={player:0,opp:0}; feRedraw(); }
+function feField(ctx,W,H,sport){
+  const m=10, rx=m, ry=m, rw=W-2*m, rh=H-2*m, cx=rx+rw/2, cy=ry+rh/2;
+  ctx.fillStyle = sport==='basket' ? '#b5763b' : '#1f7a43'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2; ctx.strokeRect(rx,ry,rw,rh);
+  ctx.beginPath();ctx.moveTo(rx,cy);ctx.lineTo(rx+rw,cy);ctx.stroke();
+  if(sport==='pallavolo'){
+    ctx.setLineDash([6,6]);ctx.lineWidth=1.2;
+    ctx.beginPath();ctx.moveTo(rx,ry+rh/3);ctx.lineTo(rx+rw,ry+rh/3);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(rx,ry+rh*2/3);ctx.lineTo(rx+rw,ry+rh*2/3);ctx.stroke();
+    ctx.setLineDash([]);
+  } else {
+    ctx.beginPath();ctx.arc(cx,cy,rw*0.13,0,Math.PI*2);ctx.stroke();
+    if(sport==='calcio'){ const bw=rw*0.5,bx=cx-bw/2,bh=rh*0.16; ctx.strokeRect(bx,ry,bw,bh); ctx.strokeRect(bx,ry+rh-bh,bw,bh); }
+    else { const kw=rw*0.36,kx=cx-kw/2,kh=rh*0.19; ctx.strokeRect(kx,ry,kw,kh); ctx.strokeRect(kx,ry+rh-kh,kw,kh); }
+  }
+}
+function feDrawEl(ctx,el){
+  ctx.save();
+  if(el.type==='cone'){ ctx.fillStyle='#F97316'; ctx.beginPath(); ctx.moveTo(el.x,el.y-13); ctx.lineTo(el.x-11,el.y+10); ctx.lineTo(el.x+11,el.y+10); ctx.closePath(); ctx.fill(); ctx.restore(); return; }
+  if(el.type==='ball'){ ctx.fillStyle='#fff'; ctx.strokeStyle='#111'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(el.x,el.y,8,0,Math.PI*2); ctx.fill(); ctx.stroke(); ctx.restore(); return; }
+  ctx.fillStyle = el.type==='opp' ? '#EF4444' : '#22C55E';
+  ctx.beginPath(); ctx.arc(el.x,el.y,16,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 15px Outfit,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(String(el.n),el.x,el.y);
+  ctx.restore();
+}
+function feDrawArrow(ctx,a){
+  const x1=a.from[0],y1=a.from[1],x2=a.to[0],y2=a.to[1];
+  ctx.save(); ctx.strokeStyle='#FACC15'; ctx.fillStyle='#FACC15'; ctx.lineWidth=3;
+  if(a.dashed) ctx.setLineDash([8,6]);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); ctx.setLineDash([]);
+  const ang=Math.atan2(y2-y1,x2-x1), hl=13;
+  ctx.beginPath(); ctx.moveTo(x2,y2); ctx.lineTo(x2-hl*Math.cos(ang-0.4),y2-hl*Math.sin(ang-0.4)); ctx.lineTo(x2-hl*Math.cos(ang+0.4),y2-hl*Math.sin(ang+0.4)); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function feRedraw(){ const {ctx,W,H,sport}=FE; ctx.clearRect(0,0,W,H); feField(ctx,W,H,sport); FE.arrows.forEach(a=>feDrawArrow(ctx,a)); FE.elements.forEach(el=>feDrawEl(ctx,el)); }
+function feHit(x,y){ for(let i=FE.elements.length-1;i>=0;i--){ const e=FE.elements[i]; if(Math.hypot(e.x-x,e.y-y)<=18) return i; } return -1; }
+function feDistToSeg(px,py,a,b){ const x1=a[0],y1=a[1],x2=b[0],y2=b[1],dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy||1; let t=((px-x1)*dx+(py-y1)*dy)/l2; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy)); }
+function feEraseArrow(x,y){ let best=-1,bd=16; FE.arrows.forEach((a,i)=>{ const d=feDistToSeg(x,y,a.from,a.to); if(d<bd){bd=d;best=i;} }); if(best>=0){ FE.arrows.splice(best,1); feRedraw(); } }
+function feBindPointer(){
+  const cv=FE.cv;
+  const pos=e=>{ const r=cv.getBoundingClientRect(); return [ (e.clientX-r.left)*(FE.W/r.width), (e.clientY-r.top)*(FE.H/r.height) ]; };
+  cv.addEventListener('pointerdown',e=>{ const p=pos(e),x=p[0],y=p[1];
+    if(FE.tool==='move'){ const i=feHit(x,y); if(i>=0) FE.drag={i,dx:FE.elements[i].x-x,dy:FE.elements[i].y-y}; }
+    else if(FE.tool==='erase'){ const i=feHit(x,y); if(i>=0){ FE.elements.splice(i,1); feRedraw(); } else feEraseArrow(x,y); }
+    else FE.arrowStart=[x,y];
+    try{cv.setPointerCapture(e.pointerId);}catch(_){}
+  });
+  cv.addEventListener('pointermove',e=>{ const p=pos(e),x=p[0],y=p[1];
+    if(FE.tool==='move'&&FE.drag){ const el=FE.elements[FE.drag.i]; el.x=x+FE.drag.dx; el.y=y+FE.drag.dy; feRedraw(); }
+    else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ feRedraw(); feDrawArrow(FE.ctx,{from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); }
+  });
+  cv.addEventListener('pointerup',e=>{ const p=pos(e),x=p[0],y=p[1];
+    if(FE.tool==='move') FE.drag=null;
+    else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ if(Math.hypot(x-FE.arrowStart[0],y-FE.arrowStart[1])>10) FE.arrows.push({from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); FE.arrowStart=null; feRedraw(); }
+  });
+}
+function feSave(){
+  try{ const url=FE.cv.toDataURL('image/png'); const a=document.createElement('a'); a.href=url; a.download='esercizio.png'; document.body.appendChild(a); a.click(); a.remove(); toast('Schema salvato come immagine'); }
+  catch(e){ toast('Non riesco a salvare qui','info'); }
+}
+function fieldEditorCSS(){
+  if(document.getElementById('fe-css')) return;
+  const st=document.createElement('style'); st.id='fe-css';
+  st.textContent=`
+  .fe-overlay{position:fixed;inset:0;z-index:9999;background:#0b0f1a;display:flex;flex-direction:column;}
+  .fe-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;background:#0a1020;border-bottom:1px solid rgba(255,255,255,.1);flex-wrap:wrap;}
+  .fe-group{display:flex;gap:6px;align-items:center;}
+  .fe-btn{width:42px;height:42px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;}
+  .fe-btn.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 24%,transparent);}
+  .fe-dot{width:16px;height:16px;border-radius:50%;display:inline-block;border:2px solid #fff;}
+  .fe-canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:10px;overflow:hidden;}
+  #fe-canvas{border-radius:12px;touch-action:none;box-shadow:0 10px 40px rgba(0,0,0,.5);}
+  .fe-hint{text-align:center;color:rgba(255,255,255,.5);font-size:.76rem;padding:8px 12px 12px;}`;
+  document.head.appendChild(st);
 }
 function addEvent(e){
     e.preventDefault();
@@ -2696,7 +2813,7 @@ function cardStudioCSS(){
   .tiercard .tc-frame{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:0;pointer-events:none;}
   .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:1;}
   .tiercard .tc-logo{position:absolute;transform:translate(-50%,-50%);z-index:3;pointer-events:none;}
-  .tiercard .tc-logo img{width:100%;height:auto;object-fit:cover;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
+  .tiercard .tc-logo img{width:100%;height:auto;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
   .tiercard .tc-photo img{width:100%;height:100%;object-fit:contain;object-position:bottom;}
   .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;z-index:2;}
   .tiercard .tc-attrs{position:absolute;z-index:2;text-shadow:0 2px 6px rgba(0,0,0,.55);font-family:'Outfit',sans-serif;}
