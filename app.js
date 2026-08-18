@@ -5,6 +5,11 @@
 'use strict';
 
 const LS_KEY = 'volleyteam_db';
+const PROFILES_KEY='vt_profiles', ACTIVE_KEY='vt_active';
+function activeProfile(){ return localStorage.getItem(ACTIVE_KEY)||''; }
+function dbKey(){ const p=activeProfile(); return p? LS_KEY+':'+p : LS_KEY; }
+function getProfiles(){ try{ return JSON.parse(localStorage.getItem(PROFILES_KEY))||[]; }catch(e){ return []; } }
+function setProfiles(a){ localStorage.setItem(PROFILES_KEY, JSON.stringify(a)); }
 const MONTHS = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
 const today = () => new Date(new Date().toDateString());
 
@@ -394,7 +399,7 @@ function seedDB(){
 /* ---------- LOAD / SAVE ---------- */
 function loadDB(){
     try{
-        const raw = localStorage.getItem(LS_KEY);
+        const raw = localStorage.getItem(dbKey());
         if(raw) return JSON.parse(raw);
     }catch(e){ console.warn('DB corrotto, ricreo.', e); }
     // migrazione dalla vecchia versione VolleyStats 2.0
@@ -414,7 +419,7 @@ function loadDB(){
 let DB = loadDB();
 if(!DB.trainings) DB.trainings = {};
 if(!DB.nextId) DB.nextId = Date.now();
-function save(){ localStorage.setItem(LS_KEY, JSON.stringify(DB)); }
+function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
 
 /* ---------- HELPERS DATI ---------- */
@@ -759,6 +764,9 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-sliders"></i> Motore voto <span class="pill" style="margin-left:6px">admin</span></h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Regola quanto pesa ogni fondamentale per ruolo (ricezione, attacco, muro, ace…), con anteprima live. Le partite già registrate si ricalcolano da sole. Area riservata: richiede password.</p>
             <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
+        <div class="card"><h3><i class="fa-solid fa-people-group"></i> Le mie squadre</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Gestisci più squadre sullo stesso dispositivo (es. calcio, pallavolo, basket), ognuna coi suoi dati e un PIN. Utile per una società polisportiva.</p>
+            <button class="btn btn-ghost" onclick="openTeamsMenu()"><i class="fa-solid fa-people-group"></i> Gestisci squadre</button></div>
         <div class="card"><h3><i class="fa-solid fa-shield-halved"></i> Logo squadra</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica il logo della società (PNG, meglio senza sfondo). Comparirà sulle card sopra il numero di maglia; puoi posizionarlo dall'Officina card.</p>
             <button class="btn btn-ghost" onclick="pickTeamLogo()"><i class="fa-solid fa-upload"></i> Carica / cambia logo</button></div>
@@ -1243,9 +1251,10 @@ function impConfirm(){
 }
 /* ================= EDITOR ESERCIZI SUL CAMPO ================= */
 let FE=null;
-function openFieldEditor(){
+function openFieldEditor(exKey, exLabel){
   fieldEditorCSS();
   const sport=curSport();
+  const saveBtn = exKey ? '<i class="fa-solid fa-floppy-disk"></i> Salva' : '<i class="fa-solid fa-download"></i> Scarica PNG';
   const host=document.createElement('div'); host.id='fe-overlay'; host.className='fe-overlay';
   host.innerHTML=`
     <div class="fe-bar">
@@ -1263,12 +1272,12 @@ function openFieldEditor(){
       </div>
       <div class="fe-group">
         <button class="fe-btn" onclick="feClear()" title="Pulisci tutto"><i class="fa-solid fa-trash-can"></i></button>
-        <button class="btn btn-accent btn-sm" onclick="feSave()"><i class="fa-solid fa-download"></i> Salva</button>
+        <button class="btn btn-accent btn-sm" onclick="feSave()">${saveBtn}</button>
         <button class="fe-btn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i></button>
       </div>
     </div>
     <div class="fe-canvas-wrap"><canvas id="fe-canvas"></canvas></div>
-    <div class="fe-hint">Tocca un elemento in alto per aggiungerlo · trascina per spostare · scegli la freccia per disegnare i movimenti</div>`;
+    <div class="fe-hint">${exLabel?('Illustri: <b>'+exLabel+'</b> · '):''}Tocca un elemento per aggiungerlo · trascina per spostare · la freccia disegna i movimenti</div>`;
   document.body.appendChild(host);
   const cv=document.getElementById('fe-canvas'), wrap=host.querySelector('.fe-canvas-wrap');
   const rect=wrap.getBoundingClientRect();
@@ -1276,8 +1285,9 @@ function openFieldEditor(){
   const dpr=window.devicePixelRatio||1;
   cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
   const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
-  FE={sport,tool:'move',elements:[],arrows:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,arrowStart:null};
+  FE={sport,tool:'move',elements:[],arrows:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,arrowStart:null,exKey:exKey||null};
   feBindPointer(); feRedraw();
+  if(exKey){ cIdbGet('exdraw:'+exKey).then(raw=>{ if(!raw||!FE)return; try{ const m=JSON.parse(raw); FE.elements=m.elements||[]; FE.arrows=m.arrows||[]; FE.seq=feRecomputeSeq(FE.elements); feRedraw(); }catch(e){} }); }
 }
 function closeFieldEditor(){ const o=document.getElementById('fe-overlay'); if(o) o.remove(); FE=null; }
 function feTool(t){ FE.tool=t; ['move','arrow','arrowd','erase'].forEach(x=>{const b=document.getElementById('fe-'+x); if(b) b.classList.toggle('on',x===t);}); }
@@ -1339,9 +1349,22 @@ function feBindPointer(){
     else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ if(Math.hypot(x-FE.arrowStart[0],y-FE.arrowStart[1])>10) FE.arrows.push({from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); FE.arrowStart=null; feRedraw(); }
   });
 }
-function feSave(){
-  try{ const url=FE.cv.toDataURL('image/png'); const a=document.createElement('a'); a.href=url; a.download='esercizio.png'; document.body.appendChild(a); a.click(); a.remove(); toast('Schema salvato come immagine'); }
-  catch(e){ toast('Non riesco a salvare qui','info'); }
+function feRecomputeSeq(els){ const s={player:0,opp:0}; (els||[]).forEach(e=>{ if((e.type==='player'||e.type==='opp')&&e.n>s[e.type]) s[e.type]=e.n; }); return s; }
+function exKeyOf(sport,cat,name){ return (sport+'|'+cat+'|'+name).toLowerCase(); }
+function openExerciseDraw(name,cat){ openFieldEditor(exKeyOf(curSport(),cat,name), name); }
+async function feSave(){
+  if(FE.exKey){
+    try{ const png=FE.cv.toDataURL('image/png');
+      await cIdbSet('exdraw:'+FE.exKey, JSON.stringify({sport:FE.sport,elements:FE.elements,arrows:FE.arrows,png}));
+      DB.settings=DB.settings||{}; DB.settings.exDrawn=DB.settings.exDrawn||[];
+      if(!DB.settings.exDrawn.includes(FE.exKey)) DB.settings.exDrawn.push(FE.exKey);
+      save(); toast("Disegno salvato nell'esercizio"); closeFieldEditor();
+      if(document.getElementById('exlib-list')) renderExLibList();
+    }catch(e){ toast('Non riesco a salvare qui','info'); }
+  } else {
+    try{ const url=FE.cv.toDataURL('image/png'); const a=document.createElement('a'); a.href=url; a.download='esercizio.png'; document.body.appendChild(a); a.click(); a.remove(); toast('Schema salvato come immagine'); }
+    catch(e){ toast('Non riesco a salvare qui','info'); }
+  }
 }
 function fieldEditorCSS(){
   if(document.getElementById('fe-css')) return;
@@ -2015,7 +2038,7 @@ function importData(e){
 }
 function resetAll(){
     confirmAction('Cancellare TUTTI i dati e ripartire da zero? Non si può annullare.',()=>{
-        localStorage.removeItem(LS_KEY);DB=seedDB();save();renderTeamName();go('dashboard');toast('App azzerata','info');
+        localStorage.removeItem(dbKey());DB=seedDB();save();renderTeamName();go('dashboard');toast('App azzerata','info');
     });
 }
 
@@ -2293,12 +2316,14 @@ function renderExLibList(){
   const q=(EXLIB_FILTER.q||'').toLowerCase().trim();
   const items=exLibFor(curSport()).filter(e=>(!EXLIB_FILTER.cat||e.cat===EXLIB_FILTER.cat) && (!q||e.name.toLowerCase().includes(q)||e.cat.toLowerCase().includes(q)));
   if(!items.length){ box.innerHTML='<p class="exlib-empty">Nessun esercizio trovato. Puoi comunque aggiungerne uno tuo dal modulo qui sotto.</p>'; return; }
-  box.innerHTML=items.map(e=>`<div class="exlib-row">
+  box.innerHTML=items.map(e=>{ const dk=exKeyOf(curSport(),e.cat,e.name); const drawn=(DB.settings&&DB.settings.exDrawn&&DB.settings.exDrawn.includes(dk));
+    return `<div class="exlib-row">
       <span class="exlib-dot" style="background:${CAT_COLOR[e.cat]||'#8395B4'}"></span>
       <span class="exlib-name">${e.name}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
       <span class="exlib-cat">${e.cat}</span>
+      <button class="exlib-draw${drawn?' has':''}" title="Disegna schema" onclick="openExerciseDraw('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-pen-ruler"></i></button>
       <button class="exlib-add" onclick="addExFromLib('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-plus"></i></button>
-    </div>`).join('');
+    </div>`; }).join('');
 }
 function addExFromLib(name,cat){
   const c=currentTraining(); if(!c) return;
@@ -2326,6 +2351,8 @@ function exLibCSS(){
   .exlib-name{font-weight:600;font-size:.9rem;flex:1;} .exlib-custom{font-style:normal;font-size:.62rem;background:var(--brand);color:#04140a;border-radius:5px;padding:0 5px;vertical-align:middle;}
   .exlib-cat{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;}
   .exlib-add{flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:none;background:var(--brand);color:#04140a;font-weight:800;cursor:pointer;}
+  .exlib-draw{flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:1px solid var(--line,rgba(255,255,255,.18));background:transparent;color:var(--muted);cursor:pointer;}
+  .exlib-draw.has{border-color:var(--brand);color:var(--brand);}
   .exlib-hint{font-size:.76rem;color:var(--muted);margin:0;} .exlib-empty{color:var(--muted);font-style:italic;font-size:.86rem;}
   .exlib-new{border-top:1px solid var(--border,rgba(255,255,255,.12));padding-top:12px;margin-top:2px;}`;
   document.head.appendChild(st);
@@ -2733,6 +2760,38 @@ function renderTierCard(id, width){
 }
 /* ---- OFFICINA CARD (studio) ---- */
 let CARD_STUDIO=null;
+function openTeamsMenu(){
+  let profs=getProfiles();
+  if(!profs.length){ profs=[{id:'',name:(DB.teamName||'Squadra 1'),pin:''}]; setProfiles(profs); }
+  const act=activeProfile();
+  const rows=profs.map(p=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px;border-radius:10px;border:1px solid var(--line,rgba(255,255,255,.12));margin-bottom:6px;${p.id===act?'border-color:var(--brand);background:color-mix(in srgb,var(--brand) 12%,transparent);':''}">
+      <span style="font-weight:600">${p.name}${p.pin?' <i class="fa-solid fa-lock" style="opacity:.5;font-size:.75em"></i>':''}</span>
+      ${p.id===act?'<span class="pill">attiva</span>':`<button class="btn btn-ghost btn-sm" onclick="switchTeam('${p.id}')">Entra</button>`}
+    </div>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-people-group" style="color:var(--brand)"></i> Le mie squadre</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:10px">Ogni squadra ha i suoi dati separati. Passa dall'una all'altra col PIN, senza resettare nulla.</p>
+      ${rows}
+      <div style="border-top:1px solid var(--line,rgba(255,255,255,.12));margin-top:12px;padding-top:12px">
+        <label class="rec-lb">Nuova squadra</label>
+        <input id="tm-name" placeholder="Nome squadra (es. Under 15 Calcio)" style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16))">
+        <input id="tm-pin" placeholder="PIN (opzionale)" inputmode="numeric" style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16));margin-top:8px">
+        <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="createTeam()"><i class="fa-solid fa-plus"></i> Crea e passa alla nuova squadra</button>
+      </div>
+    </div>`, true);
+}
+function createTeam(){
+  const name=(document.getElementById('tm-name').value||'').trim(); if(!name){ toast('Scrivi il nome squadra','info'); return; }
+  const pin=(document.getElementById('tm-pin').value||'').trim();
+  const profs=getProfiles(); profs.push({id:'t'+Date.now().toString(36),name,pin}); setProfiles(profs);
+  localStorage.setItem(ACTIVE_KEY, profs[profs.length-1].id); location.reload();
+}
+function switchTeam(id){
+  const p=getProfiles().find(x=>x.id===id); if(!p) return;
+  if(p.pin){ const e=prompt('PIN per '+p.name); if(e===null) return; if((e||'').trim()!==p.pin){ toast('PIN errato','info'); return; } }
+  localStorage.setItem(ACTIVE_KEY,id); location.reload();
+}
 function openCardStudio(){
   cardStudioCSS(); ensureTeamLogo(()=>{ if(CARD_STUDIO) renderCardStudioPreview(); });
   const sample=activePlayers()[0]||DB.players[0];
