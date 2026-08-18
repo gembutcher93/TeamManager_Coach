@@ -595,6 +595,7 @@ function buildLayout(){
                 <div class="fg"><label>Avversario o focus tecnico</label><input id="e-notes" placeholder="Es. vs San Pio X — oppure Ricezione" required></div>
                 <div class="fg" style="flex:0"><label>&nbsp;</label><button class="btn btn-accent" type="submit"><i class="fa-solid fa-check"></i> Salva</button></div>
             </div></form>
+            <div style="margin-top:10px;border-top:1px solid var(--line,rgba(255,255,255,.1));padding-top:10px"><button class="btn btn-ghost btn-sm" onclick="openRecurring()"><i class="fa-solid fa-calendar-week"></i> Crea serie di allenamenti ricorrenti</button></div>
         </div>
         <div class="card">
             <div class="cal-top">
@@ -904,7 +905,7 @@ function brandCSS(){
     const st=document.createElement('style'); st.id='brand-css';
     st.textContent=`
     .dash-head{display:flex;align-items:center;gap:14px;}
-    .dash-badge{width:66px;height:66px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
+    .dash-badge{width:99px;height:99px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
     .dash-badge:hover{border-color:var(--brand);}
     .dash-badge img{width:100%;height:100%;object-fit:contain;}
     .dash-badge i{font-size:1.7rem;color:var(--muted);}`;
@@ -1113,6 +1114,60 @@ function renderCalDay(){
 function calOpenScout(id){ go('scout'); const s=document.getElementById('scout-select'); if(s){ s.value=id; setupScout(); } }
 function calOpenTraining(id){ go('allenamenti'); const s=document.getElementById('tr-select'); if(s){ s.value=id; renderTraining(); } }
 function calOpenAttendance(id){ go('presenze'); const s=document.getElementById('att-select'); if(s){ s.value=id; renderAttendance(); } }
+/* ---- Serie di allenamenti ricorrenti ---- */
+let REC=null;
+function genRecurringDates(startISO,endISO,weekdays){
+  const out=[]; const s=new Date(startISO+'T00:00:00'), e=new Date(endISO+'T00:00:00');
+  if(isNaN(s.getTime())||isNaN(e.getTime())||e<s) return out;
+  let d=new Date(s), guard=0;
+  while(d<=e && guard++<4000){ const wd=(d.getDay()+6)%7; if(weekdays.includes(wd)) out.push(isoOf(d.getFullYear(),d.getMonth(),d.getDate())); d.setDate(d.getDate()+1); }
+  return out;
+}
+function openRecurring(){
+  recurringCSS();
+  const t=today(); const s=isoOf(t.getFullYear(),t.getMonth(),t.getDate());
+  REC={days:[], start:s, end:s, title:'Allenamento'};
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-calendar-week" style="color:var(--brand)"></i> Serie di allenamenti</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:12px">Scegli i giorni fissi e il periodo: l'app crea tutte le sedute nel calendario, poi le articoli una a una.</p>
+      <label class="rec-lb">Giorni della settimana</label>
+      <div class="rec-days">${WD_IT.map((w,i)=>`<button id="rec-day-${i}" class="rec-day" onclick="recToggleDay(${i})">${w}</button>`).join('')}</div>
+      <div class="form-row" style="margin-top:12px">
+        <div class="fg"><label>Da</label><input type="date" value="${REC.start}" onchange="recSet('start',this.value)"></div>
+        <div class="fg"><label>Fino al</label><input type="date" value="${REC.end}" onchange="recSet('end',this.value)"></div>
+      </div>
+      <div class="fg"><label>Titolo / focus (opzionale)</label><input value="Allenamento" onchange="recSet('title',this.value)"></div>
+      <div class="rec-count" id="rec-count"></div>
+      <button class="btn btn-accent" id="rec-go" style="width:100%;margin-top:12px" onclick="createRecurring()"><i class="fa-solid fa-wand-magic-sparkles"></i> Crea gli allenamenti</button>
+    </div>`, true);
+  recRefresh();
+}
+function recToggleDay(i){ const k=REC.days.indexOf(i); if(k>=0) REC.days.splice(k,1); else REC.days.push(i);
+  const b=document.getElementById('rec-day-'+i); if(b) b.classList.toggle('on'); recRefresh(); }
+function recSet(f,v){ REC[f]=v; recRefresh(); }
+function recDates(){ return REC.days.length? genRecurringDates(REC.start,REC.end,REC.days):[]; }
+function recRefresh(){ const n=recDates().length;
+  const el=document.getElementById('rec-count'); if(el) el.textContent = n? `${n} allenament${n===1?'o':'i'} verranno creati` : 'Scegli almeno un giorno e il periodo.';
+  const btn=document.getElementById('rec-go'); if(btn) btn.disabled=!n; }
+function createRecurring(){
+  const dates=recDates(); if(!dates.length) return;
+  dates.forEach(dt=>{ DB.events.push({id:uid(),type:'Allenamento',date:dt,notes:(REC.title||'Allenamento').trim(),result:null}); });
+  save(); closeModal();
+  const d=new Date(REC.start+'T00:00:00'); if(!isNaN(d.getTime())){ CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); CAL_SEL=REC.start; }
+  renderCalendar(); toast(dates.length+' allenamenti creati');
+}
+function recurringCSS(){
+  if(document.getElementById('rec-css')) return;
+  const st=document.createElement('style'); st.id='rec-css';
+  st.textContent=`
+  .rec-lb{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;margin-bottom:8px;}
+  .rec-days{display:flex;gap:6px;flex-wrap:wrap;}
+  .rec-day{width:44px;height:44px;border-radius:50%;border:1px solid var(--line,rgba(255,255,255,.16));background:transparent;color:var(--muted);font-weight:800;font-size:.8rem;cursor:pointer;font-family:'Outfit',sans-serif;}
+  .rec-day.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 22%,transparent);color:#fff;}
+  .rec-count{margin-top:14px;padding:12px;border-radius:12px;background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);font-weight:700;font-size:.9rem;text-align:center;}`;
+  document.head.appendChild(st);
+}
 function addEvent(e){
     e.preventDefault();
     const date=document.getElementById('e-date').value;
@@ -2568,7 +2623,7 @@ function cardStudioCSS(){
   .tiercard .tc-frame{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:0;pointer-events:none;}
   .tiercard .tc-photo{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;overflow:hidden;z-index:1;}
   .tiercard .tc-logo{position:absolute;transform:translate(-50%,-50%);z-index:3;pointer-events:none;}
-  .tiercard .tc-logo img{width:100%;height:auto;object-fit:contain;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
+  .tiercard .tc-logo img{width:100%;height:auto;object-fit:cover;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
   .tiercard .tc-photo img{width:100%;height:100%;object-fit:contain;object-position:bottom;}
   .tiercard .tc-el{position:absolute;white-space:nowrap;line-height:1;text-shadow:0 2px 6px rgba(0,0,0,.5);letter-spacing:.5px;z-index:2;}
   .tiercard .tc-attrs{position:absolute;z-index:2;text-shadow:0 2px 6px rgba(0,0,0,.55);font-family:'Outfit',sans-serif;}
