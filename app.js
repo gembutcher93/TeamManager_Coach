@@ -595,7 +595,7 @@ function buildLayout(){
                 <div class="fg"><label>Avversario o focus tecnico</label><input id="e-notes" placeholder="Es. vs San Pio X — oppure Ricezione" required></div>
                 <div class="fg" style="flex:0"><label>&nbsp;</label><button class="btn btn-accent" type="submit"><i class="fa-solid fa-check"></i> Salva</button></div>
             </div></form>
-            <div style="margin-top:10px;border-top:1px solid var(--line,rgba(255,255,255,.1));padding-top:10px"><button class="btn btn-ghost btn-sm" onclick="openRecurring()"><i class="fa-solid fa-calendar-week"></i> Crea serie di allenamenti ricorrenti</button></div>
+            <div style="margin-top:10px;border-top:1px solid var(--line,rgba(255,255,255,.1));padding-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" onclick="openRecurring()"><i class="fa-solid fa-calendar-week"></i> Serie di allenamenti ricorrenti</button><button class="btn btn-ghost btn-sm" onclick="openImportMatches()"><i class="fa-solid fa-file-import"></i> Importa partite (CSV/Excel)</button></div>
         </div>
         <div class="card">
             <div class="cal-top">
@@ -691,7 +691,7 @@ function buildLayout(){
             <div class="card">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                     <h3 style="margin:0"><i class="fa-solid fa-list-check"></i> Esercizi della seduta</h3>
-                    <button type="button" class="btn btn-ghost" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" onclick="openFieldEditor()"><i class="fa-solid fa-pen-ruler"></i> Disegna esercizio</button><button type="button" class="btn btn-ghost" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button></div>
                 </div>
                 <form onsubmit="addExercise(event)"><div class="form-row" style="margin-top:.8rem">
                     <div class="fg"><label>Nome esercizio</label><input id="ex-name" placeholder="Es. Ricezione in bagher zona 5" required></div>
@@ -905,7 +905,7 @@ function brandCSS(){
     const st=document.createElement('style'); st.id='brand-css';
     st.textContent=`
     .dash-head{display:flex;align-items:center;gap:14px;}
-    .dash-badge{width:99px;height:99px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
+    .dash-badge{width:134px;height:134px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
     .dash-badge:hover{border-color:var(--brand);}
     .dash-badge img{width:100%;height:100%;object-fit:contain;}
     .dash-badge i{font-size:1.7rem;color:var(--muted);}`;
@@ -1165,8 +1165,81 @@ function recurringCSS(){
   .rec-days{display:flex;gap:6px;flex-wrap:wrap;}
   .rec-day{width:44px;height:44px;border-radius:50%;border:1px solid var(--line,rgba(255,255,255,.16));background:transparent;color:var(--muted);font-weight:800;font-size:.8rem;cursor:pointer;font-family:'Outfit',sans-serif;}
   .rec-day.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 22%,transparent);color:#fff;}
-  .rec-count{margin-top:14px;padding:12px;border-radius:12px;background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);font-weight:700;font-size:.9rem;text-align:center;}`;
+  .rec-count{margin-top:14px;padding:12px;border-radius:12px;background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);font-weight:700;font-size:.9rem;text-align:center;}
+  .imp-ta{width:100%;height:120px;border-radius:12px;padding:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16));font-family:monospace;font-size:.82rem;resize:vertical;}
+  .imp-prev{margin-top:12px;max-height:34vh;overflow:auto;} .imp-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line,rgba(255,255,255,.08));font-size:.88rem;}
+  .imp-row .d{color:var(--brand);font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}`;
   document.head.appendChild(st);
+}
+/* ---- Import partite da CSV/Excel/incolla ---- */
+function splitCSVLine(line,sep){ const out=[]; let cur='',q=false;
+  for(let i=0;i<line.length;i++){ const ch=line[i];
+    if(ch==='"'){ if(q&&line[i+1]==='"'){cur+='"';i++;} else q=!q; }
+    else if(ch===sep&&!q){ out.push(cur); cur=''; } else cur+=ch; }
+  out.push(cur); return out.map(c=>c.trim()); }
+function parseCSVText(text){
+  const lines=(text||'').replace(/\r/g,'').split('\n').filter(l=>l.trim().length);
+  if(!lines.length) return [];
+  const h=lines[0]; const cnt={',':(h.match(/,/g)||[]).length,';':(h.match(/;/g)||[]).length,'\t':(h.match(/\t/g)||[]).length};
+  const sep=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  return lines.map(l=>splitCSVLine(l,sep));
+}
+function impIso(y,mo,d){ y=+y;mo=+mo;d=+d; if(!y||mo<1||mo>12||d<1||d>31) return null; if(y<100)y+=2000; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); }
+function parseFlexDate(s){ s=(s||'').trim(); if(!s) return null; let m;
+  if(m=s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/)) return impIso(m[1],m[2],m[3]);
+  if(m=s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/)) return impIso(m[3],m[2],m[1]);
+  return null; }
+function detectMatches(rows){
+  rows=(rows||[]).filter(r=>r.some(c=>(c||'').trim())); if(!rows.length) return [];
+  const first=rows[0].map(c=>(c||'').toLowerCase());
+  let dateCol=first.findIndex(c=>/data|date|giorno/.test(c));
+  let oppCol=first.findIndex(c=>/avvers|squadra|contro|oppon|rivale/.test(c));
+  const hasHeader=dateCol>=0||oppCol>=0;
+  const body=hasHeader?rows.slice(1):rows;
+  const cols=Math.max(...body.map(r=>r.length),0);
+  if(dateCol<0){ let best=-1,bn=0; for(let c=0;c<cols;c++){ const n=body.filter(r=>parseFlexDate(r[c])).length; if(n>bn){bn=n;best=c;} } dateCol=best; }
+  if(oppCol<0){ for(let c=0;c<cols;c++){ if(c===dateCol)continue; if(body.filter(r=>(r[c]||'').trim()&&!parseFlexDate(r[c])).length){ oppCol=c; break; } } }
+  const out=[]; body.forEach(r=>{ const d=parseFlexDate(r[dateCol]); if(d){ const opp=(r[oppCol]||'').trim(); out.push({date:d,opponent:opp||'Avversario'}); } });
+  return out;
+}
+async function loadXLSX(){ const m=await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm'); return m.default||m; }
+function openImportMatches(){
+  recurringCSS(); window.__imp={matches:[]};
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-import" style="color:var(--brand)"></i> Importa partite</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:10px">Una partita per riga: <b>Data, Avversario</b> (es. <code>12/10/2026, San Pio X</code>). Vanno bene le date tipo gg/mm/aaaa o aaaa-mm-gg. Puoi incollare direttamente da Excel/Fogli, oppure caricare un file CSV/XLSX.</p>
+      <textarea class="imp-ta" id="imp-text" placeholder="12/10/2026, San Pio X&#10;19/10/2026, Ferrini&#10;26/10/2026, Volley Ozieri"></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="impAnalyzeText()"><i class="fa-solid fa-wand-magic-sparkles"></i> Analizza testo</button>
+        <label class="btn btn-ghost btn-sm" style="cursor:pointer"><i class="fa-solid fa-folder-open"></i> Carica file<input type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" style="display:none" onchange="impFile(this)"></label>
+      </div>
+      <div class="imp-prev" id="imp-preview"></div>
+      <button class="btn btn-accent" id="imp-go" style="width:100%;margin-top:12px" disabled onclick="impConfirm()"><i class="fa-solid fa-check"></i> Importa le partite</button>
+    </div>`, true);
+}
+function impShow(matches){
+  window.__imp.matches=matches;
+  const box=document.getElementById('imp-preview'), go=document.getElementById('imp-go');
+  if(!matches.length){ if(box) box.innerHTML='<p class="hint" style="margin-top:12px">Nessuna partita riconosciuta. Controlla che ci siano una data e un avversario per riga.</p>'; if(go) go.disabled=true; return; }
+  if(box) box.innerHTML=`<div style="font-size:.75rem;color:var(--muted);margin:12px 0 4px;font-weight:700">${matches.length} partite riconosciute</div>`+matches.map(m=>`<div class="imp-row"><span class="d">${fmtDate(m.date)}</span> <span>${m.opponent}</span></div>`).join('');
+  if(go) go.disabled=false;
+}
+function impAnalyzeText(){ const t=document.getElementById('imp-text'); impShow(detectMatches(parseCSVText(t?t.value:''))); }
+function impFile(input){
+  const f=input.files[0]; if(!f) return; const name=(f.name||'').toLowerCase();
+  if(name.endsWith('.xlsx')||name.endsWith('.xls')){
+    const box=document.getElementById('imp-preview'); if(box) box.innerHTML='<p class="hint" style="margin-top:12px">Leggo il file Excel…</p>';
+    const rd=new FileReader(); rd.onload=async()=>{ try{ const XLSX=await loadXLSX(); const wb=XLSX.read(new Uint8Array(rd.result),{type:'array'}); const csv=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); impShow(detectMatches(parseCSVText(csv))); }catch(e){ if(box) box.innerHTML='<p class="hint" style="margin-top:12px">Non riesco a leggere il file Excel offline. Salvalo come CSV, oppure incolla il testo qui sopra.</p>'; } };
+    rd.readAsArrayBuffer(f);
+  } else { const rd=new FileReader(); rd.onload=()=>{ const t=document.getElementById('imp-text'); if(t) t.value=rd.result; impShow(detectMatches(parseCSVText(rd.result))); }; rd.readAsText(f); }
+}
+function impConfirm(){
+  const list=(window.__imp&&window.__imp.matches)||[]; if(!list.length) return;
+  list.forEach(m=>DB.events.push({id:uid(),type:'Partita',date:m.date,notes:m.opponent,result:null}));
+  save(); closeModal();
+  const d=new Date(list[0].date+'T00:00:00'); if(!isNaN(d.getTime())){ CAL_Y=d.getFullYear(); CAL_M=d.getMonth(); CAL_SEL=list[0].date; }
+  renderCalendar(); toast(list.length+' partite importate');
 }
 function addEvent(e){
     e.preventDefault();
