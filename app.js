@@ -2435,7 +2435,7 @@ function renderGradeTable(c){
     if(!c.tr.exercises.length){tbl.innerHTML=`<tbody><tr><td style="padding:1.4rem;color:var(--muted-2);font-style:italic">Aggiungi almeno un esercizio per iniziare a votare.</td></tr></tbody>`;return;}
     const roster=activePlayers();
     if(!roster.length){tbl.innerHTML=`<tbody><tr><td style="padding:1.4rem;color:var(--muted-2)">Nessun atleta disponibile.</td></tr></tbody>`;return;}
-    const head=`<thead><tr><th style="text-align:left">Giocatore</th>${c.tr.exercises.map(x=>`<th title="${x.cat}">${x.name.length>14?x.name.slice(0,13)+'…':x.name}</th>`).join('')}<th>Media</th><th>Nota</th></tr></thead>`;
+    const head=`<thead><tr><th style="text-align:left">Giocatore</th>${c.tr.exercises.map(x=>`<th title="${x.cat}" style="max-width:120px"><span class="marquee">${x.name}</span></th>`).join('')}<th>Media</th><th>Nota</th></tr></thead>`;
     const body=roster.map(p=>{
         const g=c.tr.grades[p.id]||{};
         const cells=c.tr.exercises.map(x=>`<td><input class="grade-inp" data-p="${p.id}" data-x="${x.id}" type="number" min="1" max="10" step="0.5" inputmode="decimal" value="${g[x.id]!=null?g[x.id]:''}" oninput="setGrade(${p.id},${x.id},this)"></td>`).join('');
@@ -2447,6 +2447,7 @@ function renderGradeTable(c){
             <td><button class="btn ${hasNote?'btn-accent':'btn-ghost'} btn-icon" onclick="sessionNote(${p.id})" title="${hasNote?'Modifica nota':'Aggiungi nota'}"><i class="fa-solid fa-comment${hasNote?'':'-dots'}"></i></button></td></tr>`;
     }).join('');
     tbl.innerHTML=head+'<tbody>'+body+'</tbody>';
+    if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); }
 }
 function addExercise(e){
     e.preventDefault(); const c=currentTraining(); if(!c)return;
