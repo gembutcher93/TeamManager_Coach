@@ -801,6 +801,7 @@ function go(sec){
     (RENDERERS[sec]||(()=>{}))();
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
+  if (window.Marquee) window.Marquee.refresh();
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('backdrop').classList.remove('show');}
