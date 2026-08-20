@@ -764,6 +764,15 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-sliders"></i> Motore voto <span class="pill" style="margin-left:6px">admin</span></h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Regola quanto pesa ogni fondamentale per ruolo (ricezione, attacco, muro, ace…), con anteprima live. Le partite già registrate si ricalcolano da sole. Area riservata: richiede password.</p>
             <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
+        <div class="card"><h3><i class="fa-solid fa-palette"></i> Aspetto</h3>
+            <div class="fg" style="margin-bottom:12px"><label>Nome squadra</label>
+                <input value="${(DB.teamName||'').replace(/"/g,'&quot;')}" onchange="setTeamName(this.value)" style="width:100%;padding:11px;border-radius:10px;background:var(--surface);color:inherit;border:1px solid var(--line)"></div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap">
+                <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Accento<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.brand)||'#22C55E')}" oninput="setColor('brand',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
+                <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Sfondo<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.bg)||'#060A18')}" oninput="setColor('bg',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
+                <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Testo<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.text)||'#F3F7FC')}" oninput="setColor('text',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
+            </div>
+            <button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="resetTheme()"><i class="fa-solid fa-rotate-left"></i> Ripristina colori</button></div>
         <div class="card"><h3><i class="fa-solid fa-people-group"></i> Le mie squadre</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Gestisci più squadre sullo stesso dispositivo (es. calcio, pallavolo, basket), ognuna coi suoi dati e un PIN. Utile per una società polisportiva.</p>
             <button class="btn btn-ghost" onclick="openTeamsMenu()"><i class="fa-solid fa-people-group"></i> Gestisci squadre</button></div>
@@ -1271,6 +1280,7 @@ function openFieldEditor(exKey, exLabel){
         <button class="fe-btn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i></button>
       </div>
       <div class="fe-group">
+        <button class="fe-btn" onclick="feOpenPresets()" title="Schemi pronti"><i class="fa-solid fa-book"></i></button>
         <button class="fe-btn" onclick="feClear()" title="Pulisci tutto"><i class="fa-solid fa-trash-can"></i></button>
         <button class="btn btn-accent btn-sm" onclick="feSave()">${saveBtn}</button>
         <button class="fe-btn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i></button>
@@ -1350,6 +1360,20 @@ function feBindPointer(){
   });
 }
 function feRecomputeSeq(els){ const s={player:0,opp:0}; (els||[]).forEach(e=>{ if((e.type==='player'||e.type==='opp')&&e.n>s[e.type]) s[e.type]=e.n; }); return s; }
+function feOpenPresets(){
+  const list=(window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[];
+  if(!list.length){ toast('Nessuno schema per questo sport','info'); return; }
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-book" style="color:var(--brand)"></i> Schemi pronti</h3><button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body"><p class="hint" style="margin-bottom:10px">Scegli uno schema: si carica sul campo, poi lo modifichi e salvi come vuoi.</p>
+    <div class="sub-list">${list.map((s,i)=>`<button class="sub-opt" style="flex-direction:column;align-items:flex-start;gap:2px" onclick="feApplyModel(${i});closeModal()"><b>${s.name}</b>${s.desc?`<span style="color:var(--muted);font-weight:400;font-size:.82rem">${s.desc}</span>`:''}</button>`).join('')}</div></div>`, true);
+}
+function feApplyModel(i){
+  const s=((window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[])[i]; if(!s||!FE) return;
+  const sx=FE.W/400, sy=FE.H/600;
+  FE.elements=(s.E||[]).map(e=>({type:e.t,x:e.x*sx,y:e.y*sy,n:e.n}));
+  FE.arrows=(s.A||[]).map(a=>({from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d}));
+  FE.seq=feRecomputeSeq(FE.elements); feRedraw();
+}
 function exKeyOf(sport,cat,name){ return (sport+'|'+cat+'|'+name).toLowerCase(); }
 function openExerciseDraw(name,cat){ openFieldEditor(exKeyOf(curSport(),cat,name), name); }
 async function feSave(){
@@ -2054,6 +2078,7 @@ window.addEventListener('resize',()=>{if(document.getElementById('tattica').clas
 
 buildLayout();
 renderTeamName();
+applyTheme();
 renderDashboard();
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 
@@ -2760,6 +2785,15 @@ function renderTierCard(id, width){
 }
 /* ---- OFFICINA CARD (studio) ---- */
 let CARD_STUDIO=null;
+function shade(hex,amt){ hex=(hex||'').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16); if(isNaN(n))return '#'+hex; let r=Math.min(255,(n>>16)+amt),g=Math.min(255,((n>>8)&255)+amt),b=Math.min(255,(n&255)+amt); return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
+function applyTheme(){ const t=(DB.settings&&DB.settings.theme)||{}, r=document.documentElement.style;
+  if(t.brand){ r.setProperty('--brand',t.brand); r.setProperty('--brand-deep',shade(t.brand,-20)); r.setProperty('--ok',t.brand); }
+  if(t.bg){ r.setProperty('--ink',t.bg); r.setProperty('--surface',shade(t.bg,12)); r.setProperty('--surface-2',shade(t.bg,22)); r.setProperty('--surface-3',shade(t.bg,34)); }
+  if(t.text){ r.setProperty('--text',t.text); }
+}
+function setColor(field,val){ DB.settings=DB.settings||{}; DB.settings.theme=DB.settings.theme||{}; DB.settings.theme[field]=val; save(); applyTheme(); }
+function resetTheme(){ if(DB.settings) DB.settings.theme={}; save(); location.reload(); }
+function setTeamName(v){ v=(v||'').trim(); if(!v) return; DB.teamName=v; save(); renderTeamName(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); }
 function openTeamsMenu(){
   let profs=getProfiles();
   if(!profs.length){ profs=[{id:'',name:(DB.teamName||'Squadra 1'),pin:''}]; setProfiles(profs); }
