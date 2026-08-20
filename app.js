@@ -1,33 +1,28 @@
-/* ===== CONFIG DEMO (punto unico da toccare) ===== */
-const DEMO = {
-  ON: true,        // false = disattiva il timer demo
-  DAYS: 20,        // durata in giorni dalla prima apertura
-  EXPIRE: ''       // opz. data fissa 'YYYY-MM-DD' — se valorizzata ha priorità su DAYS
-};
-function demoExpiry(){
-  if(!DEMO.ON) return null;
-  if(DEMO.EXPIRE) return new Date(DEMO.EXPIRE+'T23:59:59').getTime();
-  let t=+localStorage.getItem('demo_start');
-  if(!t){ t=Date.now(); localStorage.setItem('demo_start',t); }
-  return t + DEMO.DAYS*86400000;
+/* =========================================================
+   INTERRUTTORE + CONFIG — punto unico da toccare per il deploy
+   ========================================================= */
+const DEMO_BUILD = false;                 // false = completa; true sul deploy demo
+const DEMO_DAYS = 20;
+const DEMO_HARD_DEADLINE = '2026-12-31';  // oltre questa data la demo e' morta per tutti, comunque
+const CARD_STUDIO_ENABLED = false;        // officina card nascosta (si riattiva con true)
+const CONTACT_INFO = '[tuo contatto qui]';// mostrato nella schermata di scadenza
+const STRIPE_MONTHLY_URL = '';            // lasciare vuoto per ora (nessun bottone); si incolla dopo
+const STRIPE_ANNUAL_URL  = '';            // idem
+/* Tutta la logica demo (countdown, blocco a scadenza) si attiva SOLO se DEMO_BUILD===true. */
+
+/* ---------- STATO PROVA (solo DEMO_BUILD) ---------- */
+function demoDaysLeft(){
+  const raw=localStorage.getItem('vt_demo_start');
+  if(!raw) return DEMO_DAYS;
+  const elapsed=Math.floor((Date.now()-new Date(raw).getTime())/86400000);
+  return DEMO_DAYS-elapsed;
 }
-function demoDaysLeft(){ const e=demoExpiry(); return e==null?null:Math.ceil((e-Date.now())/86400000); }
-function renderDemo(){
-  if(!DEMO.ON) return;
-  const left=demoDaysLeft();
-  if(left<=0){ showDemoLock(); return; }
-  const dash=document.getElementById('dashboard'); if(!dash) return;
-  let b=document.getElementById('demo-badge');
-  if(!b){ b=document.createElement('div'); b.id='demo-badge'; dash.prepend(b); }
-  b.style.cssText='margin:0 0 12px;padding:7px 12px;border-radius:10px;font:600 .78rem/1.2 Urbanist,sans-serif;color:#04140A;background:var(--brand);display:inline-block;';
-  b.textContent=`Versione Demo · scade tra ${left} giorn${left===1?'o':'i'}`;
+function demoExpired(){
+  if(Date.now() > new Date(DEMO_HARD_DEADLINE+'T23:59:59').getTime()) return true; // il hard deadline vince sempre
+  return demoDaysLeft()<=0;
 }
-function showDemoLock(){
-  if(document.getElementById('demo-lock')) return;
-  const o=document.createElement('div'); o.id='demo-lock';
-  o.style.cssText='position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;background:linear-gradient(170deg,#0A1020,#060A18);color:#F3F7FC;font-family:Urbanist,system-ui,sans-serif;';
-  o.innerHTML='<div style="font-size:44px">⏳</div><h2 style="font-family:Outfit,sans-serif;font-size:1.6rem;margin:12px 0 8px">Periodo demo terminato</h2><p style="color:#8395B4;max-width:340px;line-height:1.5">La versione di prova è scaduta. Contatta l\'amministratore per continuare.</p>';
-  document.body.appendChild(o);
+function activateDemo(){
+  if(!localStorage.getItem('vt_demo_start')) localStorage.setItem('vt_demo_start', new Date().toISOString());
 }
 
 /* =========================================================
@@ -448,11 +443,139 @@ function loadDB(){
     }catch(e){}
     return seedDB();
 }
+const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra salvato per questo profilo
 let DB = loadDB();
 if(!DB.trainings) DB.trainings = {};
 if(!DB.nextId) DB.nextId = Date.now();
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
+
+/* =========================================================
+   TUTORIAL — primo avvio (ENTRAMBE le build), riapribile da Impostazioni.
+   ========================================================= */
+const ONB_STEPS = [
+  {icon:'fa-shield-halved',title:'Crea la tua squadra',body:'Dai un nome alla squadra e scegli lo sport — pallavolo, calcio o basket — da Impostazioni. Si cambia quando vuoi.'},
+  {icon:'fa-users',title:'Aggiungi i giocatori',body:'Vai su Roster &amp; Ruoli e costruisci la rosa: nome, numero, ruolo. Da lì assegni anche capitano e vice capitano.'},
+  {icon:'fa-calendar-days',title:'Pianifica gli allenamenti',body:'In Calendario crei sedute singole o serie ricorrenti, e assegni gli esercizi da far votare.'},
+  {icon:'fa-clipboard-list',title:'In partita usa lo Scout',body:'Durante la gara registra i fondamentali in Scout Gara: il voto di ogni giocatore nasce automaticamente da lì.'},
+  {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'}
+];
+const ONB_DEMO_STEPS = [
+  {icon:'fa-hourglass-half',title:`${DEMO_DAYS} giorni per provarla`,body:`Usa l'app con la tua squadra vera per ${DEMO_DAYS} giorni. Alla scadenza scarichi un backup dei dati: le foto restano sul telefono e le ricarichi nella versione completa.`},
+  {icon:'fa-mobile-screen-button',title:"L'app dei giocatori è a parte",body:"Statistiche in tempo reale e card personali per i giocatori sono incluse solo con l'acquisto: in prova usi solo la parte coach."},
+  {icon:'fa-play',title:'Pronto a iniziare?',body:'Da quando attivi la prova parte il conto alla rovescia. Puoi rivedere questa guida quando vuoi da Impostazioni.'}
+];
+let _onbIdx=0, _onbList=[];
+function onbCSS(){
+  if(document.getElementById('onb-css')) return;
+  const st=document.createElement('style'); st.id='onb-css';
+  st.textContent=`
+  #onb-overlay{position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;padding:1.2rem;
+    background:rgba(4,8,18,.86);backdrop-filter:blur(6px);}
+  .onb-card{width:100%;max-width:460px;background:var(--surface,#0E1525);border:1px solid var(--line,#22304E);border-radius:20px;
+    padding:1.8rem 1.6rem;text-align:center;box-shadow:0 20px 50px -20px rgba(0,0,0,.7);animation:onbPop .25s cubic-bezier(.2,.8,.2,1);}
+  @keyframes onbPop{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:none}}
+  .onb-ic{width:64px;height:64px;border-radius:18px;background:rgba(34,197,94,.14);color:var(--brand,#22C55E);
+    display:flex;align-items:center;justify-content:center;font-size:1.7rem;margin:0 auto 1.1rem;}
+  .onb-card h3{font-family:'Outfit',sans-serif;font-size:1.3rem;font-weight:800;margin-bottom:.6rem;}
+  .onb-card p{color:var(--muted,#8395B4);font-size:.94rem;line-height:1.55;margin-bottom:1.5rem;}
+  .onb-dots{display:flex;gap:6px;justify-content:center;margin-bottom:1.3rem;}
+  .onb-dots span{width:7px;height:7px;border-radius:50%;background:var(--line,#22304E);transition:.2s;}
+  .onb-dots span.on{background:var(--brand,#22C55E);width:20px;border-radius:5px;}
+  .onb-skip{background:transparent;border:none;color:var(--muted-2,#5C6C8C);font-size:.82rem;font-weight:600;cursor:pointer;margin-top:1rem;padding:6px;width:100%;}
+  @media(min-width:600px){.onb-card{padding:2.2rem 2rem;}}
+  `;
+  document.head.appendChild(st);
+}
+function openOnboarding(force){
+  if(!force && localStorage.getItem('vt_tutorial_done')) return;
+  onbCSS();
+  _onbList = ONB_STEPS.concat(DEMO_BUILD?ONB_DEMO_STEPS:[]);
+  _onbIdx=0;
+  if(!document.getElementById('onb-overlay')){
+    const o=document.createElement('div'); o.id='onb-overlay';
+    document.body.appendChild(o);
+  }
+  onbRender();
+}
+function onbRender(){
+  const o=document.getElementById('onb-overlay'); if(!o) return;
+  const s=_onbList[_onbIdx]; const last=_onbIdx===_onbList.length-1;
+  const isDemoCta = last && DEMO_BUILD;
+  const label = isDemoCta ? 'Attiva versione di prova' : (last?'Inizia':'Avanti');
+  o.innerHTML=`<div class="onb-card">
+    <div class="onb-ic"><i class="fa-solid ${s.icon}"></i></div>
+    <h3>${s.title}</h3>
+    <p>${s.body}</p>
+    <div class="onb-dots">${_onbList.map((_,i)=>`<span class="${i===_onbIdx?'on':''}"></span>`).join('')}</div>
+    <button class="btn btn-accent" style="width:100%" onclick="onbNext()"><i class="fa-solid ${isDemoCta?'fa-play':'fa-arrow-right'}"></i> ${label}</button>
+    ${last?'':'<button class="onb-skip" onclick="onbFinish()">Salta</button>'}
+  </div>`;
+}
+function onbNext(){
+  if(_onbIdx>=_onbList.length-1){ onbFinish(); return; }
+  _onbIdx++; onbRender();
+}
+function onbFinish(){
+  localStorage.setItem('vt_tutorial_done','1');
+  if(DEMO_BUILD) activateDemo();
+  const o=document.getElementById('onb-overlay'); if(o) o.remove();
+  updateDemoBadge(); checkDemoLock();
+}
+
+/* =========================================================
+   COUNTDOWN + SCADENZA (solo DEMO_BUILD)
+   ========================================================= */
+function updateDemoBadge(){
+  const b=document.getElementById('demo-badge');
+  if(!DEMO_BUILD){ if(b) b.remove(); return; }
+  const side=document.querySelector('.side-foot');
+  if(!side) return;
+  let el=b;
+  if(!el){ el=document.createElement('p'); el.id='demo-badge'; el.style.cssText='margin-top:6px;font-size:.72rem;font-weight:700;letter-spacing:.3px;color:var(--brand,#22C55E);'; side.appendChild(el); }
+  const left=Math.max(0,demoDaysLeft());
+  el.textContent = `Prova - ${left} giorni rimasti`;
+}
+function dexpCSS(){
+  if(document.getElementById('dexp-css')) return;
+  const st=document.createElement('style'); st.id='dexp-css';
+  st.textContent=`
+  #dexp-overlay{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:1.2rem;
+    background:linear-gradient(170deg,#0A1020,#060A18);}
+  .dexp-card{width:100%;max-width:480px;background:var(--surface,#0E1525);border:1px solid var(--line,#22304E);border-radius:20px;
+    padding:2rem 1.7rem;text-align:center;box-shadow:0 20px 50px -20px rgba(0,0,0,.7);}
+  .dexp-ic{width:60px;height:60px;border-radius:16px;background:rgba(240,70,60,.14);color:var(--flame,#F0463C);
+    display:flex;align-items:center;justify-content:center;font-size:1.5rem;margin:0 auto 1rem;}
+  .dexp-card h2{font-family:'Outfit',sans-serif;font-size:1.5rem;font-weight:800;margin-bottom:.5rem;}
+  .dexp-card p{color:var(--muted,#8395B4);font-size:.94rem;line-height:1.55;}
+  .dexp-contact{margin-top:1.3rem;padding:.9rem 1rem;border-radius:12px;background:var(--surface-2,#141D31);border:1px solid var(--line,#22304E);font-size:.9rem;color:var(--text,#F3F7FC);}
+  .dexp-acts{display:flex;flex-direction:column;gap:10px;margin-top:1.1rem;}
+  @media(min-width:600px){.dexp-card{padding:2.4rem 2.2rem;}}
+  `;
+  document.head.appendChild(st);
+}
+function checkDemoLock(){
+  if(!DEMO_BUILD || !demoExpired()){ const o=document.getElementById('dexp-overlay'); if(o) o.remove(); return; }
+  dexpCSS();
+  if(document.getElementById('dexp-overlay')) return;
+  const stripeBtns = (STRIPE_MONTHLY_URL?`<button class="btn btn-accent" style="width:100%" onclick="window.open('${STRIPE_MONTHLY_URL}','_blank')"><i class="fa-solid fa-credit-card"></i> Abbonamento mensile</button>`:'')
+    + (STRIPE_ANNUAL_URL?`<button class="btn btn-ghost" style="width:100%" onclick="window.open('${STRIPE_ANNUAL_URL}','_blank')"><i class="fa-solid fa-credit-card"></i> Abbonamento annuale - risparmi</button>`:'');
+  const o=document.createElement('div'); o.id='dexp-overlay';
+  o.innerHTML=`<div class="dexp-card">
+    <div class="dexp-ic"><i class="fa-solid fa-gear"></i></div>
+    <h2>Impostazioni</h2>
+    <p>Prova terminata. Scarica i tuoi dati; ti invieremo la versione completa dove importare il backup.</p>
+    <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup dati</button>
+    <div class="dexp-contact">Per acquistare la versione completa contatta: <b>${CONTACT_INFO}</b></div>
+    ${stripeBtns?`<div class="dexp-acts">${stripeBtns}</div>`:''}
+  </div>`;
+  document.body.appendChild(o);
+}
+function checkOnboardingAndDemo(){
+  updateDemoBadge();
+  if(DEMO_BUILD && demoExpired()){ checkDemoLock(); return; }
+  if(FRESH_INSTALL && !localStorage.getItem('vt_tutorial_done')) openOnboarding(false);
+}
 
 /* ---------- HELPERS DATI ---------- */
 function playerById(id){ return DB.players.find(p=>p.id===id); }
@@ -777,15 +900,18 @@ function buildLayout(){
 
     <!-- BACKUP -->
     <section id="backup" class="section">
-        <div class="page-head"><div><div class="eyebrow">Sicurezza</div><h2>Backup &amp; Ripristino</h2>
-            <p class="sub">I dati vivono in questo browser. Esporta un file di backup per non perderli e per spostarli su un altro dispositivo.</p></div></div>
+        <div class="page-head"><div><div class="eyebrow">Configurazione</div><h2><i class="fa-solid fa-gear" style="font-size:1.4rem;color:var(--brand);margin-right:8px"></i>Impostazioni</h2>
+            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — esporta un backup per non perderli e per spostarli su un altro dispositivo.</p></div></div>
         <div class="card"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
-            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON.</p>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON. Salva i dati, non le foto: quelle restano sul dispositivo.</p>
             <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button></div>
-        <div class="card"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
+        ${DEMO_BUILD?'':`<div class="card"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
-            <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>
+            <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
+        <div class="card"><h3><i class="fa-solid fa-circle-play"></i> Guida</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Rivedi la guida introduttiva su squadra, giocatori, allenamenti, scout e card.</p>
+            <button class="btn btn-ghost" onclick="openOnboarding(true)"><i class="fa-solid fa-graduation-cap"></i> Rivedi tutorial</button></div>
         <div class="card"><h3 style="color:var(--flame)"><i class="fa-solid fa-trash-can" style="color:var(--flame)"></i> Azzera tutto</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Cancella ogni dato e riparte da zero. Operazione irreversibile.</p>
             <button class="btn btn-danger" onclick="resetAll()"><i class="fa-solid fa-bomb"></i> Reset completo</button></div>
@@ -811,9 +937,9 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-shield-halved"></i> Logo squadra</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica il logo della società (PNG, meglio senza sfondo). Comparirà sulle card sopra il numero di maglia; puoi posizionarlo dall'Officina card.</p>
             <button class="btn btn-ghost" onclick="pickTeamLogo()"><i class="fa-solid fa-upload"></i> Carica / cambia logo</button></div>
-        <div class="card"><h3><i class="fa-solid fa-id-badge"></i> Officina card</h3>
+        ${CARD_STUDIO_ENABLED?`<div class="card"><h3><i class="fa-solid fa-id-badge"></i> Officina card</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Posiziona foto, nome, numero, ruolo e overall su ogni tier (GOAT, Mythic, Diamond, Gold, Silver) con anteprima live. Salvi per il tuo dispositivo, o esporti il JSON per renderlo ufficiale nel deploy.</p>
-            <button class="btn btn-ghost" onclick="openCardStudio()"><i class="fa-solid fa-sliders"></i> Apri officina card</button></div>
+            <button class="btn btn-ghost" onclick="openCardStudio()"><i class="fa-solid fa-sliders"></i> Apri officina card</button></div>`:''}
     </section>`;
 }
 
@@ -834,7 +960,7 @@ function go(sec){
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
     setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
-    if(typeof renderDemo==='function') renderDemo();
+    updateDemoBadge(); checkDemoLock();
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('backdrop').classList.remove('show');}
@@ -2109,7 +2235,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='v6';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v26';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -2530,7 +2656,7 @@ initSchemes();
 renderTeamName();
 applyTheme();
 renderDashboard();
-renderDemo();
+checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 
@@ -2734,7 +2860,58 @@ const BASE_CARD_LAYOUT={
   tierName:{show:0,x:50,y:94,size:4,color:'#ffffff',align:'center'}
 };
 /* Incolla qui il JSON esportato dall'officina per renderlo ufficiale per tutti. */
-const DEPLOY_CARD_LAYOUTS={};
+const DEPLOY_CARD_LAYOUTS={
+  "goat": {
+    "photo": { "show": 1, "x": 50, "y": 23.5, "w": 86, "h": 47 },
+    "logo": { "show": 1, "x": 78, "y": 20.5, "w": 22.5 },
+    "overall": { "show": 1, "x": 18.5, "y": 20, "size": 11, "color": "#fff1b3", "align": "center" },
+    "role": { "show": 1, "x": 18.5, "y": 29, "size": 4.6, "color": "#ffcc02", "align": "center" },
+    "number": { "show": 1, "x": 77.5, "y": 28.5, "size": 6.2, "color": "#ffcc02", "align": "center" },
+    "name": { "show": 1, "x": 50, "y": 56.5, "size": 6.4, "color": "#fff7bd", "align": "center" },
+    "attrs": { "show": 1, "x": 50, "y": 67.5, "size": 6.4, "color": "#fff2d0" },
+    "tierName": { "show": 1, "x": 50, "y": 85, "size": 5.2, "color": "#ff6a00", "align": "center" }
+  },
+  "mythic": {
+    "photo": { "show": 1, "x": 50, "y": 31, "w": 66, "h": 42.5 },
+    "logo": { "show": 1, "x": 79.5, "y": 19, "w": 22 },
+    "overall": { "show": 1, "x": 19, "y": 18, "size": 12, "color": "#fcdbff", "align": "center" },
+    "role": { "show": 1, "x": 19, "y": 24.5, "size": 4.6, "color": "#ffffff", "align": "center" },
+    "number": { "show": 1, "x": 79, "y": 26.5, "size": 6.8, "color": "#ffedfe", "align": "center" },
+    "name": { "show": 1, "x": 50, "y": 57, "size": 7.2, "color": "#ffd7ff", "align": "center" },
+    "attrs": { "show": 1, "x": 50, "y": 72, "size": 6.6, "color": "#ffffff" },
+    "tierName": { "show": 1, "x": 50, "y": 88.5, "size": 4.2, "color": "#efcaff", "align": "center" }
+  },
+  "diamond": {
+    "photo": { "show": 1, "x": 50, "y": 30, "w": 66, "h": 44 },
+    "logo": { "show": 1, "x": 81.5, "y": 22, "w": 22.5 },
+    "overall": { "show": 1, "x": 17, "y": 21, "size": 12, "color": "#12fffe", "align": "center" },
+    "role": { "show": 1, "x": 17.5, "y": 29.5, "size": 5.4, "color": "#ffffff", "align": "center" },
+    "number": { "show": 1, "x": 81.5, "y": 30, "size": 6.2, "color": "#ffffff", "align": "center" },
+    "name": { "show": 1, "x": 50, "y": 57.5, "size": 7.4, "color": "#7bf7ff", "align": "center" },
+    "attrs": { "show": 1, "x": 50, "y": 73, "size": 7.8, "color": "#ffffff" },
+    "tierName": { "show": 1, "x": 50, "y": 88.5, "size": 4.2, "color": "#93e3fd", "align": "center" }
+  },
+  "gold": {
+    "photo": { "show": 1, "x": 50, "y": 26.5, "w": 66, "h": 49 },
+    "logo": { "show": 1, "x": 82.5, "y": 19.5, "w": 22 },
+    "overall": { "show": 1, "x": 17.5, "y": 18.5, "size": 11, "color": "#ffffff", "align": "center" },
+    "role": { "show": 1, "x": 17, "y": 28, "size": 6.2, "color": "#fcfcff", "align": "center" },
+    "number": { "show": 1, "x": 81.5, "y": 27.5, "size": 6.8, "color": "#ffffff", "align": "center" },
+    "name": { "show": 1, "x": 50, "y": 59.5, "size": 7, "color": "#ffffff", "align": "center" },
+    "attrs": { "show": 1, "x": 50, "y": 74.5, "size": 7.8, "color": "#ffffff" },
+    "tierName": { "show": 1, "x": 50, "y": 91, "size": 4.6, "color": "#c49e00", "align": "center" }
+  },
+  "silver": {
+    "photo": { "show": 1, "x": 50, "y": 29.5, "w": 72, "h": 44 },
+    "logo": { "show": 1, "x": 82.5, "y": 19.5, "w": 22 },
+    "overall": { "show": 1, "x": 17.5, "y": 18.5, "size": 13.6, "color": "#ffffff", "align": "center" },
+    "role": { "show": 1, "x": 17, "y": 28, "size": 5.2, "color": "#ffffff", "align": "center" },
+    "number": { "show": 1, "x": 82, "y": 28, "size": 6.4, "color": "#ffffff", "align": "center" },
+    "name": { "show": 1, "x": 50, "y": 58.5, "size": 7, "color": "#ffffff", "align": "center" },
+    "attrs": { "show": 1, "x": 50, "y": 73.5, "size": 7.8, "color": "#ffffff" },
+    "tierName": { "show": 1, "x": 50, "y": 90, "size": 4, "color": "#d6d6d6", "align": "center" }
+  }
+};
 function deepMerge(base,over){ const o=JSON.parse(JSON.stringify(base)); if(over) Object.keys(over).forEach(k=>{ o[k]=(typeof over[k]==='object'&&!Array.isArray(over[k]))?deepMerge(o[k]||{},over[k]):over[k]; }); return o; }
 function getCardLayout(tier){
   let l=deepMerge(BASE_CARD_LAYOUT, DEPLOY_CARD_LAYOUTS[tier]);
