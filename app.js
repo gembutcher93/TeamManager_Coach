@@ -922,7 +922,7 @@ function brandCSS(){
     const st=document.createElement('style'); st.id='brand-css';
     st.textContent=`
     .dash-head{display:flex;align-items:center;gap:14px;}
-    .dash-badge{width:66px;height:66px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
+    .dash-badge{width:145px;height:145px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
     .dash-badge:hover{border-color:var(--brand);}
     .dash-badge img{width:100%;height:100%;object-fit:contain;}
     .dash-badge i{font-size:1.7rem;color:var(--muted);}`;
