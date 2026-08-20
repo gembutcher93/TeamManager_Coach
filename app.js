@@ -922,7 +922,7 @@ function brandCSS(){
     const st=document.createElement('style'); st.id='brand-css';
     st.textContent=`
     .dash-head{display:flex;align-items:center;gap:14px;}
-    .dash-badge{width:145px;height:145px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
+    .dash-badge{width:66px;height:66px;flex:0 0 auto;border-radius:16px;background:var(--surface-2,rgba(255,255,255,.05));border:1px solid var(--line,rgba(255,255,255,.16));display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;transition:border-color .15s;}
     .dash-badge:hover{border-color:var(--brand);}
     .dash-badge img{width:100%;height:100%;object-fit:contain;}
     .dash-badge i{font-size:1.7rem;color:var(--muted);}`;
@@ -1280,7 +1280,6 @@ function openFieldEditor(exKey, exLabel){
         <button class="fe-btn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i></button>
       </div>
       <div class="fe-group">
-        <button class="fe-btn" onclick="feOpenPresets()" title="Schemi pronti"><i class="fa-solid fa-book"></i></button>
         <button class="fe-btn" onclick="feClear()" title="Pulisci tutto"><i class="fa-solid fa-trash-can"></i></button>
         <button class="btn btn-accent btn-sm" onclick="feSave()">${saveBtn}</button>
         <button class="fe-btn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i></button>
@@ -1297,7 +1296,7 @@ function openFieldEditor(exKey, exLabel){
   const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
   FE={sport,tool:'move',elements:[],arrows:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,arrowStart:null,exKey:exKey||null};
   feBindPointer(); feRedraw();
-  if(exKey){ cIdbGet('exdraw:'+exKey).then(raw=>{ if(!raw||!FE)return; try{ const m=JSON.parse(raw); FE.elements=m.elements||[]; FE.arrows=m.arrows||[]; FE.seq=feRecomputeSeq(FE.elements); feRedraw(); }catch(e){} }); }
+  if(exKey){ cIdbGet('exdraw:'+exKey).then(raw=>{ if(!FE)return; if(raw){ try{ const m=JSON.parse(raw); FE.elements=m.elements||[]; FE.arrows=m.arrows||[]; FE.seq=feRecomputeSeq(FE.elements); feRedraw(); }catch(e){} } else { const nm=exKey.split('|').slice(2).join('|'); const s=((window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[]).find(x=>x.name.toLowerCase()===nm); if(s) feApplyModelObj(s); } }); }
 }
 function closeFieldEditor(){ const o=document.getElementById('fe-overlay'); if(o) o.remove(); FE=null; }
 function feTool(t){ FE.tool=t; ['move','arrow','arrowd','erase'].forEach(x=>{const b=document.getElementById('fe-'+x); if(b) b.classList.toggle('on',x===t);}); }
@@ -1360,6 +1359,10 @@ function feBindPointer(){
   });
 }
 function feRecomputeSeq(els){ const s={player:0,opp:0}; (els||[]).forEach(e=>{ if((e.type==='player'||e.type==='opp')&&e.n>s[e.type]) s[e.type]=e.n; }); return s; }
+function hexA(hex,a){ hex=(hex||'').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16); if(isNaN(n))return hex; return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
+function schemeExists(sport,name){ name=(name||'').toLowerCase(); return !!((window.EX_SCHEMES&&window.EX_SCHEMES[sport])||[]).find(x=>x.name.toLowerCase()===name); }
+function feApplyModelObj(s){ if(!s||!FE)return; const sx=FE.W/400, sy=FE.H/600; FE.elements=(s.E||[]).map(e=>({type:e.t,x:e.x*sx,y:e.y*sy,n:e.n})); FE.arrows=(s.A||[]).map(a=>({from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d})); FE.seq=feRecomputeSeq(FE.elements); feRedraw(); }
+function initSchemes(){ const S=window.EX_SCHEMES; if(!S)return; ['calcio','pallavolo','basket'].forEach(sp=>{ const list=S[sp]||[]; if(!list.length)return; if(SPORT_CATS[sp]&&SPORT_CATS[sp].indexOf('Schemi pronti')<0) SPORT_CATS[sp].push('Schemi pronti'); EXERCISE_LIB[sp]=EXERCISE_LIB[sp]||{}; EXERCISE_LIB[sp]['Schemi pronti']=list.map(x=>x.name); }); CAT_COLOR['Schemi pronti']='#5b9dff'; }
 function feOpenPresets(){
   const list=(window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[];
   if(!list.length){ toast('Nessuno schema per questo sport','info'); return; }
@@ -2077,6 +2080,7 @@ document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.targe
 window.addEventListener('resize',()=>{if(document.getElementById('tattica').classList.contains('active')){const a=document.getElementById('court-area').getBoundingClientRect();initBoard();}});
 
 buildLayout();
+initSchemes();
 renderTeamName();
 applyTheme();
 renderDashboard();
@@ -2341,7 +2345,7 @@ function renderExLibList(){
   const q=(EXLIB_FILTER.q||'').toLowerCase().trim();
   const items=exLibFor(curSport()).filter(e=>(!EXLIB_FILTER.cat||e.cat===EXLIB_FILTER.cat) && (!q||e.name.toLowerCase().includes(q)||e.cat.toLowerCase().includes(q)));
   if(!items.length){ box.innerHTML='<p class="exlib-empty">Nessun esercizio trovato. Puoi comunque aggiungerne uno tuo dal modulo qui sotto.</p>'; return; }
-  box.innerHTML=items.map(e=>{ const dk=exKeyOf(curSport(),e.cat,e.name); const drawn=(DB.settings&&DB.settings.exDrawn&&DB.settings.exDrawn.includes(dk));
+  box.innerHTML=items.map(e=>{ const dk=exKeyOf(curSport(),e.cat,e.name); const drawn=(DB.settings&&DB.settings.exDrawn&&DB.settings.exDrawn.includes(dk))||schemeExists(curSport(),e.name);
     return `<div class="exlib-row">
       <span class="exlib-dot" style="background:${CAT_COLOR[e.cat]||'#8395B4'}"></span>
       <span class="exlib-name">${e.name}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
@@ -2788,8 +2792,8 @@ let CARD_STUDIO=null;
 function shade(hex,amt){ hex=(hex||'').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16); if(isNaN(n))return '#'+hex; let r=Math.min(255,(n>>16)+amt),g=Math.min(255,((n>>8)&255)+amt),b=Math.min(255,(n&255)+amt); return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1); }
 function applyTheme(){ const t=(DB.settings&&DB.settings.theme)||{}, r=document.documentElement.style;
   if(t.brand){ r.setProperty('--brand',t.brand); r.setProperty('--brand-deep',shade(t.brand,-20)); r.setProperty('--ok',t.brand); }
-  if(t.bg){ r.setProperty('--ink',t.bg); r.setProperty('--surface',shade(t.bg,12)); r.setProperty('--surface-2',shade(t.bg,22)); r.setProperty('--surface-3',shade(t.bg,34)); }
-  if(t.text){ r.setProperty('--text',t.text); }
+  if(t.bg){ r.setProperty('--ink',t.bg); r.setProperty('--surface',shade(t.bg,12)); r.setProperty('--surface-2',shade(t.bg,22)); r.setProperty('--surface-3',shade(t.bg,34)); r.setProperty('--line',shade(t.bg,30)); r.setProperty('--line-soft',shade(t.bg,20)); }
+  if(t.text){ r.setProperty('--text',t.text); r.setProperty('--muted',hexA(t.text,.62)); r.setProperty('--muted-2',hexA(t.text,.42)); }
 }
 function setColor(field,val){ DB.settings=DB.settings||{}; DB.settings.theme=DB.settings.theme||{}; DB.settings.theme[field]=val; save(); applyTheme(); }
 function resetTheme(){ if(DB.settings) DB.settings.theme={}; save(); location.reload(); }
