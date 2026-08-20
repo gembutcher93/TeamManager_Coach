@@ -1,7 +1,7 @@
 {
-  "name": "VolleyTeam Manager",
-  "short_name": "VolleyTeam",
-  "description": "Gestionale completo per l'allenatore di pallavolo: roster, calendario, scout statistico e lavagnetta tattica.",
+  "name": "AIRIM Polisport",
+  "short_name": "AIRIM",
+  "description": "Gestionale completo per allenatori di pallavolo, calcio e basket: roster, calendario, scout statistico per partite e allenamenti, formazione consigliata in base alle statistiche, libreria allenamenti più possibilità di creare i propri e lavagnetta tattica.",
   "lang": "it",
   "dir": "ltr",
   "start_url": "/",

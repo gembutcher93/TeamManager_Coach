@@ -1,3 +1,35 @@
+/* ===== CONFIG DEMO (punto unico da toccare) ===== */
+const DEMO = {
+  ON: true,        // false = disattiva il timer demo
+  DAYS: 20,        // durata in giorni dalla prima apertura
+  EXPIRE: ''       // opz. data fissa 'YYYY-MM-DD' — se valorizzata ha priorità su DAYS
+};
+function demoExpiry(){
+  if(!DEMO.ON) return null;
+  if(DEMO.EXPIRE) return new Date(DEMO.EXPIRE+'T23:59:59').getTime();
+  let t=+localStorage.getItem('demo_start');
+  if(!t){ t=Date.now(); localStorage.setItem('demo_start',t); }
+  return t + DEMO.DAYS*86400000;
+}
+function demoDaysLeft(){ const e=demoExpiry(); return e==null?null:Math.ceil((e-Date.now())/86400000); }
+function renderDemo(){
+  if(!DEMO.ON) return;
+  const left=demoDaysLeft();
+  if(left<=0){ showDemoLock(); return; }
+  const dash=document.getElementById('dashboard'); if(!dash) return;
+  let b=document.getElementById('demo-badge');
+  if(!b){ b=document.createElement('div'); b.id='demo-badge'; dash.prepend(b); }
+  b.style.cssText='margin:0 0 12px;padding:7px 12px;border-radius:10px;font:600 .78rem/1.2 Urbanist,sans-serif;color:#04140A;background:var(--brand);display:inline-block;';
+  b.textContent=`Versione Demo · scade tra ${left} giorn${left===1?'o':'i'}`;
+}
+function showDemoLock(){
+  if(document.getElementById('demo-lock')) return;
+  const o=document.createElement('div'); o.id='demo-lock';
+  o.style.cssText='position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px;background:linear-gradient(170deg,#0A1020,#060A18);color:#F3F7FC;font-family:Urbanist,system-ui,sans-serif;';
+  o.innerHTML='<div style="font-size:44px">⏳</div><h2 style="font-family:Outfit,sans-serif;font-size:1.6rem;margin:12px 0 8px">Periodo demo terminato</h2><p style="color:#8395B4;max-width:340px;line-height:1.5">La versione di prova è scaduta. Contatta l\'amministratore per continuare.</p>';
+  document.body.appendChild(o);
+}
+
 /* =========================================================
    VolleyTeam Manager — logica applicativa
    Dati in un unico oggetto DB persistito in localStorage.
@@ -801,7 +833,8 @@ function go(sec){
     (RENDERERS[sec]||(()=>{}))();
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
-  if (window.Marquee) window.Marquee.refresh();
+    setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
+    if(typeof renderDemo==='function') renderDemo();
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('backdrop').classList.remove('show');}
@@ -2496,6 +2529,8 @@ initSchemes();
 renderTeamName();
 applyTheme();
 renderDashboard();
+renderDemo();
+setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 
 /* =========================================================

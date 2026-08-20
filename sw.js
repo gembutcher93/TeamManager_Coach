@@ -1,8 +1,8 @@
-/* PolisportivaTeam Manager (Coach) - Service Worker
+/* VolleyTeam Manager (Coach) - Service Worker
    Aggiornamento controllato: il nuovo SW resta in attesa finché l'utente
    non conferma (banner o pulsante in Impostazioni). skipWaiting solo su richiesta.
    Bump CACHE_VERSION ad ogni rilascio. I dati utente (localStorage) non vengono mai toccati. */
-const CACHE_VERSION = 'volleyteam-v24.03';
+const CACHE_VERSION = 'volleyteam-v25';
 const APP_SHELL = [
   './',
   './index.html',
