@@ -5,7 +5,7 @@ const DEMO_BUILD = false;                 // false = completa; true sul deploy d
 const DEMO_DAYS = 20;
 const DEMO_HARD_DEADLINE = '2026-12-31';  // oltre questa data la demo e' morta per tutti, comunque
 const CARD_STUDIO_ENABLED = false;        // officina card nascosta (si riattiva con true)
-const CONTACT_INFO = '[tuo contatto qui]';// mostrato nella schermata di scadenza
+const CONTACT_INFO = '+39 3498290606';    // mostrato nella schermata di scadenza
 const STRIPE_MONTHLY_URL = '';            // lasciare vuoto per ora (nessun bottone); si incolla dopo
 const STRIPE_ANNUAL_URL  = '';            // idem
 /* Tutta la logica demo (countdown, blocco a scadenza) si attiva SOLO se DEMO_BUILD===true. */
