@@ -2069,22 +2069,6 @@ function resetAll(){
     });
 }
 
-/* =========================================================
-   INIT
-   ========================================================= */
-document.getElementById('confirm-yes').addEventListener('click',()=>{
-    if(_confirmCb)_confirmCb();document.getElementById('confirm-overlay').classList.remove('show');_confirmCb=null;
-});
-document.getElementById('confirm-no').addEventListener('click',()=>{document.getElementById('confirm-overlay').classList.remove('show');_confirmCb=null;});
-document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.target.id==='modal-overlay')closeModal();});
-window.addEventListener('resize',()=>{if(document.getElementById('tattica').classList.contains('active')){const a=document.getElementById('court-area').getBoundingClientRect();initBoard();}});
-
-buildLayout();
-initSchemes();
-renderTeamName();
-applyTheme();
-renderDashboard();
-ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 
 /* =========================================================
    AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
@@ -2494,6 +2478,24 @@ function playerTrainingStats(pId){
     const byCat={}; Object.keys(catSum).forEach(c=>byCat[c]=catSum[c]/catCnt[c]);
     return {avg: all.length? all.reduce((a,b)=>a+b,0)/all.length : null, count:sessions.length, sessions, byCat};
 }
+
+
+/* =========================================================
+   INIT
+   ========================================================= */
+document.getElementById('confirm-yes').addEventListener('click',()=>{
+    if(_confirmCb)_confirmCb();document.getElementById('confirm-overlay').classList.remove('show');_confirmCb=null;
+});
+document.getElementById('confirm-no').addEventListener('click',()=>{document.getElementById('confirm-overlay').classList.remove('show');_confirmCb=null;});
+document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.target.id==='modal-overlay')closeModal();});
+window.addEventListener('resize',()=>{if(document.getElementById('tattica').classList.contains('active')){const a=document.getElementById('court-area').getBoundingClientRect();initBoard();}});
+
+buildLayout();
+initSchemes();
+renderTeamName();
+applyTheme();
+renderDashboard();
+ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 
 /* =========================================================
    FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)
