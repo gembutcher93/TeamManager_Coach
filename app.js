@@ -913,9 +913,9 @@ const RENDERERS = {
 };
 function go(sec){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-    document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.nav button,#bottom-nav button').forEach(b=>b.classList.remove('active'));
     document.getElementById(sec).classList.add('active');
-    document.querySelector(`.nav button[data-sec="${sec}"]`).classList.add('active');
+    document.querySelectorAll(`.nav button[data-sec="${sec}"],#bottom-nav button[data-sec="${sec}"]`).forEach(b=>b.classList.add('active'));
     (RENDERERS[sec]||(()=>{}))();
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
@@ -2437,7 +2437,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v42';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v43';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
