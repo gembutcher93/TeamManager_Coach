@@ -693,6 +693,9 @@ function toast(msg,type='success'){
     stack.appendChild(el);
     setTimeout(()=>{el.style.animation='fadeOut .3s forwards';setTimeout(()=>el.remove(),300);},3200);
 }
+function iosToggle(checked,onchange,label){
+    return `<label class="ios-switch"><input type="checkbox" ${checked?'checked':''} onchange="${onchange}"><span class="ios-switch-track"><span class="ios-switch-thumb"></span></span>${label?`<span class="ios-switch-label">${label}</span>`:''}</label>`;
+}
 let _confirmCb=null;
 function confirmAction(text,cb){
     document.getElementById('confirm-text').textContent=text;
@@ -936,9 +939,7 @@ function buildLayout(){
             <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="resetTheme()"><i class="fa-solid fa-rotate-left"></i> Ripristina colori</button></div>
         <div class="card"><h3><i class="fa-solid fa-users-viewfinder"></i> Formazione consigliata</h3>
             <p style="color:var(--muted);margin-bottom:.8rem;font-size:.9rem">Quando condividi il pacchetto con un giocatore, puoi decidere se fargli vedere anche l'overall dei compagni nella formazione consigliata. Nome, numero e ruolo restano sempre visibili.</p>
-            <label style="display:flex;align-items:center;gap:8px;font-size:.9rem;cursor:pointer">
-                <input type="checkbox" ${showLineupOverall()?'checked':''} onchange="setShowLineupOverall(this.checked)"> Mostra overall dei compagni nella formazione consigliata
-            </label></div>
+            ${iosToggle(showLineupOverall(),'setShowLineupOverall(this.checked)','Mostra overall dei compagni nella formazione consigliata')}</div>
         ${MULTITEAM_ENABLED?`<div class="card"><h3><i class="fa-solid fa-people-group"></i> Le mie squadre</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Gestisci più squadre sullo stesso dispositivo (es. calcio, pallavolo, basket), ognuna coi suoi dati e un PIN. Utile per una società polisportiva.</p>
             <button class="btn btn-ghost" onclick="openTeamsMenu()"><i class="fa-solid fa-people-group"></i> Gestisci squadre</button></div>`:''}
@@ -2416,7 +2417,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v32';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v34';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -2592,22 +2593,8 @@ async function sharePlayer(id){
         <textarea id="share-code" readonly style="width:100%;height:90px;margin-top:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace">${code}</textarea>
         <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="copyShare()"><i class="fa-solid fa-copy"></i> Copia codice</button>
         ${DEMO_BUILD?`
-        <p class="hint" style="margin:14px 0 6px;text-align:center">QR per l'app Player</p>
-        <div id="share-qr" style="display:flex;justify-content:center;min-height:40px;align-items:center"><span class="hint">Genero il QR…</span></div>
-        <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice/QR di esempio, ma serve l'app Player per riceverlo.</p>`:''}
+        <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice di esempio, ma serve l'app Player per riceverlo.</p>`:''}
       </div>`);
-    if(DEMO_BUILD) genShareQR(code);
-}
-async function loadQR(){ const m=await import('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm'); return m.default||m; }
-async function genShareQR(text){
-    const box=document.getElementById('share-qr'); if(!box) return;
-    try{
-        const QR=await loadQR();
-        const url=await QR.toDataURL(text,{margin:1,width:220,errorCorrectionLevel:'L'});
-        if(document.getElementById('share-qr')) box.innerHTML=`<img src="${url}" alt="QR condivisione" style="width:100%;max-width:220px;border-radius:10px">`;
-    }catch(e){
-        if(document.getElementById('share-qr')) box.innerHTML='<span class="hint">Codice troppo lungo per il QR: usa il testo o il file.</span>';
-    }
 }
 function copyShare(){
     const ta=document.getElementById('share-code'); ta.select();
@@ -3472,7 +3459,7 @@ function renderCardStudioProps(){
   const box=document.getElementById('cs-props'); if(!box) return;
   const el=CARD_STUDIO.draft[CARD_STUDIO.el]; if(!el){ box.innerHTML=''; return; }
   const row=(lb,key,min,max,step)=>`<div class="cs-row"><span>${lb}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${el[key]}" oninput="cardStudioSet('${key}',this.value)"><span class="cs-v">${(+el[key]).toFixed(key==='color'?0:1)}</span></div>`;
-  let h=`<label class="cs-toggle"><input type="checkbox" ${el.show?'checked':''} onchange="cardStudioSet('show',this.checked?1:0)"> Mostra elemento</label>`;
+  let h=`<div style="margin:.8rem 0 .6rem">${iosToggle(!!el.show,"cardStudioSet('show',this.checked?1:0)",'Mostra elemento')}</div>`;
   if(CARD_STUDIO.el==='photo'){
     h+=row('X','x',0,100,0.5)+row('Y','y',0,100,0.5)+row('Larghezza','w',10,100,0.5)+row('Altezza','h',10,100,0.5);
   } else if(CARD_STUDIO.el==='logo'){
@@ -3525,7 +3512,6 @@ function cardStudioCSS(){
   .cs-chips{display:flex;flex-wrap:wrap;gap:6px;}
   .cs-chip{border:1px solid var(--border,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:9px;padding:5px 10px;font-size:.78rem;font-weight:700;cursor:pointer;}
   .cs-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}
-  .cs-toggle{display:flex;align-items:center;gap:8px;font-size:.85rem;margin:.8rem 0 .4rem;}
   .cs-row{display:grid;grid-template-columns:92px 1fr 42px;align-items:center;gap:8px;margin:.3rem 0;font-size:.8rem;}
   .cs-row input[type=range]{width:100%;} .cs-row input[type=color]{width:44px;height:28px;border:none;background:none;} .cs-row select{padding:5px;border-radius:8px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--border,rgba(255,255,255,.18));}
   .cs-v{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;}

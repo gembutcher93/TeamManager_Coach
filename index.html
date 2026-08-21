@@ -113,6 +113,16 @@
     .btn-sm{padding:7px 11px;font-size:.82rem;border-radius:9px;}
     .btn-icon{padding:8px 10px;}
 
+    /* ===== iOS-STYLE TOGGLE SWITCH ===== */
+    .ios-switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none;min-height:44px;}
+    .ios-switch input{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;}
+    .ios-switch-track{position:relative;flex:0 0 auto;width:51px;height:31px;border-radius:999px;background:#8E8E93;transition:background .25s ease;}
+    .ios-switch-thumb{position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.3);transition:transform .25s cubic-bezier(.4,0,.2,1);}
+    .ios-switch input:checked ~ .ios-switch-track{background:#34C759;}
+    .ios-switch input:checked ~ .ios-switch-track .ios-switch-thumb{transform:translateX(20px);}
+    .ios-switch input:focus-visible ~ .ios-switch-track{outline:2px solid var(--brand);outline-offset:2px;}
+    .ios-switch-label{font-size:.9rem;font-weight:500;color:var(--text);}
+
     /* ===== TABLES ===== */
     .table-wrap{overflow-x:auto;border-radius:12px;}
     table{width:100%;border-collapse:collapse;font-size:.9rem;}
