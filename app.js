@@ -2238,7 +2238,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v27';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v28';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -2426,7 +2426,7 @@ function catsFor(sport){ return SPORT_CATS[sport||curSport()] || SPORT_CATS.pall
 function exLibFor(sport){
   sport=sport||curSport();
   const out=[]; const seen=new Set();
-  const push=(name,cat,custom)=>{ const key=(cat+'|'+name).toLowerCase(); if(seen.has(key))return; seen.add(key); out.push({name,cat,custom:!!custom}); };
+  const push=(name,cat,custom)=>{ const key=(cat+'|'+name).toLowerCase(); if(seen.has(key))return; seen.add(key); out.push(Object.assign({name,cat,custom:!!custom},getExMeta(sport,cat,name))); };
   const lib=EXERCISE_LIB[sport]||{};
   Object.keys(lib).forEach(cat=>lib[cat].forEach(n=>push(n,cat,false)));
   const custom=((DB.settings||{}).customExercises||{})[sport]||{};
@@ -2445,6 +2445,46 @@ function exerciseKnown(sport,name,cat){
   const has=arr=>(arr||[]).some(n=>n.toLowerCase()===name.toLowerCase());
   return has(lib[cat])||has(custom[cat]);
 }
+/* --- Campi ricchi esercizio: dur (min), focus (obiettivo), intensity (bassa|media|alta), desc ---
+   Salvati in un overlay separato (DB.settings.exMeta) cosi' funzionano sia sugli esercizi
+   custom sia su quelli built-in/libreria, senza toccare le liste esistenti. */
+function exSchemeDesc(sport,name){
+  const list=(window.EX_SCHEMES&&window.EX_SCHEMES[sport])||[];
+  const s=list.find(x=>x.name.toLowerCase()===(name||'').toLowerCase());
+  return (s&&s.desc)||'';
+}
+function getExMeta(sport,cat,name){
+  const k=exKeyOf(sport,cat,name);
+  const m=((DB.settings||{}).exMeta||{})[k]||{};
+  return {
+    dur:m.dur||null,
+    focus:m.focus||'',
+    intensity:m.intensity||'',
+    desc:m.desc||exSchemeDesc(sport,name)||''
+  };
+}
+function setExMeta(sport,cat,name,meta){
+  DB.settings=DB.settings||{}; DB.settings.exMeta=DB.settings.exMeta||{};
+  const k=exKeyOf(sport,cat,name); const clean={};
+  if(meta&&meta.dur) clean.dur=meta.dur;
+  if(meta&&meta.focus) clean.focus=(meta.focus+'').trim();
+  if(meta&&meta.intensity) clean.intensity=meta.intensity;
+  if(meta&&meta.desc) clean.desc=(meta.desc+'').trim();
+  if(Object.keys(clean).length) DB.settings.exMeta[k]=clean; else delete DB.settings.exMeta[k];
+  save();
+}
+function intensityColor(v){ return v==='alta'?'#EF4444':v==='media'?'#F5B301':v==='bassa'?'#22C55E':''; }
+function intensityLabel(v){ return v==='alta'?'Alta':v==='media'?'Media':v==='bassa'?'Bassa':''; }
+function isCustomExercise(sport,cat,name){
+  const cs=((DB.settings||{}).customExercises||{})[sport]||{};
+  return (cs[cat]||[]).some(n=>n.toLowerCase()===(name||'').toLowerCase());
+}
+function deleteCustomExercise(sport,cat,name){
+  DB.settings=DB.settings||{}; const cs=(DB.settings.customExercises||{})[sport]||{};
+  if(cs[cat]) cs[cat]=cs[cat].filter(n=>n.toLowerCase()!==name.toLowerCase());
+  if(DB.settings.exMeta) delete DB.settings.exMeta[exKeyOf(sport,cat,name)];
+  save();
+}
 /* --- Modale libreria esercizi --- */
 let EXLIB_FILTER={cat:'',q:''};
 function openExLibrary(){
@@ -2461,21 +2501,39 @@ function openExLibrary(){
         <input class="exlib-search" id="exlib-newname" placeholder="Es. Attacco primo tempo per centrali…">
         <div style="display:flex;gap:8px;margin-top:8px">
           <select class="exlib-search" id="exlib-newcat" style="flex:1"></select>
-          <button class="btn btn-accent" style="flex:0 0 auto;white-space:nowrap" onclick="createLibExercise()"><i class="fa-solid fa-plus"></i> Salva</button>
+          <input class="exlib-search" type="number" min="0" id="exlib-newdur" placeholder="Min" style="max-width:84px">
+        </div>
+        <input class="exlib-search" id="exlib-newfocus" placeholder="Obiettivo (facoltativo)" style="margin-top:8px">
+        <div class="seg" id="exlib-newint-seg" style="margin-top:8px">
+          ${['bassa','media','alta'].map(v=>`<button type="button" class="exlib-chip seg-btn" data-v="${v}" style="--c:${intensityColor(v)}" onclick="exlibNewSetIntensity('${v}')">${intensityLabel(v)}</button>`).join('')}
+        </div>
+        <textarea class="exlib-search" id="exlib-newdesc" rows="2" placeholder="Descrizione (facoltativa)" style="margin-top:8px;resize:vertical"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          <button class="btn btn-accent" style="white-space:nowrap" onclick="createLibExercise()"><i class="fa-solid fa-plus"></i> Salva</button>
         </div>
       </div>
-      <p class="exlib-hint">Tocca <b>+</b> per aggiungere alla seduta. Gli esercizi che scrivi a mano nella seduta finiscono qui in automatico.</p>
+      <p class="exlib-hint">Tocca <b>+</b> per aggiungere alla seduta, <b><i class="fa-solid fa-circle-info"></i></b> per i dettagli. Gli esercizi che scrivi a mano nella seduta finiscono qui in automatico.</p>
     </div>`, true);
   renderExLibCats(); renderExLibList();
   const nc=document.getElementById('exlib-newcat'); if(nc) nc.innerHTML=catsFor(curSport()).map(c=>`<option>${c}</option>`).join('');
+  window.__exlibNewInt='';
 }
+function exlibNewSetIntensity(v){ window.__exlibNewInt=v; document.querySelectorAll('#exlib-newint-seg .seg-btn').forEach(b=>b.classList.toggle('on',b.dataset.v===v)); }
 function createLibExercise(){
   const name=(document.getElementById('exlib-newname').value||'').trim();
   const cat=document.getElementById('exlib-newcat').value;
   if(!name){ toast('Scrivi il nome dell\'esercizio','info'); return; }
   if(exerciseKnown(curSport(),name,cat)){ toast('Esercizio già in libreria','info'); return; }
-  rememberCustomExercise(curSport(),name,cat); save();
+  rememberCustomExercise(curSport(),name,cat);
+  const dur=parseInt(document.getElementById('exlib-newdur').value,10)||null;
+  const focus=(document.getElementById('exlib-newfocus').value||'').trim();
+  const desc=(document.getElementById('exlib-newdesc').value||'').trim();
+  setExMeta(curSport(),cat,name,{dur,focus,intensity:window.__exlibNewInt||'',desc});
   document.getElementById('exlib-newname').value='';
+  document.getElementById('exlib-newdur').value='';
+  document.getElementById('exlib-newfocus').value='';
+  document.getElementById('exlib-newdesc').value='';
+  window.__exlibNewInt=''; document.querySelectorAll('#exlib-newint-seg .seg-btn').forEach(b=>b.classList.remove('on'));
   EXLIB_FILTER.cat=cat; EXLIB_FILTER.q=''; const qEl=document.getElementById('exlib-q'); if(qEl) qEl.value='';
   renderExLibCats(); renderExLibList();
   toast('Salvato in libreria: '+name);
@@ -2493,19 +2551,76 @@ function renderExLibList(){
   const items=exLibFor(curSport()).filter(e=>(!EXLIB_FILTER.cat||e.cat===EXLIB_FILTER.cat) && (!q||e.name.toLowerCase().includes(q)||e.cat.toLowerCase().includes(q)));
   if(!items.length){ box.innerHTML='<p class="exlib-empty">Nessun esercizio trovato. Puoi comunque aggiungerne uno tuo dal modulo qui sotto.</p>'; return; }
   box.innerHTML=items.map(e=>{ const dk=exKeyOf(curSport(),e.cat,e.name); const drawn=(DB.settings&&DB.settings.exDrawn&&DB.settings.exDrawn.includes(dk))||schemeExists(curSport(),e.name);
+    const ic=intensityColor(e.intensity);
+    const badges=(e.dur||e.intensity)?`<div class="exlib-meta">${e.dur?`<span class="exlib-badge"><i class="fa-solid fa-clock"></i> ${e.dur}'</span>`:''}${e.intensity?`<span class="exlib-badge" style="color:${ic};border-color:${ic}66"><i class="fa-solid fa-bolt"></i> ${intensityLabel(e.intensity)}</span>`:''}</div>`:'';
     return `<div class="exlib-row">
       <span class="exlib-dot" style="background:${CAT_COLOR[e.cat]||'#8395B4'}"></span>
-      <span class="exlib-name">${e.name}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
+      <div class="exlib-main">
+        <span class="exlib-name">${e.name}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
+        ${badges}
+      </div>
       <span class="exlib-cat">${e.cat}</span>
+      <button class="exlib-draw" title="Dettagli esercizio" onclick="openExDetail('${curSport()}','${e.cat.replace(/'/g,"\\'")}','${e.name.replace(/'/g,"\\'")}')"><i class="fa-solid fa-circle-info"></i></button>
       <button class="exlib-draw${drawn?' has':''}" title="Disegna schema" onclick="openExerciseDraw('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-pen-ruler"></i></button>
       <button class="exlib-add" onclick="addExFromLib('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-plus"></i></button>
     </div>`; }).join('');
+}
+function openExDetail(sport,cat,name){
+  exLibCSS();
+  const meta=getExMeta(sport,cat,name), custom=isCustomExercise(sport,cat,name), ic=intensityColor(meta.intensity);
+  const esc=s=>(s||'').replace(/"/g,'&quot;');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-circle-info" style="color:var(--brand)"></i> ${name}</h3>
+      <button class="modal-close" onclick="openExLibrary()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <span class="pill" style="background:${CAT_COLOR[cat]||'#8395B4'}22;color:${CAT_COLOR[cat]||'#8395B4'};border:1px solid ${CAT_COLOR[cat]||'#8395B4'}55">${cat}</span>
+        ${custom?'<span class="pill" style="background:var(--brand)22;color:var(--brand);border:1px solid var(--brand)55">Tuo</span>':''}
+        ${meta.dur?`<span class="pill"><i class="fa-solid fa-clock"></i> ${meta.dur} min</span>`:''}
+        ${meta.intensity?`<span class="pill" style="background:${ic}22;color:${ic};border:1px solid ${ic}55"><i class="fa-solid fa-bolt"></i> ${intensityLabel(meta.intensity)}</span>`:''}
+      </div>
+      ${meta.focus?`<p class="hint" style="margin-bottom:8px"><b>Obiettivo:</b> ${meta.focus}</p>`:''}
+      ${meta.desc?`<p style="margin-bottom:16px;line-height:1.5">${meta.desc}</p>`:'<p class="hint" style="margin-bottom:16px">Nessuna descrizione. Aggiungine una qui sotto.</p>'}
+      <h4 style="margin:0 0 8px;font-size:.8rem;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Modifica dettagli</h4>
+      <div class="form-row">
+        <div class="fg" style="max-width:140px"><label>Durata (min)</label><input type="number" min="0" id="exd-dur" value="${meta.dur||''}"></div>
+        <div class="fg"><label>Obiettivo</label><input id="exd-focus" placeholder="Es. Controllo orientato" value="${esc(meta.focus)}"></div>
+      </div>
+      <div class="fg"><label>Intensità</label>
+        <div class="seg" id="exd-int-seg">
+          ${['bassa','media','alta'].map(v=>`<button type="button" class="exlib-chip seg-btn${meta.intensity===v?' on':''}" data-v="${v}" style="--c:${intensityColor(v)}" onclick="exdSetIntensity('${v}')">${intensityLabel(v)}</button>`).join('')}
+        </div>
+      </div>
+      <div class="fg"><label>Descrizione</label><textarea id="exd-desc" rows="3" placeholder="Descrizione dell'esercizio…">${meta.desc||''}</textarea></div>
+      <div class="modal-buttons">
+        <button class="btn btn-ghost" onclick="openExLibrary()">‹ Torna alla libreria</button>
+        ${custom?`<button class="btn btn-ghost" style="color:#EF4444" onclick="confirmDeleteExercise('${sport}','${cat.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"><i class="fa-solid fa-trash-can"></i> Elimina</button>`:''}
+        <button class="btn btn-accent" onclick="saveExDetail('${sport}','${cat.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"><i class="fa-solid fa-check"></i> Salva</button>
+      </div>
+    </div>`, true);
+  window.__exdInt=meta.intensity||'';
+}
+function exdSetIntensity(v){ window.__exdInt=v; document.querySelectorAll('#exd-int-seg .seg-btn').forEach(b=>b.classList.toggle('on',b.dataset.v===v)); }
+function saveExDetail(sport,cat,name){
+  const dur=parseInt(document.getElementById('exd-dur').value,10)||null;
+  const focus=(document.getElementById('exd-focus').value||'').trim();
+  const desc=(document.getElementById('exd-desc').value||'').trim();
+  setExMeta(sport,cat,name,{dur,focus,intensity:window.__exdInt||'',desc});
+  toast('Dettagli salvati'); openExLibrary();
+}
+function confirmDeleteExercise(sport,cat,name){
+  confirmAction('Eliminare questo esercizio dalla libreria?',()=>{ deleteCustomExercise(sport,cat,name); toast('Esercizio eliminato','info'); openExLibrary(); });
 }
 function addExFromLib(name,cat){
   const c=currentTraining(); if(!c) return;
   if(c.tr.exercises.some(x=>x.name.toLowerCase()===name.toLowerCase())){ toast('Già presente nella seduta','info'); return; }
   const id=(c.tr.exercises.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
-  c.tr.exercises.push({id,name,cat}); save(); renderTraining(); toast('Aggiunto: '+name);
+  const meta=getExMeta(curSport(),cat,name);
+  const item={id,name,cat};
+  if(meta.dur) item.dur=meta.dur;
+  if(meta.focus) item.focus=meta.focus;
+  if(meta.intensity) item.intensity=meta.intensity;
+  if(meta.desc) item.desc=meta.desc;
+  c.tr.exercises.push(item); save(); renderTraining(); toast('Aggiunto: '+name);
 }
 function refreshExCats(){
   const sel=document.getElementById('ex-cat'); if(!sel) return;
@@ -2524,13 +2639,18 @@ function exLibCSS(){
   .exlib-list{overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;}
   .exlib-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:11px;background:var(--surface-2,rgba(255,255,255,.03));}
   .exlib-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
-  .exlib-name{font-weight:600;font-size:.9rem;flex:1;} .exlib-custom{font-style:normal;font-size:.62rem;background:var(--brand);color:#04140a;border-radius:5px;padding:0 5px;vertical-align:middle;}
+  .exlib-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
+  .exlib-name{font-weight:600;font-size:.9rem;} .exlib-custom{font-style:normal;font-size:.62rem;background:var(--brand);color:#04140a;border-radius:5px;padding:0 5px;vertical-align:middle;}
   .exlib-cat{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;}
   .exlib-add{flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:none;background:var(--brand);color:#04140a;font-weight:800;cursor:pointer;}
   .exlib-draw{flex:0 0 auto;width:34px;height:34px;border-radius:9px;border:1px solid var(--line,rgba(255,255,255,.18));background:transparent;color:var(--muted);cursor:pointer;}
   .exlib-draw.has{border-color:var(--brand);color:var(--brand);}
   .exlib-hint{font-size:.76rem;color:var(--muted);margin:0;} .exlib-empty{color:var(--muted);font-style:italic;font-size:.86rem;}
-  .exlib-new{border-top:1px solid var(--border,rgba(255,255,255,.12));padding-top:12px;margin-top:2px;}`;
+  .exlib-new{border-top:1px solid var(--border,rgba(255,255,255,.12));padding-top:12px;margin-top:2px;}
+  .exlib-meta{display:flex;gap:6px;flex-wrap:wrap;}
+  .exlib-badge{font-size:.68rem;border:1px solid var(--border,rgba(255,255,255,.18));border-radius:8px;padding:1px 6px;color:var(--muted);display:inline-flex;align-items:center;gap:3px;}
+  .seg{display:flex;gap:6px;flex-wrap:wrap;}
+  .seg .seg-btn{border-radius:20px;}`;
   document.head.appendChild(st);
 }
 function currentTraining(){
@@ -2555,8 +2675,12 @@ function renderTraining(){
     // chips esercizi
     const chips=document.getElementById('ex-chips');
     if(!c.tr.exercises.length){chips.innerHTML='<p style="color:var(--muted-2);font-style:italic;font-size:.88rem">Nessun esercizio ancora. Aggiungine uno qui sopra.</p>';}
-    else chips.innerHTML=c.tr.exercises.map(x=>`<span class="pill" style="background:${CAT_COLOR[x.cat]||'var(--surface-3)'}22;color:${CAT_COLOR[x.cat]||'var(--silver)'};border:1px solid ${CAT_COLOR[x.cat]||'var(--line)'}55;margin:0 6px 6px 0;padding:6px 10px;font-size:.8rem">
-        <b>${x.name}</b> · ${x.cat} <i class="fa-solid fa-xmark" style="margin-left:6px;cursor:pointer;opacity:.7" onclick="removeExercise(${x.id})"></i></span>`).join('');
+    else chips.innerHTML=c.tr.exercises.map(x=>{
+        const ic=intensityColor(x.intensity);
+        const tip=[x.dur?x.dur+' min':'',x.intensity?'Intensità '+intensityLabel(x.intensity):'',x.desc||''].filter(Boolean).join(' · ');
+        return `<span class="pill" title="${tip.replace(/"/g,'&quot;')}" style="background:${CAT_COLOR[x.cat]||'var(--surface-3)'}22;color:${CAT_COLOR[x.cat]||'var(--silver)'};border:1px solid ${CAT_COLOR[x.cat]||'var(--line)'}55;margin:0 6px 6px 0;padding:6px 10px;font-size:.8rem">
+        <b>${x.name}</b> · ${x.cat}${x.dur?` · ${x.dur}'`:''}${x.intensity?` <i class="fa-solid fa-bolt" style="color:${ic}"></i>`:''} <i class="fa-solid fa-xmark" style="margin-left:6px;cursor:pointer;opacity:.7" onclick="removeExercise(${x.id})"></i></span>`;
+    }).join('');
     renderGradeTable(c);
 }
 function renderGradeTable(c){
@@ -2584,7 +2708,13 @@ function addExercise(e){
     const id=(c.tr.exercises.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
     const cat=document.getElementById('ex-cat').value;
     const known=exerciseKnown(curSport(),name,cat);
-    c.tr.exercises.push({id,name,cat});
+    const meta=getExMeta(curSport(),cat,name);
+    const item={id,name,cat};
+    if(meta.dur) item.dur=meta.dur;
+    if(meta.focus) item.focus=meta.focus;
+    if(meta.intensity) item.intensity=meta.intensity;
+    if(meta.desc) item.desc=meta.desc;
+    c.tr.exercises.push(item);
     rememberCustomExercise(curSport(),name,cat);
     save(); e.target.reset(); refreshExCats(); renderTraining();
     toast(known?'Esercizio aggiunto':'Aggiunto e salvato in libreria ✓');
