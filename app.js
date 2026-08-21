@@ -1428,44 +1428,57 @@ function impConfirm(){
 }
 /* ================= EDITOR ESERCIZI SUL CAMPO ================= */
 let FE=null;
+function feSideGet(){ try{ return localStorage.getItem('fe_side')==='right'?'right':'left'; }catch(e){ return 'left'; } }
+function feSideSet(v){ try{ localStorage.setItem('fe_side',v); }catch(e){} }
+function feToggleSide(){
+  const o=document.getElementById('fe-overlay'); if(!o) return;
+  const next = o.classList.contains('fe-side-right') ? 'left' : 'right';
+  o.classList.toggle('fe-side-right', next==='right');
+  feSideSet(next);
+}
 function openFieldEditor(exKey, exLabel){
   fieldEditorCSS();
   const sport=curSport();
-  const saveBtn = exKey ? '<i class="fa-solid fa-floppy-disk"></i> Salva' : '<i class="fa-solid fa-download"></i> Scarica PNG';
-  const host=document.createElement('div'); host.id='fe-overlay'; host.className='fe-overlay';
+  const saveIcon = exKey ? '<i class="fa-solid fa-floppy-disk"></i>' : '<i class="fa-solid fa-download"></i>';
+  const saveLabel = exKey ? 'Salva' : 'Scarica';
+  const side=feSideGet();
+  const host=document.createElement('div'); host.id='fe-overlay'; host.className='fe-overlay'+(side==='right'?' fe-side-right':'');
   host.innerHTML=`
-    <div class="fe-bar">
-      <div class="fe-group">
-        <button class="fe-btn" onclick="feAdd('player')" title="Nostro giocatore"><span class="fe-dot" style="background:#22C55E"></span></button>
-        <button class="fe-btn" onclick="feAdd('opp')" title="Avversario"><span class="fe-dot" style="background:#EF4444"></span></button>
-        <button class="fe-btn" onclick="feAdd('ball')" title="Pallone"><i class="fa-solid fa-futbol"></i></button>
-        <button class="fe-btn" onclick="feAdd('cone')" title="Cono" style="font-weight:900;color:#F97316">▲</button>
+    <div class="fe-sidebar" id="fe-sidebar">
+      <button class="fe-side-toggle" onclick="feToggleSide()" title="Sposta la barra dall'altro lato"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+      <div class="fe-vgroup">
+        <button class="fe-vbtn" onclick="feAdd('player')" title="Nostro giocatore"><span class="fe-dot" style="background:#22C55E"></span><span class="fe-vlabel">Giocatore</span></button>
+        <button class="fe-vbtn" onclick="feAdd('opp')" title="Avversario"><span class="fe-dot" style="background:#EF4444"></span><span class="fe-vlabel">Avversario</span></button>
+        <button class="fe-vbtn" onclick="feAdd('ball')" title="Pallone"><i class="fa-solid fa-futbol"></i><span class="fe-vlabel">Pallone</span></button>
+        <button class="fe-vbtn" onclick="feAdd('cone')" title="Cono"><span style="font-weight:900;color:#F97316">▲</span><span class="fe-vlabel">Cono</span></button>
       </div>
-      <div class="fe-group">
-        <button class="fe-btn on" id="fe-move" onclick="feTool('move')" title="Sposta"><i class="fa-solid fa-up-down-left-right"></i></button>
-        <button class="fe-btn" id="fe-arrow" onclick="feTool('arrow')" title="Freccia movimento"><i class="fa-solid fa-arrow-right-long"></i></button>
-        <button class="fe-btn" id="fe-arrowd" onclick="feTool('arrowd')" title="Freccia passaggio (tratteggiata)"><i class="fa-solid fa-ellipsis"></i></button>
-        <button class="fe-btn" id="fe-zone" onclick="feTool('zone')" title="Zona colorata"><i class="fa-solid fa-vector-square"></i></button>
-        <button class="fe-btn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i></button>
+      <div class="fe-vgroup">
+        <button class="fe-vbtn on" id="fe-move" onclick="feTool('move')" title="Sposta"><i class="fa-solid fa-up-down-left-right"></i><span class="fe-vlabel">Sposta</span></button>
+        <button class="fe-vbtn" id="fe-arrow" onclick="feTool('arrow')" title="Freccia movimento"><i class="fa-solid fa-arrow-right-long"></i><span class="fe-vlabel">Freccia</span></button>
+        <button class="fe-vbtn" id="fe-arrowd" onclick="feTool('arrowd')" title="Freccia passaggio (tratteggiata)"><i class="fa-solid fa-ellipsis"></i><span class="fe-vlabel">Passaggio</span></button>
+        <button class="fe-vbtn" id="fe-zone" onclick="feTool('zone')" title="Zona colorata"><i class="fa-solid fa-vector-square"></i><span class="fe-vlabel">Zona</span></button>
+        <button class="fe-vbtn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i><span class="fe-vlabel">Elimina</span></button>
       </div>
-      <div class="fe-group">
-        <button class="fe-btn" onclick="feClear()" title="Pulisci fase corrente"><i class="fa-solid fa-trash-can"></i></button>
-        <button class="btn btn-accent btn-sm" onclick="feSave()">${saveBtn}</button>
-        <button class="fe-btn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i></button>
+      <div class="fe-vgroup">
+        <button class="fe-vbtn" onclick="feClear()" title="Pulisci fase corrente"><i class="fa-solid fa-trash-can"></i><span class="fe-vlabel">Pulisci</span></button>
+        <button class="fe-vbtn fe-vbtn-accent" onclick="feSave()">${saveIcon}<span class="fe-vlabel">${saveLabel}</span></button>
+        <button class="fe-vbtn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i><span class="fe-vlabel">Chiudi</span></button>
       </div>
     </div>
-    <div class="fe-canvas-wrap"><canvas id="fe-canvas"></canvas></div>
-    <div class="fe-frames-bar">
-      <button class="fe-fbtn" id="fe-fprev" onclick="feFramePrev()" title="Fase precedente"><i class="fa-solid fa-chevron-left"></i></button>
-      <span class="fe-flabel" id="fe-fdots">Fase 1/1</span>
-      <button class="fe-fbtn" id="fe-fnext" onclick="feFrameNext()" title="Fase successiva"><i class="fa-solid fa-chevron-right"></i></button>
-      <button class="fe-fbtn" onclick="feMoveFrame(-1)" title="Sposta fase indietro"><i class="fa-solid fa-arrow-left-long"></i></button>
-      <button class="fe-fbtn" onclick="feMoveFrame(1)" title="Sposta fase avanti"><i class="fa-solid fa-arrow-right-long"></i></button>
-      <button class="fe-fbtn" id="fe-fadd" onclick="feAddFrame()" title="Aggiungi fase (copia quella corrente)"><i class="fa-solid fa-clone"></i></button>
-      <button class="fe-fbtn" id="fe-fdel" onclick="feDeleteFrameCur()" title="Elimina questa fase"><i class="fa-solid fa-trash-can"></i></button>
-    </div>
-    <input class="fe-cap-input" id="fe-frame-cap" placeholder="Didascalia di questa fase (facoltativa)" oninput="feSetCaption(this.value)">
-    <div class="fe-hint">${exLabel?('Illustri: <b>'+exLabel+'</b> · '):''}Tocca un elemento per aggiungerlo · trascina per spostare · la freccia disegna i movimenti</div>`;
+    <div class="fe-main">
+      <div class="fe-canvas-wrap"><canvas id="fe-canvas"></canvas></div>
+      <div class="fe-frames-bar">
+        <button class="fe-fbtn" id="fe-fprev" onclick="feFramePrev()" title="Fase precedente"><i class="fa-solid fa-chevron-left"></i></button>
+        <span class="fe-flabel" id="fe-fdots">Fase 1/1</span>
+        <button class="fe-fbtn" id="fe-fnext" onclick="feFrameNext()" title="Fase successiva"><i class="fa-solid fa-chevron-right"></i></button>
+        <button class="fe-fbtn" onclick="feMoveFrame(-1)" title="Sposta fase indietro"><i class="fa-solid fa-arrow-left-long"></i></button>
+        <button class="fe-fbtn" onclick="feMoveFrame(1)" title="Sposta fase avanti"><i class="fa-solid fa-arrow-right-long"></i></button>
+        <button class="fe-fbtn" id="fe-fadd" onclick="feAddFrame()" title="Aggiungi fase (copia quella corrente)"><i class="fa-solid fa-clone"></i></button>
+        <button class="fe-fbtn" id="fe-fdel" onclick="feDeleteFrameCur()" title="Elimina questa fase"><i class="fa-solid fa-trash-can"></i></button>
+      </div>
+      <input class="fe-cap-input" id="fe-frame-cap" placeholder="Didascalia di questa fase (facoltativa)" oninput="feSetCaption(this.value)">
+      <div class="fe-hint">${exLabel?('Illustri: <b>'+exLabel+'</b> · '):''}Tocca un elemento per aggiungerlo · trascina per spostare · la freccia disegna i movimenti</div>
+    </div>`;
   document.body.appendChild(host);
   const cv=document.getElementById('fe-canvas'), wrap=host.querySelector('.fe-canvas-wrap');
   const rect=wrap.getBoundingClientRect();
@@ -1713,12 +1726,19 @@ function fieldEditorCSS(){
   if(document.getElementById('fe-css')) return;
   const st=document.createElement('style'); st.id='fe-css';
   st.textContent=`
-  .fe-overlay{position:fixed;inset:0;z-index:9999;background:#0b0f1a;display:flex;flex-direction:column;}
-  .fe-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;background:#0a1020;border-bottom:1px solid rgba(255,255,255,.1);flex-wrap:wrap;}
-  .fe-group{display:flex;gap:6px;align-items:center;}
-  .fe-btn{width:42px;height:42px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;}
-  .fe-btn.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 24%,transparent);}
+  .fe-overlay{position:fixed;inset:0;z-index:9999;background:#0b0f1a;display:flex;flex-direction:row;}
+  .fe-overlay.fe-side-right{flex-direction:row-reverse;}
+  .fe-sidebar{flex:0 0 auto;width:78px;background:#0a1020;border-right:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:10px;padding:8px 6px;overflow-y:auto;}
+  .fe-overlay.fe-side-right .fe-sidebar{border-right:none;border-left:1px solid rgba(255,255,255,.1);}
+  .fe-side-toggle{flex:0 0 auto;min-height:40px;width:100%;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;color:rgba(255,255,255,.7);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.95rem;}
+  .fe-vgroup{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid rgba(255,255,255,.1);}
+  .fe-vgroup:first-of-type{border-top:none;padding-top:0;}
+  .fe-vbtn{min-height:52px;width:100%;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:1rem;padding:6px 2px;}
+  .fe-vbtn.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 24%,transparent);}
+  .fe-vbtn-accent{border-color:var(--brand);background:var(--brand);color:#04140a;font-weight:800;}
+  .fe-vlabel{font-size:.56rem;font-weight:700;line-height:1;text-align:center;white-space:nowrap;}
   .fe-dot{width:16px;height:16px;border-radius:50%;display:inline-block;border:2px solid #fff;}
+  .fe-main{flex:1;min-width:0;display:flex;flex-direction:column;}
   .fe-canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:10px;overflow:hidden;}
   #fe-canvas{border-radius:12px;touch-action:none;box-shadow:0 10px 40px rgba(0,0,0,.5);}
   .fe-hint{text-align:center;color:rgba(255,255,255,.5);font-size:.76rem;padding:8px 12px 12px;}
@@ -2396,7 +2416,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v31';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v32';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
