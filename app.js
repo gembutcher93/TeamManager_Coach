@@ -2396,7 +2396,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v30';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v31';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -3554,11 +3554,6 @@ function _openPlayerCardOld(id){
 /* =========================================================
    FORMAZIONE CONSIGLIATA (meritocrazia) — tutti gli sport
    ========================================================= */
-const FORMATION = {
-  pallavolo: [['Palleggiatore',1],['Opposto',1],['Schiacciatore',2],['Centrale',2],['Libero',1]],
-  calcio:    [['Portiere',1],['Difensore',4],['Centrocampista',3],['Attaccante',3]],
-  basket:    [['Playmaker',1],['Guardia',1],['Ala piccola',1],['Ala grande',1],['Centro',1]]
-};
 /* ---- Formazione CALCIO visuale: moduli, campo, drag, panchina, sostituzioni ---- */
 /* slot: [ruolo, x(0-1 sx→dx), y(0 alto/attacco → 1 basso/porta propria)] */
 const SOCCER_MODULES={
@@ -3664,10 +3659,13 @@ function soccerFieldCSS(){
   .mod-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}
   .fpitch-wrap{display:flex;justify-content:center;}
   .fpitch{position:relative;width:100%;max-width:360px;aspect-ratio:100/150;background:linear-gradient(180deg,#1f7a43,#176135);border-radius:14px;overflow:hidden;touch-action:none;}
+  .fpitch.fpitch-basket{background:linear-gradient(180deg,#b5763b,#95602c);}
+  .fpitch.readonly .ftk{cursor:default;}
   .fpitch-svg{position:absolute;inset:0;width:100%;height:100%;}
   .ftk{position:absolute;transform:translate(-50%,-50%);width:13%;aspect-ratio:1;border-radius:50%;background:var(--brand);color:#04140a;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:grab;box-shadow:0 2px 6px rgba(0,0,0,.4);user-select:none;border:2px solid rgba(255,255,255,.85);}
   .ftk.empty{background:rgba(255,255,255,.18);color:#fff;border-style:dashed;}
   .ftk-num{font-family:'Outfit',sans-serif;font-weight:900;font-size:.9rem;line-height:1;} .ftk-name{font-size:.5rem;font-weight:700;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 2px;}
+  .ftk-ov{font-size:.44rem;font-weight:800;opacity:.85;line-height:1;}
   .fbench{display:flex;flex-wrap:wrap;gap:8px;} .fbench-chip{display:flex;align-items:center;gap:6px;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;padding:7px 11px;font-size:.85rem;font-weight:600;}
   .sub-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow:auto;} .sub-opt{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.12));border-radius:10px;padding:10px 12px;color:inherit;font-size:.9rem;font-weight:600;cursor:pointer;}
   .sub-opt:hover{border-color:var(--brand);}
@@ -3696,31 +3694,73 @@ function injectFmzCSS(){
   `;
   document.head.appendChild(st);
 }
-function renderFormazione(){
-  if(curSport()==='calcio'){ renderSoccerFormation(); return; }
-  injectFmzCSS();
-  const sport=curSport(), plan=FORMATION[sport]||FORMATION.pallavolo;
-  const players=DB.players.map(p=>({p, v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v??-1)-(a.v??-1)));
-  const badge=v=> v==null?'<span class="voto-badge nd">—</span>':`<span class="voto-badge ${v>=7?'hi':v>=5.5?'md':'lo'}">${v.toFixed(1)}</span>`;
-  const used=new Set(); const starters=[];
-  plan.forEach(([role,n])=>{
-    const pool=byRole(role).filter(x=>!used.has(x.p.id)); const slots=[];
-    for(let i=0;i<n;i++){ const pick=pool[i]; if(pick){used.add(pick.p.id);slots.push(pick);} else slots.push(null); }
-    starters.push({role,slots});
+/* ---- Formazione PALLAVOLO/BASKET visuale: campo disegnato (stesso stile del campo calcio) ---- */
+function pickLineupPallavolo(){
+  const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
+  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  return VOLLEY_ZONES.map(([z,x,y])=>{
+    const [role,idx]=VOLLEY_ZONE_ROLE[z]; const pick=byRole(role)[idx];
+    return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
   });
-  const startersHtml=starters.map(g=>`
-    <div class="fmz-role"><div class="fmz-role-h">${g.role} <span class="fmz-n">×${g.slots.length}</span></div>
-      ${g.slots.map(s=> s?`<div class="fmz-slot"><span class="fmz-num">#${s.p.number}</span><span class="fmz-name">${s.p.name}</span>${badge(s.v)}</div>`:`<div class="fmz-slot empty">nessun ${g.role.toLowerCase()} in rosa</div>`).join('')}
-    </div>`).join('');
-  const bench=players.filter(x=>!used.has(x.p.id)).sort((a,b)=>((b.v??-1)-(a.v??-1)));
-  const benchHtml=bench.length? bench.map(x=>`<div class="fmz-slot"><span class="fmz-num">#${x.p.number}</span><span class="fmz-name">${x.p.name}</span><span class="fmz-role-tag">${x.p.role}</span>${badge(x.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+}
+function pickLineupBasket(){
+  const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
+  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  return Object.keys(BASKET_POS).map(role=>{
+    const pick=byRole(role)[0]; const [x,y]=BASKET_POS[role];
+    return {zone:role,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
+  });
+}
+function courtZoneSVG(sport){
+  if(sport==='pallavolo'){
+    return `<svg viewBox="0 0 100 150" preserveAspectRatio="none" class="fpitch-svg">
+      <rect x="1" y="1" width="98" height="148" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+      <line x1="1" y1="1" x2="99" y2="1" stroke="rgba(255,255,255,.9)" stroke-width="2"/>
+      <line x1="1" y1="50" x2="99" y2="50" stroke="rgba(255,255,255,.45)" stroke-width="0.6" stroke-dasharray="4 4"/>
+      <line x1="34" y1="1" x2="34" y2="149" stroke="rgba(255,255,255,.3)" stroke-width="0.5" stroke-dasharray="4 4"/>
+      <line x1="66" y1="1" x2="66" y2="149" stroke="rgba(255,255,255,.3)" stroke-width="0.5" stroke-dasharray="4 4"/>
+    </svg>`;
+  }
+  return `<svg viewBox="0 0 100 150" preserveAspectRatio="none" class="fpitch-svg">
+    <rect x="1" y="1" width="98" height="148" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+    <rect x="26" y="1" width="48" height="30" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="0.6"/>
+    <circle cx="50" cy="31" r="12" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
+    <path d="M8 1 A48 48 0 0 0 8 68" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="0.5"/>
+    <path d="M92 1 A48 48 0 0 1 92 68" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="0.5"/>
+    <line x1="8" y1="68" x2="92" y2="68" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="0.5"/>
+    <line x1="1" y1="75" x2="99" y2="75" stroke="rgba(255,255,255,.45)" stroke-width="0.6" stroke-dasharray="4 4"/>
+  </svg>`;
+}
+function renderCourtFormation(sport){
+  injectFmzCSS(); soccerFieldCSS();
+  const rows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+  const showOv=showLineupOverall();
+  const tokens=rows.map(r=>{
+    const p=r.player;
+    const inner = p
+      ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${(p.name||'').split(' ').slice(-1)[0]}</span>${showOv?`<span class="ftk-ov">${cphOverall(r.v)}</span>`:''}`
+      : `<span class="ftk-num">${r.zone}</span>`;
+    return `<div class="ftk${p?'':' empty'}" style="left:${(r.x*100).toFixed(1)}%;top:${(r.y*100).toFixed(1)}%" title="${r.role}">${inner}</div>`;
+  }).join('');
+  const usedIds=new Set(rows.filter(r=>r.player).map(r=>r.player.id));
+  const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
+  const bench=players.filter(x=>!usedIds.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
   document.getElementById('formazione-content').innerHTML=`
-    <div class="card"><h3><i class="fa-solid fa-star" style="color:var(--brand)"></i> Titolari consigliati</h3>
-      <div class="fmz-grid">${startersHtml}</div>
+    <div class="card">
+      <h3 style="margin:0 0 12px"><i class="fa-solid fa-${sport==='pallavolo'?'volleyball':'basketball'}" style="color:var(--brand)"></i> Formazione in campo</h3>
+      <div class="fpitch-wrap"><div class="fpitch readonly${sport==='basket'?' fpitch-basket':''}">
+        ${courtZoneSVG(sport)}
+        ${tokens}
+      </div></div>
       <p class="hint" style="margin-top:1rem">Scelti per media voto. Più registri partite nello Scout, più la formazione diventa precisa.</p>
     </div>
-    <div class="card"><h3><i class="fa-solid fa-users" style="color:var(--muted)"></i> Riserve (in ordine di rendimento)</h3>
-      <div class="fmz-bench">${benchHtml}</div>
+    <div class="card"><h3><i class="fa-solid fa-users" style="color:var(--muted)"></i> Panchina (per rendimento)</h3>
+      <div class="fbench">${benchHtml}</div>
     </div>`;
+}
+function renderFormazione(){
+  const sport=curSport();
+  if(sport==='calcio'){ renderSoccerFormation(); return; }
+  renderCourtFormation(sport);
 }
