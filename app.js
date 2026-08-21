@@ -370,58 +370,9 @@ function weightsCSS(){
   document.head.appendChild(st);
 }
 
-/* ---------- SEED (dati d'esempio per non partire vuoti) ---------- */
-function seedDB(){
-    const players = [
-        {id:1,name:'Giuseppe Manunta',number:10,role:'Centrale',hand:'Dx',height:196,status:'active',isCaptain:true,isViceCaptain:false},
-        {id:2,name:'Federico Tola',number:7,role:'Schiacciatore',hand:'Dx',height:188,status:'active',isCaptain:false,isViceCaptain:true},
-        {id:3,name:'Matteo Sanna',number:1,role:'Palleggiatore',hand:'Dx',height:182,status:'active',isCaptain:false,isViceCaptain:false},
-        {id:4,name:'Luca Pinna',number:9,role:'Opposto',hand:'Dx',height:191,status:'active',isCaptain:false,isViceCaptain:false},
-        {id:5,name:'Andrea Ruiu',number:4,role:'Libero',hand:'Dx',height:178,status:'active',isCaptain:false,isViceCaptain:false},
-        {id:6,name:'Marco Vacca',number:13,role:'Schiacciatore',hand:'Sx',height:185,status:'injured',isCaptain:false,isViceCaptain:false}
-    ];
-    const events = [
-        {id:201,type:'Partita',date:'2026-06-07',notes:'vs San Pio X',result:{w:3,l:1}},
-        {id:202,type:'Allenamento',date:'2026-06-10',notes:'Ricezione + Palleggio'},
-        {id:203,type:'Allenamento',date:'2026-06-12',notes:'Fase cambio-palla'},
-        {id:204,type:'Partita',date:'2026-06-14',notes:'vs Dinamo BVL',result:{w:1,l:3}},
-        {id:205,type:'Allenamento',date:'2026-06-29',notes:'Battuta in salto'},
-        {id:206,type:'Partita',date:'2026-07-04',notes:'vs Ferrini',result:null}
-    ];
-    // tabellini d'esempio
-    const mk = (pId,o)=>{const s=Object.assign(blankStat(),o);return{pId,...s};};
-    const scoutHistory = [
-        {matchId:201,date:'2026-06-07',opponent:'vs San Pio X',rows:[
-            mk(1,{bAce:2,bErr:1,aTot:18,aErr:3,aPt:11,mPt:4}),
-            mk(2,{bAce:1,bErr:2,rTot:22,rPos:15,rPrf:9,aTot:24,aErr:5,aPt:13}),
-            mk(3,{bAce:0,bErr:1,aTot:4,aErr:1,aPt:2,mPt:1}),
-            mk(4,{bAce:3,bErr:2,aTot:26,aErr:6,aPt:15}),
-            mk(5,{rTot:30,rPos:22,rPrf:14}),
-        ]},
-        {matchId:204,date:'2026-06-14',opponent:'vs Dinamo BVL',rows:[
-            mk(1,{bAce:1,bErr:2,aTot:15,aErr:5,aPt:7,mPt:2}),
-            mk(2,{bAce:0,bErr:3,rTot:20,rPos:9,rPrf:5,aTot:22,aErr:8,aPt:9}),
-            mk(3,{bAce:0,bErr:0,aTot:3,aErr:1,aPt:1,mPt:0}),
-            mk(4,{bAce:2,bErr:4,aTot:25,aErr:9,aPt:11}),
-            mk(5,{rTot:28,rPos:14,rPrf:8}),
-        ]}
-    ];
-    const attendance = {
-        202:{1:'present',2:'present',3:'present',4:'absent',5:'present',6:'excused'},
-        203:{1:'present',2:'present',3:'absent',4:'present',5:'present',6:'excused'}
-    };
-    const rotationStats = {
-        201:{P1:{f:6,s:4},P2:{f:5,s:6},P3:{f:8,s:3},P4:{f:4,s:7},P5:{f:7,s:4},P6:{f:6,s:5}}
-    };
-    const trainings = {
-        202:{exercises:[{id:1,name:'Ricezione in bagher zona 5',cat:'Ricezione'},{id:2,name:'Palleggio in salto',cat:'Palleggio'}],
-             grades:{1:{1:6,2:7},2:{1:6.5,2:7},3:{1:5.5,2:8},4:{1:6},5:{1:8,2:6.5}},
-             notes:{2:'Buona spinta gambe, controlla la chiusura del piano.',5:'Ottima lettura in ricezione.'}},
-        203:{exercises:[{id:1,name:'Attacco da posto 4',cat:'Attacco'},{id:2,name:'Muro di reparto',cat:'Muro'}],
-             grades:{1:{1:6,2:7},2:{1:7.5,2:6},4:{1:7,2:6.5},5:{1:6}},
-             notes:{2:'Bel braccio, varia di più le mani.'}}
-    };
-    return {teamName:'TEAM',players,events,scoutHistory,attendance,rotationStats,trainings,nextId:300};
+/* ---------- STATO VUOTO (squadra nuova: nessun dato precompilato, qualunque sia lo sport) ---------- */
+function emptyDB(){
+    return {teamName:'TEAM',players:[],events:[],scoutHistory:[],attendance:{},rotationStats:{},trainings:{},nextId:1};
 }
 
 /* ---------- LOAD / SAVE ---------- */
@@ -434,7 +385,7 @@ function loadDB(){
     try{
         const oldP = JSON.parse(localStorage.getItem('volley_players'));
         if(oldP && oldP.length){
-            const db = seedDB();
+            const db = emptyDB();
             db.players = oldP.map(p=>({...p,hand:p.hand||'Dx',height:p.height||0,status:p.status||'active'}));
             db.events = JSON.parse(localStorage.getItem('volley_events')) || db.events;
             db.teamName = localStorage.getItem('volley_team_name') || 'TEAM';
@@ -442,7 +393,7 @@ function loadDB(){
             return db;
         }
     }catch(e){}
-    return seedDB();
+    return emptyDB();
 }
 const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra salvato per questo profilo
 let DB = loadDB();
@@ -1445,25 +1396,27 @@ function openFieldEditor(exKey, exLabel){
   const side=feSideGet();
   const host=document.createElement('div'); host.id='fe-overlay'; host.className='fe-overlay'+(side==='right'?' fe-side-right':'');
   host.innerHTML=`
-    <div class="fe-sidebar" id="fe-sidebar">
-      <button class="fe-side-toggle" onclick="feToggleSide()" title="Sposta la barra dall'altro lato"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
-      <div class="fe-vgroup">
-        <button class="fe-vbtn" onclick="feAdd('player')" title="Nostro giocatore"><span class="fe-dot" style="background:#22C55E"></span><span class="fe-vlabel">Giocatore</span></button>
-        <button class="fe-vbtn" onclick="feAdd('opp')" title="Avversario"><span class="fe-dot" style="background:#EF4444"></span><span class="fe-vlabel">Avversario</span></button>
-        <button class="fe-vbtn" onclick="feAdd('ball')" title="Pallone"><i class="fa-solid fa-futbol"></i><span class="fe-vlabel">Pallone</span></button>
-        <button class="fe-vbtn" onclick="feAdd('cone')" title="Cono"><span style="font-weight:900;color:#F97316">▲</span><span class="fe-vlabel">Cono</span></button>
-      </div>
-      <div class="fe-vgroup">
-        <button class="fe-vbtn on" id="fe-move" onclick="feTool('move')" title="Sposta"><i class="fa-solid fa-up-down-left-right"></i><span class="fe-vlabel">Sposta</span></button>
-        <button class="fe-vbtn" id="fe-arrow" onclick="feTool('arrow')" title="Freccia movimento"><i class="fa-solid fa-arrow-right-long"></i><span class="fe-vlabel">Freccia</span></button>
-        <button class="fe-vbtn" id="fe-arrowd" onclick="feTool('arrowd')" title="Freccia passaggio (tratteggiata)"><i class="fa-solid fa-ellipsis"></i><span class="fe-vlabel">Passaggio</span></button>
-        <button class="fe-vbtn" id="fe-zone" onclick="feTool('zone')" title="Zona colorata"><i class="fa-solid fa-vector-square"></i><span class="fe-vlabel">Zona</span></button>
-        <button class="fe-vbtn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i><span class="fe-vlabel">Elimina</span></button>
-      </div>
-      <div class="fe-vgroup">
-        <button class="fe-vbtn" onclick="feClear()" title="Pulisci fase corrente"><i class="fa-solid fa-trash-can"></i><span class="fe-vlabel">Pulisci</span></button>
-        <button class="fe-vbtn fe-vbtn-accent" onclick="feSave()">${saveIcon}<span class="fe-vlabel">${saveLabel}</span></button>
-        <button class="fe-vbtn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i><span class="fe-vlabel">Chiudi</span></button>
+    <div class="fe-sidebar fe-sidebar-tools" id="fe-sidebar">
+      <div class="fe-sidebar-inner">
+        <button class="fe-side-toggle" onclick="feToggleSide()" title="Sposta le barre dall'altro lato"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+        <div class="fe-vgroup">
+          <button class="fe-vbtn" onclick="feAdd('player')" title="Nostro giocatore"><span class="fe-dot" style="background:#22C55E"></span><span class="fe-vlabel">Giocatore</span></button>
+          <button class="fe-vbtn" onclick="feAdd('opp')" title="Avversario"><span class="fe-dot" style="background:#EF4444"></span><span class="fe-vlabel">Avversario</span></button>
+          <button class="fe-vbtn" onclick="feAdd('ball')" title="Pallone"><i class="fa-solid fa-futbol"></i><span class="fe-vlabel">Pallone</span></button>
+          <button class="fe-vbtn" onclick="feAdd('cone')" title="Cono"><span style="font-weight:900;color:#F97316">▲</span><span class="fe-vlabel">Cono</span></button>
+        </div>
+        <div class="fe-vgroup">
+          <button class="fe-vbtn on" id="fe-move" onclick="feTool('move')" title="Sposta"><i class="fa-solid fa-up-down-left-right"></i><span class="fe-vlabel">Sposta</span></button>
+          <button class="fe-vbtn" id="fe-arrow" onclick="feTool('arrow')" title="Freccia movimento"><i class="fa-solid fa-arrow-right-long"></i><span class="fe-vlabel">Freccia</span></button>
+          <button class="fe-vbtn" id="fe-arrowd" onclick="feTool('arrowd')" title="Freccia passaggio (tratteggiata)"><i class="fa-solid fa-ellipsis"></i><span class="fe-vlabel">Passaggio</span></button>
+          <button class="fe-vbtn" id="fe-zone" onclick="feTool('zone')" title="Zona colorata"><i class="fa-solid fa-vector-square"></i><span class="fe-vlabel">Zona</span></button>
+          <button class="fe-vbtn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i><span class="fe-vlabel">Elimina</span></button>
+        </div>
+        <div class="fe-vgroup">
+          <button class="fe-vbtn" onclick="feClear()" title="Pulisci fase corrente"><i class="fa-solid fa-trash-can"></i><span class="fe-vlabel">Pulisci</span></button>
+          <button class="fe-vbtn fe-vbtn-accent" onclick="feSave()">${saveIcon}<span class="fe-vlabel">${saveLabel}</span></button>
+          <button class="fe-vbtn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i><span class="fe-vlabel">Chiudi</span></button>
+        </div>
       </div>
     </div>
     <div class="fe-main">
@@ -1479,6 +1432,15 @@ function openFieldEditor(exKey, exLabel){
       </div>
       <input class="fe-cap-input" id="fe-frame-cap" placeholder="Didascalia di questa fase (facoltativa)" oninput="feSetCaption(this.value)">
       <div class="fe-hint">${exLabel?('Illustri: <b>'+exLabel+'</b> · '):''}Tocca un elemento per aggiungerlo · trascina per spostare · la freccia disegna i movimenti</div>
+    </div>
+    <div class="fe-sidebar fe-sidebar-colors">
+      <div class="fe-sidebar-inner">
+        <span class="fe-vlabel" style="opacity:.6">Colore</span>
+        <div class="fe-cswatches">
+          <button class="fe-csw auto on" data-c="" onclick="feSetColor(null)" title="Predefinito">Auto</button>
+          ${Object.entries(ZONE_COLORS).map(([k,hex])=>`<button class="fe-csw" data-c="${hex}" style="background:${hex}${hex==='#FFFFFF'?';border-color:rgba(0,0,0,.35)':''}" onclick="feSetColor('${hex}')" title="${k}"></button>`).join('')}
+        </div>
+      </div>
     </div>`;
   document.body.appendChild(host);
   const cv=document.getElementById('fe-canvas'), wrap=host.querySelector('.fe-canvas-wrap');
@@ -1487,7 +1449,7 @@ function openFieldEditor(exKey, exLabel){
   const dpr=window.devicePixelRatio||1;
   cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
   const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
-  FE={sport,tool:'move',elements:[],arrows:[],zones:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,dragZone:null,resizeZone:null,arrowStart:null,exKey:exKey||null,
+  FE={sport,tool:'move',elements:[],arrows:[],zones:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,dragZone:null,resizeZone:null,arrowStart:null,exKey:exKey||null,color:null,
       frames:[{elements:[],arrows:[],zones:[],cap:''}],curFrame:0};
   feBindPointer(); feRedraw(); feRenderFramesBar();
   if(exKey){ cIdbGet('exdraw:'+exKey).then(raw=>{ if(!FE)return;
@@ -1505,12 +1467,26 @@ function openFieldEditor(exKey, exLabel){
 }
 function closeFieldEditor(){ const o=document.getElementById('fe-overlay'); if(o) o.remove(); FE=null; }
 function feTool(t){ FE.tool=t; ['move','arrow','arrowd','erase','zone'].forEach(x=>{const b=document.getElementById('fe-'+x); if(b) b.classList.toggle('on',x===t);}); }
-function feAdd(type){ const n=(type==='player'||type==='opp')?(++FE.seq[type]):0; FE.elements.push({type,x:FE.W/2,y:FE.H/2,n}); feRedraw(); }
+function feAdd(type){ const n=(type==='player'||type==='opp')?(++FE.seq[type]):0; const el={type,x:FE.W/2,y:FE.H/2,n}; if(FE.color) el.c=FE.color; FE.elements.push(el); feRedraw(); }
+function feSetColor(c){ FE.color=c||null; document.querySelectorAll('.fe-csw').forEach(b=>b.classList.toggle('on',(b.dataset.c||null)===FE.color)); }
 function feClear(){ FE.elements=[]; FE.arrows=[]; FE.zones=[]; FE.seq={player:0,opp:0}; feRedraw(); }
 function feField(ctx,W,H,sport){
-  const m=10, rx=m, ry=m, rw=W-2*m, rh=H-2*m, cx=rx+rw/2, cy=ry+rh/2;
   ctx.fillStyle = sport==='basket' ? '#b5763b' : '#1f7a43'; ctx.fillRect(0,0,W,H);
-  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2; ctx.strokeRect(rx,ry,rw,rh);
+  ctx.strokeStyle='rgba(255,255,255,.85)'; ctx.lineWidth=2;
+  if(sport==='basket'){
+    // riusa courtRect() (stesse proporzioni reali 28x15 della Lavagnetta Tattica), non il vecchio rettangolo storpiato
+    const R=courtRect(W,H,'basket'), rx=R.x, ry=R.y, rw=R.w, rh=R.h, cx=rx+rw/2, cy=ry+rh/2;
+    ctx.strokeRect(rx,ry,rw,rh);
+    ctx.beginPath();ctx.moveTo(rx,cy);ctx.lineTo(rx+rw,cy);ctx.stroke();
+    ctx.beginPath();ctx.arc(cx,cy,rw*0.13,0,Math.PI*2);ctx.stroke();
+    const kw=rw*0.36,kx=cx-kw/2,kh=rh*0.19;
+    ctx.strokeRect(kx,ry,kw,kh); ctx.strokeRect(kx,ry+rh-kh,kw,kh);
+    ctx.beginPath();ctx.arc(cx,ry+kh,kw*0.5,0,Math.PI);ctx.stroke();
+    ctx.beginPath();ctx.arc(cx,ry+rh-kh,kw*0.5,Math.PI,Math.PI*2);ctx.stroke();
+    return;
+  }
+  const m=10, rx=m, ry=m, rw=W-2*m, rh=H-2*m, cx=rx+rw/2, cy=ry+rh/2;
+  ctx.strokeRect(rx,ry,rw,rh);
   ctx.beginPath();ctx.moveTo(rx,cy);ctx.lineTo(rx+rw,cy);ctx.stroke();
   if(sport==='pallavolo'){
     ctx.setLineDash([6,6]);ctx.lineWidth=1.2;
@@ -1518,30 +1494,29 @@ function feField(ctx,W,H,sport){
     ctx.beginPath();ctx.moveTo(rx,ry+rh*2/3);ctx.lineTo(rx+rw,ry+rh*2/3);ctx.stroke();
     ctx.setLineDash([]);
   } else {
-    ctx.beginPath();ctx.arc(cx,cy,rw*0.13,0,Math.PI*2);ctx.stroke();
-    if(sport==='calcio'){ const bw=rw*0.5,bx=cx-bw/2,bh=rh*0.16; ctx.strokeRect(bx,ry,bw,bh); ctx.strokeRect(bx,ry+rh-bh,bw,bh); }
-    else { const kw=rw*0.36,kx=cx-kw/2,kh=rh*0.19; ctx.strokeRect(kx,ry,kw,kh); ctx.strokeRect(kx,ry+rh-kh,kw,kh); }
+    const bw=rw*0.5,bx=cx-bw/2,bh=rh*0.16; ctx.beginPath();ctx.arc(cx,cy,rw*0.13,0,Math.PI*2);ctx.stroke();
+    ctx.strokeRect(bx,ry,bw,bh); ctx.strokeRect(bx,ry+rh-bh,bw,bh);
   }
 }
 function feDrawEl(ctx,el){
   ctx.save();
-  if(el.type==='cone'){ ctx.fillStyle='#F97316'; ctx.beginPath(); ctx.moveTo(el.x,el.y-13); ctx.lineTo(el.x-11,el.y+10); ctx.lineTo(el.x+11,el.y+10); ctx.closePath(); ctx.fill(); ctx.restore(); return; }
-  if(el.type==='ball'){ ctx.fillStyle='#fff'; ctx.strokeStyle='#111'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(el.x,el.y,8,0,Math.PI*2); ctx.fill(); ctx.stroke(); ctx.restore(); return; }
-  ctx.fillStyle = el.type==='opp' ? '#EF4444' : '#22C55E';
+  if(el.type==='cone'){ ctx.fillStyle=el.c||'#F97316'; ctx.beginPath(); ctx.moveTo(el.x,el.y-13); ctx.lineTo(el.x-11,el.y+10); ctx.lineTo(el.x+11,el.y+10); ctx.closePath(); ctx.fill(); ctx.restore(); return; }
+  if(el.type==='ball'){ ctx.fillStyle=el.c||'#fff'; ctx.strokeStyle='#111'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(el.x,el.y,8,0,Math.PI*2); ctx.fill(); ctx.stroke(); ctx.restore(); return; }
+  ctx.fillStyle = el.c || (el.type==='opp' ? '#EF4444' : '#22C55E');
   ctx.beginPath(); ctx.arc(el.x,el.y,16,0,Math.PI*2); ctx.fill();
   ctx.fillStyle='#fff'; ctx.font='bold 15px Outfit,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(String(el.n),el.x,el.y);
   ctx.restore();
 }
 function feDrawArrow(ctx,a){
-  const x1=a.from[0],y1=a.from[1],x2=a.to[0],y2=a.to[1];
-  ctx.save(); ctx.strokeStyle='#FACC15'; ctx.fillStyle='#FACC15'; ctx.lineWidth=3;
+  const x1=a.from[0],y1=a.from[1],x2=a.to[0],y2=a.to[1], col=a.c||'#FACC15';
+  ctx.save(); ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=3;
   if(a.dashed) ctx.setLineDash([8,6]);
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); ctx.setLineDash([]);
   const ang=Math.atan2(y2-y1,x2-x1), hl=13;
   ctx.beginPath(); ctx.moveTo(x2,y2); ctx.lineTo(x2-hl*Math.cos(ang-0.4),y2-hl*Math.sin(ang-0.4)); ctx.lineTo(x2-hl*Math.cos(ang+0.4),y2-hl*Math.sin(ang+0.4)); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
-const ZONE_COLORS={red:'#EF4444',yellow:'#FACC15',green:'#22C55E'};
+const ZONE_COLORS={red:'#EF4444',green:'#22C55E',yellow:'#FACC15',blue:'#3B82F6',white:'#FFFFFF',black:'#111111'};
 function feDrawZone(ctx,z){
   ctx.save();
   ctx.fillStyle=hexA(ZONE_COLORS[z.c]||ZONE_COLORS.green,.28);
@@ -1566,22 +1541,25 @@ function feHit(x,y){ for(let i=FE.elements.length-1;i>=0;i--){ const e=FE.elemen
 function feHitZone(x,y){ for(let i=FE.zones.length-1;i>=0;i--){ const z=FE.zones[i]; if(x>=z.x&&x<=z.x+z.w&&y>=z.y&&y<=z.y+z.h) return i; } return -1; }
 function feHitZoneHandle(x,y){ for(let i=FE.zones.length-1;i>=0;i--){ const z=FE.zones[i]; if(Math.hypot(x-(z.x+z.w),y-(z.y+z.h))<=14) return i; } return -1; }
 function feDistToSeg(px,py,a,b){ const x1=a[0],y1=a[1],x2=b[0],y2=b[1],dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy||1; let t=((px-x1)*dx+(py-y1)*dy)/l2; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy)); }
+function feHitArrow(x,y){ let best=-1,bd=14; FE.arrows.forEach((a,i)=>{ const d=feDistToSeg(x,y,a.from,a.to); if(d<bd){bd=d;best=i;} }); return best; }
 function feEraseArrow(x,y){ let best=-1,bd=16; FE.arrows.forEach((a,i)=>{ const d=feDistToSeg(x,y,a.from,a.to); if(d<bd){bd=d;best=i;} }); if(best>=0){ FE.arrows.splice(best,1); feRedraw(); } }
 function feBindPointer(){
   const cv=FE.cv;
   const pos=e=>{ const r=cv.getBoundingClientRect(); return [ (e.clientX-r.left)*(FE.W/r.width), (e.clientY-r.top)*(FE.H/r.height) ]; };
-  cv.addEventListener('pointerdown',e=>{ const p=pos(e),x=p[0],y=p[1];
+  let downPos=null, tapEl=null, tapArrow=null;
+  cv.addEventListener('pointerdown',e=>{ const p=pos(e),x=p[0],y=p[1]; downPos=[x,y]; tapEl=null; tapArrow=null;
     if(FE.tool==='move'){
       const zh=feHitZoneHandle(x,y);
       if(zh>=0){ FE.resizeZone={i:zh}; }
-      else{ const i=feHit(x,y); if(i>=0) FE.drag={i,dx:FE.elements[i].x-x,dy:FE.elements[i].y-y};
-        else { const zi=feHitZone(x,y); if(zi>=0) FE.dragZone={i:zi,dx:FE.zones[zi].x-x,dy:FE.zones[zi].y-y}; } }
+      else{ const i=feHit(x,y); if(i>=0){ FE.drag={i,dx:FE.elements[i].x-x,dy:FE.elements[i].y-y}; tapEl=i; }
+        else { const zi=feHitZone(x,y); if(zi>=0) FE.dragZone={i:zi,dx:FE.zones[zi].x-x,dy:FE.zones[zi].y-y};
+          else { const ai=feHitArrow(x,y); if(ai>=0) tapArrow=ai; } } }
     }
     else if(FE.tool==='erase'){ const i=feHit(x,y); if(i>=0){ FE.elements.splice(i,1); feRedraw(); } else { const zi=feHitZone(x,y); if(zi>=0){ FE.zones.splice(zi,1); feRedraw(); } else feEraseArrow(x,y); } }
     else if(FE.tool==='zone'){
       const zi=feHitZone(x,y);
       if(zi>=0) openZoneEdit(zi);
-      else { FE.zones.push({x:x-50,y:y-75,w:100,h:150,c:'green'}); feRedraw(); openZoneEdit(FE.zones.length-1); }
+      else { const zc=Object.keys(ZONE_COLORS).find(k=>ZONE_COLORS[k]===FE.color)||'green'; FE.zones.push({x:x-50,y:y-75,w:100,h:150,c:zc}); feRedraw(); openZoneEdit(FE.zones.length-1); }
     }
     else FE.arrowStart=[x,y];
     try{cv.setPointerCapture(e.pointerId);}catch(_){}
@@ -1590,16 +1568,26 @@ function feBindPointer(){
     if(FE.tool==='move'&&FE.drag){ const el=FE.elements[FE.drag.i]; el.x=x+FE.drag.dx; el.y=y+FE.drag.dy; feRedraw(); }
     else if(FE.tool==='move'&&FE.dragZone){ const z=FE.zones[FE.dragZone.i]; z.x=x+FE.dragZone.dx; z.y=y+FE.dragZone.dy; feRedraw(); }
     else if(FE.tool==='move'&&FE.resizeZone){ const z=FE.zones[FE.resizeZone.i]; z.w=Math.max(20,x-z.x); z.h=Math.max(20,y-z.y); feRedraw(); }
-    else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ feRedraw(); feDrawArrow(FE.ctx,{from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); }
+    else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ feRedraw(); feDrawArrow(FE.ctx,{from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd',c:FE.color}); }
   });
   cv.addEventListener('pointerup',e=>{ const p=pos(e),x=p[0],y=p[1];
-    if(FE.tool==='move'){ FE.drag=null; FE.dragZone=null; FE.resizeZone=null; }
-    else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ if(Math.hypot(x-FE.arrowStart[0],y-FE.arrowStart[1])>10) FE.arrows.push({from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); FE.arrowStart=null; feRedraw(); }
+    if(FE.tool==='move'){
+      const moved = !downPos || Math.hypot(x-downPos[0],y-downPos[1])>6;
+      FE.drag=null; FE.dragZone=null; FE.resizeZone=null;
+      if(!moved){ if(tapEl!=null) openElColor(tapEl); else if(tapArrow!=null) openArrowColor(tapArrow); }
+    }
+    else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ if(Math.hypot(x-FE.arrowStart[0],y-FE.arrowStart[1])>10){ const a={from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}; if(FE.color) a.c=FE.color; FE.arrows.push(a); } FE.arrowStart=null; feRedraw(); }
   });
 }
 function feRecomputeSeq(els){ const s={player:0,opp:0}; (els||[]).forEach(e=>{ if((e.type==='player'||e.type==='opp')&&e.n>s[e.type]) s[e.type]=e.n; }); return s; }
 function hexA(hex,a){ hex=(hex||'').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16); if(isNaN(n))return hex; return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
 function schemeExists(sport,name){ name=(name||'').toLowerCase(); return !!((window.EX_SCHEMES&&window.EX_SCHEMES[sport])||[]).find(x=>x.name.toLowerCase()===name); }
+/* ---- Selettore colore condiviso (elementi/frecce) ---- */
+function feColorSwatches(activeHex,fnName,idx){
+  const auto=`<button onclick="${fnName}(${idx},null)" title="Predefinito" style="width:44px;height:44px;border-radius:10px;cursor:pointer;border:2px solid ${!activeHex?'#fff':'transparent'};background:repeating-conic-gradient(#8888 0% 25%,transparent 0% 50%) 0/12px 12px"></button>`;
+  const swatches=Object.values(ZONE_COLORS).map(hex=>`<button onclick="${fnName}(${idx},'${hex}')" title="${hex}" style="width:44px;height:44px;border-radius:10px;cursor:pointer;border:2px solid ${activeHex===hex?'#fff':'transparent'};background:${hex}"></button>`).join('');
+  return `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">${auto}${swatches}</div>`;
+}
 /* ---- Zone: modifica colore / elimina ---- */
 function openZoneEdit(i){
   const z=FE.zones[i]; if(!z) return;
@@ -1607,27 +1595,49 @@ function openZoneEdit(i){
       <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body">
       <p class="hint" style="margin-bottom:10px">Scegli il colore della zona. Trascina il centro per spostarla, il pallino in basso a destra per ridimensionarla.</p>
-      <div style="display:flex;gap:10px;margin-bottom:16px">
-        ${['red','yellow','green'].map(c=>`<button onclick="feZoneColor(${i},'${c}')" title="${c}" style="width:44px;height:44px;border-radius:10px;cursor:pointer;border:2px solid ${z.c===c?'#fff':'transparent'};background:${ZONE_COLORS[c]}"></button>`).join('')}
+      <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        ${Object.keys(ZONE_COLORS).map(c=>`<button onclick="feZoneColor(${i},'${c}')" title="${c}" style="width:44px;height:44px;border-radius:10px;cursor:pointer;border:2px solid ${z.c===c?'#fff':'transparent'};background:${ZONE_COLORS[c]}"></button>`).join('')}
       </div>
       <button class="btn btn-danger" style="width:100%" onclick="feZoneDelete(${i})"><i class="fa-solid fa-trash-can"></i> Elimina zona</button>
     </div>`);
 }
 function feZoneColor(i,c){ if(FE.zones[i]) FE.zones[i].c=c; feRedraw(); closeModal(); }
 function feZoneDelete(i){ FE.zones.splice(i,1); feRedraw(); closeModal(); }
+/* ---- Elemento (giocatore/avversario/birillo/palla): modifica colore ---- */
+function openElColor(i){
+  const el=FE.elements[i]; if(!el) return;
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-palette" style="color:var(--brand)"></i> Colore elemento</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:10px">Scegli il colore di questo elemento, oppure torna al predefinito.</p>
+      ${feColorSwatches(el.c||null,'feElColor',i)}
+    </div>`);
+}
+function feElColor(i,c){ const el=FE.elements[i]; if(el){ if(c) el.c=c; else delete el.c; } feRedraw(); closeModal(); }
+/* ---- Freccia: modifica colore ---- */
+function openArrowColor(i){
+  const a=FE.arrows[i]; if(!a) return;
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-palette" style="color:var(--brand)"></i> Colore freccia</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:10px">Scegli il colore di questa freccia, oppure torna al predefinito.</p>
+      ${feColorSwatches(a.c||null,'feArrowColor',i)}
+    </div>`);
+}
+function feArrowColor(i,c){ const a=FE.arrows[i]; if(a){ if(c) a.c=c; else delete a.c; } feRedraw(); closeModal(); }
 /* ---- FASI (storyboard): conversione normalizzata 400x600 <-> spazio canvas corrente ---- */
 const FE_MAX_FRAMES=6;
 function feToNormFrame(elements,arrows,zones,W,H,cap){
   const sx=400/W, sy=600/H, E=[];
   (zones||[]).forEach(z=>E.push({t:'zone',x:+(z.x*sx).toFixed(1),y:+(z.y*sy).toFixed(1),w:+(z.w*sx).toFixed(1),h:+(z.h*sy).toFixed(1),c:z.c}));
-  (elements||[]).forEach(e=>E.push({t:e.type,x:+(e.x*sx).toFixed(1),y:+(e.y*sy).toFixed(1),n:e.n}));
-  const A=(arrows||[]).map(a=>({f:[+(a.from[0]*sx).toFixed(1),+(a.from[1]*sy).toFixed(1)],p:[+(a.to[0]*sx).toFixed(1),+(a.to[1]*sy).toFixed(1)],d:a.dashed?1:0}));
+  (elements||[]).forEach(e=>E.push({t:e.type,x:+(e.x*sx).toFixed(1),y:+(e.y*sy).toFixed(1),n:e.n,c:e.c}));
+  const A=(arrows||[]).map(a=>({f:[+(a.from[0]*sx).toFixed(1),+(a.from[1]*sy).toFixed(1)],p:[+(a.to[0]*sx).toFixed(1),+(a.to[1]*sy).toFixed(1)],d:a.dashed?1:0,c:a.c}));
   return {E,A,cap:cap||''};
 }
 function feFromNormFrame(fr,W,H){
   const sx=W/400, sy=H/600, elements=[], zones=[];
-  (fr.E||[]).forEach(e=>{ if(e.t==='zone') zones.push({x:e.x*sx,y:e.y*sy,w:e.w*sx,h:e.h*sy,c:e.c||'green'}); else elements.push({type:e.t,x:e.x*sx,y:e.y*sy,n:e.n}); });
-  const arrows=(fr.A||[]).map(a=>({from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d}));
+  (fr.E||[]).forEach(e=>{ if(e.t==='zone') zones.push({x:e.x*sx,y:e.y*sy,w:e.w*sx,h:e.h*sy,c:e.c||'green'}); else { const el={type:e.t,x:e.x*sx,y:e.y*sy,n:e.n}; if(e.c) el.c=e.c; elements.push(el); } });
+  const arrows=(fr.A||[]).map(a=>{ const ar={from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d}; if(a.c) ar.c=a.c; return ar; });
   return {elements,arrows,zones,cap:fr.cap||''};
 }
 function feFramesFromObj(obj,W,H){
@@ -1640,7 +1650,7 @@ function feApplyFrame(i){
   i=Math.max(0,Math.min(FE.frames.length-1,i)); FE.curFrame=i;
   const fr=FE.frames[i];
   FE.elements=(fr.elements||[]).map(e=>({...e}));
-  FE.arrows=(fr.arrows||[]).map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed}));
+  FE.arrows=(fr.arrows||[]).map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed,c:a.c}));
   FE.zones=(fr.zones||[]).map(z=>({...z}));
   FE.seq=feRecomputeSeq(FE.elements);
   feRedraw(); feRenderFramesBar();
@@ -1650,7 +1660,7 @@ function feSyncCurFrame(){
   const cap=(FE.frames[FE.curFrame]&&FE.frames[FE.curFrame].cap)||'';
   FE.frames[FE.curFrame]={
     elements:FE.elements.map(e=>({...e})),
-    arrows:FE.arrows.map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed})),
+    arrows:FE.arrows.map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed,c:a.c})),
     zones:FE.zones.map(z=>({...z})), cap
   };
 }
@@ -1662,7 +1672,7 @@ function feAddFrame(){
   if(FE.frames.length>=FE_MAX_FRAMES){ toast('Massimo '+FE_MAX_FRAMES+' fasi','info'); return; }
   feSyncCurFrame();
   const cur=FE.frames[FE.curFrame];
-  const clone={elements:cur.elements.map(e=>({...e})),arrows:cur.arrows.map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed})),zones:cur.zones.map(z=>({...z})),cap:''};
+  const clone={elements:cur.elements.map(e=>({...e})),arrows:cur.arrows.map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed,c:a.c})),zones:cur.zones.map(z=>({...z})),cap:''};
   FE.frames.splice(FE.curFrame+1,0,clone);
   feApplyFrame(FE.curFrame+1);
 }
@@ -1728,9 +1738,12 @@ function fieldEditorCSS(){
   const st=document.createElement('style'); st.id='fe-css';
   st.textContent=`
   .fe-overlay{position:fixed;inset:0;z-index:9999;background:#0b0f1a;display:flex;flex-direction:row;}
-  .fe-overlay.fe-side-right{flex-direction:row-reverse;}
-  .fe-sidebar{flex:0 0 auto;width:78px;background:#0a1020;border-right:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:10px;padding:8px 6px;overflow-y:auto;}
-  .fe-overlay.fe-side-right .fe-sidebar{border-right:none;border-left:1px solid rgba(255,255,255,.1);}
+  .fe-sidebar{flex:0 0 auto;width:78px;background:#0a1020;display:flex;flex-direction:column;padding:8px 6px;overflow-y:auto;}
+  .fe-sidebar-tools{order:1;border-right:1px solid rgba(255,255,255,.1);}
+  .fe-sidebar-colors{order:3;border-left:1px solid rgba(255,255,255,.1);}
+  .fe-overlay.fe-side-right .fe-sidebar-tools{order:3;border-right:none;border-left:1px solid rgba(255,255,255,.1);}
+  .fe-overlay.fe-side-right .fe-sidebar-colors{order:1;border-left:none;border-right:1px solid rgba(255,255,255,.1);}
+  .fe-sidebar-inner{display:flex;flex-direction:column;gap:10px;width:100%;margin:auto 0;flex:0 0 auto;}
   .fe-side-toggle{flex:0 0 auto;min-height:40px;width:100%;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:transparent;color:rgba(255,255,255,.7);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.95rem;}
   .fe-vgroup{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid rgba(255,255,255,.1);}
   .fe-vgroup:first-of-type{border-top:none;padding-top:0;}
@@ -1738,8 +1751,12 @@ function fieldEditorCSS(){
   .fe-vbtn.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 24%,transparent);}
   .fe-vbtn-accent{border-color:var(--brand);background:var(--brand);color:#04140a;font-weight:800;}
   .fe-vlabel{font-size:.56rem;font-weight:700;line-height:1;text-align:center;white-space:nowrap;}
+  .fe-cswatches{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;}
+  .fe-csw{width:100%;aspect-ratio:1;border-radius:7px;border:2px solid rgba(255,255,255,.25);cursor:pointer;padding:0;color:#fff;font-size:.5rem;font-weight:800;}
+  .fe-csw.on{border-color:#fff;box-shadow:0 0 0 2px var(--brand);}
+  .fe-csw.auto{background:repeating-conic-gradient(rgba(255,255,255,.25) 0% 25%,transparent 0% 50%) 0/10px 10px;}
   .fe-dot{width:16px;height:16px;border-radius:50%;display:inline-block;border:2px solid #fff;}
-  .fe-main{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .fe-main{order:2;flex:1;min-width:0;display:flex;flex-direction:column;}
   .fe-canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:10px;overflow:hidden;}
   #fe-canvas{border-radius:12px;touch-action:none;box-shadow:0 10px 40px rgba(0,0,0,.5);}
   .fe-hint{text-align:center;color:rgba(255,255,255,.5);font-size:.76rem;padding:8px 12px 12px;}
@@ -2407,7 +2424,10 @@ function importData(e){
 }
 function resetAll(){
     confirmAction('Cancellare TUTTI i dati e ripartire da zero? Non si può annullare.',()=>{
-        localStorage.removeItem(dbKey());DB=seedDB();save();renderTeamName();go('dashboard');toast('App azzerata','info');
+        localStorage.removeItem(dbKey());DB=emptyDB();save();
+        localStorage.removeItem('vt_tutorial_done');
+        renderTeamName();go('dashboard');toast('App azzerata','info');
+        openOnboarding(true);
     });
 }
 
@@ -2417,7 +2437,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v34';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v42';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -3717,6 +3737,10 @@ function pickLineupBasket(){
     return {zone:role,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
   });
 }
+/* Riquadro basket inscritto nel viewBox 100x150 con le stesse proporzioni reali (28x15)
+   usate da courtRect() nella Lavagnetta Tattica, cosi' il campo non appare piu' storpiato.
+   Le x dei token pallacanestro vanno rimappate su questo riquadro (vedi renderCourtFormation). */
+const BASKET_VB=(()=>{ const ratio=28/15, aw=98, ah=148, pw=ah/ratio, rx=1+(aw-pw)/2, ry=1, rw=pw, rh=ah; return {rx,ry,rw,rh,cx:rx+rw/2,cy:ry+rh/2}; })();
 function courtZoneSVG(sport){
   if(sport==='pallavolo'){
     return `<svg viewBox="0 0 100 150" preserveAspectRatio="none" class="fpitch-svg">
@@ -3727,14 +3751,15 @@ function courtZoneSVG(sport){
       <line x1="66" y1="1" x2="66" y2="149" stroke="rgba(255,255,255,.3)" stroke-width="0.5" stroke-dasharray="4 4"/>
     </svg>`;
   }
+  const {rx,ry,rw,rh,cx,cy}=BASKET_VB, kw=rw*0.36, kh=rh*0.19, r=kw*0.5;
   return `<svg viewBox="0 0 100 150" preserveAspectRatio="none" class="fpitch-svg">
-    <rect x="1" y="1" width="98" height="148" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
-    <rect x="26" y="1" width="48" height="30" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="0.6"/>
-    <circle cx="50" cy="31" r="12" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
-    <path d="M8 1 A48 48 0 0 0 8 68" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="0.5"/>
-    <path d="M92 1 A48 48 0 0 1 92 68" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="0.5"/>
-    <line x1="8" y1="68" x2="92" y2="68" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="0.5"/>
-    <line x1="1" y1="75" x2="99" y2="75" stroke="rgba(255,255,255,.45)" stroke-width="0.6" stroke-dasharray="4 4"/>
+    <rect x="${rx.toFixed(2)}" y="${ry.toFixed(2)}" width="${rw.toFixed(2)}" height="${rh.toFixed(2)}" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="0.5"/>
+    <line x1="${rx.toFixed(2)}" y1="${cy.toFixed(2)}" x2="${(rx+rw).toFixed(2)}" y2="${cy.toFixed(2)}" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+    <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${(rw*0.13).toFixed(2)}" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="0.5"/>
+    <rect x="${(cx-kw/2).toFixed(2)}" y="${ry.toFixed(2)}" width="${kw.toFixed(2)}" height="${kh.toFixed(2)}" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+    <rect x="${(cx-kw/2).toFixed(2)}" y="${(ry+rh-kh).toFixed(2)}" width="${kw.toFixed(2)}" height="${kh.toFixed(2)}" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="0.5"/>
+    <path d="M ${(cx-r).toFixed(2)} ${(ry+kh).toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 1 ${(cx+r).toFixed(2)} ${(ry+kh).toFixed(2)}" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
+    <path d="M ${(cx-r).toFixed(2)} ${(ry+rh-kh).toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 0 0 ${(cx+r).toFixed(2)} ${(ry+rh-kh).toFixed(2)}" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="0.5"/>
   </svg>`;
 }
 function renderCourtFormation(sport){
@@ -3746,7 +3771,8 @@ function renderCourtFormation(sport){
     const inner = p
       ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${(p.name||'').split(' ').slice(-1)[0]}</span>${showOv?`<span class="ftk-ov">${cphOverall(r.v)}</span>`:''}`
       : `<span class="ftk-num">${r.zone}</span>`;
-    return `<div class="ftk${p?'':' empty'}" style="left:${(r.x*100).toFixed(1)}%;top:${(r.y*100).toFixed(1)}%" title="${r.role}">${inner}</div>`;
+    const leftPct = sport==='basket' ? (BASKET_VB.rx+r.x*BASKET_VB.rw) : (r.x*100);
+    return `<div class="ftk${p?'':' empty'}" style="left:${leftPct.toFixed(1)}%;top:${(r.y*100).toFixed(1)}%" title="${r.role}">${inner}</div>`;
   }).join('');
   const usedIds=new Set(rows.filter(r=>r.player).map(r=>r.player.id));
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));

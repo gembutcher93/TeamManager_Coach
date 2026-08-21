@@ -223,7 +223,7 @@
     window.resetAll = function(){
       confirmAction('Cancellare TUTTI i dati e ripartire da zero? Non si può annullare.', function(){
         try { localStorage.removeItem(LS_KEY); } catch(e){}
-        DB = seedDB(); save(); renderTeamName(); go('dashboard');
+        DB = emptyDB(); save(); renderTeamName(); go('dashboard');
         showSetup(readDB());
         toast('App azzerata — scegli lo sport', 'info');
       });
