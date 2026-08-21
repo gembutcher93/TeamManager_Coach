@@ -934,6 +934,11 @@ function buildLayout(){
             </div>
             <p class="hint" style="margin-top:8px">Il "Testo secondario" è usato per etichette, sottotitoli e note: se con lo sfondo scelto risulta poco leggibile, personalizzalo qui.</p>
             <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="resetTheme()"><i class="fa-solid fa-rotate-left"></i> Ripristina colori</button></div>
+        <div class="card"><h3><i class="fa-solid fa-users-viewfinder"></i> Formazione consigliata</h3>
+            <p style="color:var(--muted);margin-bottom:.8rem;font-size:.9rem">Quando condividi il pacchetto con un giocatore, puoi decidere se fargli vedere anche l'overall dei compagni nella formazione consigliata. Nome, numero e ruolo restano sempre visibili.</p>
+            <label style="display:flex;align-items:center;gap:8px;font-size:.9rem;cursor:pointer">
+                <input type="checkbox" ${showLineupOverall()?'checked':''} onchange="setShowLineupOverall(this.checked)"> Mostra overall dei compagni nella formazione consigliata
+            </label></div>
         ${MULTITEAM_ENABLED?`<div class="card"><h3><i class="fa-solid fa-people-group"></i> Le mie squadre</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Gestisci più squadre sullo stesso dispositivo (es. calcio, pallavolo, basket), ognuna coi suoi dati e un PIN. Utile per una società polisportiva.</p>
             <button class="btn btn-ghost" onclick="openTeamsMenu()"><i class="fa-solid fa-people-group"></i> Gestisci squadre</button></div>`:''}
@@ -2238,7 +2243,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v28';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v29';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -2314,6 +2319,60 @@ if('serviceWorker' in navigator){
 /* =========================================================
    CONDIVISIONE COL GIOCATORE (pacchetto offline)
    ========================================================= */
+/* =========================================================
+   LINEUP CONSIGLIATA per il pacchetto sync (tutti gli sport)
+   Coordinate normalizzate 0..1 per ciascuno sport (indipendenti tra loro).
+   Calcio: riusa l'engine gia' esistente soccerLineup() (modulo/posizioni/sostituzioni del coach).
+   Pallavolo: nuovo — 6 zone di rotazione P1..P6 (P4-P3-P2 avanti, P5-P6-P1 dietro); un giocatore per
+   ruolo (palleggiatore, opposto, 2 centrali, 2 schiacciatori, libero). Il libero prende la zona P6
+   (il centrale che ruoterebbe dietro), come da regolamento pallavolo.
+   Basket: nuovo — 5 posizioni base su mezzo campo (nessun motore per il basket esisteva in Formazione).
+   ========================================================= */
+const VOLLEY_ZONES=[['P4',.2,.22],['P3',.5,.18],['P2',.8,.22],['P5',.2,.78],['P6',.5,.82],['P1',.8,.78]];
+const VOLLEY_ZONE_ROLE={P1:['Palleggiatore',0],P4:['Opposto',0],P3:['Centrale',0],P2:['Schiacciatore',0],P5:['Schiacciatore',1],P6:['Libero',0]};
+const BASKET_POS={Playmaker:[.5,.85],Guardia:[.82,.55],'Ala piccola':[.18,.55],'Ala grande':[.7,.25],Centro:[.5,.1]};
+function lineupSlot(zr,p,v,x,y){ return {ruolo_o_zona:zr,playerName:p.name,number:p.number,overall:cphOverall(v),tier:playerTier(p.id),x:+x.toFixed(3),y:+y.toFixed(3)}; }
+function computeLineupCalcio(){
+  const {slots}=soccerLineup();
+  return slots.filter(s=>s.player).map(s=>lineupSlot(s.role,s.player,getSeasonStats(s.player.id).avgVoto,s.x,s.y));
+}
+function computeLineupPallavolo(){
+  const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
+  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const out=[];
+  VOLLEY_ZONES.forEach(([z,x,y])=>{
+    const [role,idx]=VOLLEY_ZONE_ROLE[z]; const pick=byRole(role)[idx];
+    if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y));
+  });
+  return out;
+}
+function computeLineupBasket(){
+  const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
+  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const out=[];
+  Object.keys(BASKET_POS).forEach(role=>{
+    const pick=byRole(role)[0]; if(!pick) return;
+    const [x,y]=BASKET_POS[role]; out.push(lineupSlot(role,pick.p,pick.v,x,y));
+  });
+  return out;
+}
+function computeLineup(sport){
+  sport=sport||curSport();
+  if(sport==='calcio') return computeLineupCalcio();
+  if(sport==='pallavolo') return computeLineupPallavolo();
+  if(sport==='basket') return computeLineupBasket();
+  return [];
+}
+function showLineupOverall(){ return !(DB.settings&&DB.settings.showLineupOverall===false); }
+function setShowLineupOverall(v){ DB.settings=DB.settings||{}; DB.settings.showLineupOverall=!!v; save(); toast(v?'Overall visibile ai giocatori':'Overall nascosto ai giocatori','info'); }
+function buildLineupPackage(sport){
+  sport=sport||curSport();
+  let slots; try{ slots=computeLineup(sport); }catch(e){ slots=[]; }
+  if(!slots||!slots.length) return null;
+  const showOverall=showLineupOverall();
+  const clean=slots.map(s=>{ const o={ruolo_o_zona:s.ruolo_o_zona,playerName:s.playerName,number:s.number,tier:s.tier,x:s.x,y:s.y}; if(showOverall) o.overall=s.overall; return o; });
+  return {sport,showOverall,slots:clean};
+}
 function buildPlayerPackage(id, photo){
     const sport=curSport();
     const p=playerById(id), s=getSeasonStats(id), voti=getPlayerVoti(id);
@@ -2336,12 +2395,15 @@ function buildPlayerPackage(id, photo){
         return {d:ev.date,n:ev.notes,note,items};
     }).filter(Boolean);
     const tstat=playerTrainingStats(id);
-    return {v:2,k:'vtm-player',photo:photo||null,sport,team:DB.teamName,gen:new Date().toISOString(),
+    const pkg={v:2,k:'vtm-player',photo:photo||null,sport,team:DB.teamName,gen:new Date().toISOString(),
         p:{name:p.name,number:p.number,role:p.role,hand:p.hand||'Dx',height:p.height||0,cap:!!p.isCaptain,vice:!!p.isViceCaptain,status:p.status||'active',goal:p.goal||''},
         voti:voti.map(v=>({d:v.date,v:v.voto,o:v.opp})),
         season:{matches:s.matches,avgVoto:s.avgVoto,cells:s.cells},
         training:{avg:tstat.avg,count:tstat.count,byCat:tstat.byCat},
         matches, cal, att, attPct:playerAttendance(id), ex};
+    const lineup=buildLineupPackage(sport);
+    if(lineup) pkg.lineup=lineup;
+    return pkg;
 }
 function encodePkg(o){ return btoa(unescape(encodeURIComponent(JSON.stringify(o)))); }
 function slug(s){ return s.toLowerCase().normalize('NFD').replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
@@ -2356,7 +2418,23 @@ async function sharePlayer(id){
         <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Oppure codice da copiare</label>
         <textarea id="share-code" readonly style="width:100%;height:90px;margin-top:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace">${code}</textarea>
         <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="copyShare()"><i class="fa-solid fa-copy"></i> Copia codice</button>
+        ${DEMO_BUILD?`
+        <p class="hint" style="margin:14px 0 6px;text-align:center">QR per l'app Player</p>
+        <div id="share-qr" style="display:flex;justify-content:center;min-height:40px;align-items:center"><span class="hint">Genero il QR…</span></div>
+        <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice/QR di esempio, ma serve l'app Player per riceverlo.</p>`:''}
       </div>`);
+    if(DEMO_BUILD) genShareQR(code);
+}
+async function loadQR(){ const m=await import('https://cdn.jsdelivr.net/npm/qrcode@1.5.3/+esm'); return m.default||m; }
+async function genShareQR(text){
+    const box=document.getElementById('share-qr'); if(!box) return;
+    try{
+        const QR=await loadQR();
+        const url=await QR.toDataURL(text,{margin:1,width:220,errorCorrectionLevel:'L'});
+        if(document.getElementById('share-qr')) box.innerHTML=`<img src="${url}" alt="QR condivisione" style="width:100%;max-width:220px;border-radius:10px">`;
+    }catch(e){
+        if(document.getElementById('share-qr')) box.innerHTML='<span class="hint">Codice troppo lungo per il QR: usa il testo o il file.</span>';
+    }
 }
 function copyShare(){
     const ta=document.getElementById('share-code'); ta.select();
