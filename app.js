@@ -3,11 +3,12 @@
    ========================================================= */
 const DEMO_BUILD = false;                 // false = completa; true sul deploy demo
 const DEMO_DAYS = 20;
-const DEMO_HARD_DEADLINE = '2026-12-31';  // oltre questa data la demo e' morta per tutti, comunque
+const DEMO_HARD_DEADLINE = '2026-10-31';  // oltre questa data la demo e' morta per tutti, comunque
 const CARD_STUDIO_ENABLED = false;        // officina card nascosta (si riattiva con true)
 const CONTACT_INFO = '+39 3498290606';    // mostrato nella schermata di scadenza
 const STRIPE_MONTHLY_URL = '';            // lasciare vuoto per ora (nessun bottone); si incolla dopo
 const STRIPE_ANNUAL_URL  = '';            // idem
+const MULTITEAM_ENABLED = false;          // pannello multi-squadra/società = feature tier Club
 /* Tutta la logica demo (countdown, blocco a scadenza) si attiva SOLO se DEMO_BUILD===true. */
 
 /* ---------- STATO PROVA (solo DEMO_BUILD) ---------- */
@@ -929,11 +930,13 @@ function buildLayout(){
                 <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Accento<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.brand)||'#22C55E')}" oninput="setColor('brand',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
                 <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Sfondo<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.bg)||'#060A18')}" oninput="setColor('bg',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
                 <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Testo<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.text)||'#F3F7FC')}" oninput="setColor('text',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
+                <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Testo secondario<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.muted)||'#8395B4')}" oninput="setColor('muted',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
             </div>
-            <button class="btn btn-ghost btn-sm" style="margin-top:12px" onclick="resetTheme()"><i class="fa-solid fa-rotate-left"></i> Ripristina colori</button></div>
-        <div class="card"><h3><i class="fa-solid fa-people-group"></i> Le mie squadre</h3>
+            <p class="hint" style="margin-top:8px">Il "Testo secondario" è usato per etichette, sottotitoli e note: se con lo sfondo scelto risulta poco leggibile, personalizzalo qui.</p>
+            <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="resetTheme()"><i class="fa-solid fa-rotate-left"></i> Ripristina colori</button></div>
+        ${MULTITEAM_ENABLED?`<div class="card"><h3><i class="fa-solid fa-people-group"></i> Le mie squadre</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Gestisci più squadre sullo stesso dispositivo (es. calcio, pallavolo, basket), ognuna coi suoi dati e un PIN. Utile per una società polisportiva.</p>
-            <button class="btn btn-ghost" onclick="openTeamsMenu()"><i class="fa-solid fa-people-group"></i> Gestisci squadre</button></div>
+            <button class="btn btn-ghost" onclick="openTeamsMenu()"><i class="fa-solid fa-people-group"></i> Gestisci squadre</button></div>`:''}
         <div class="card"><h3><i class="fa-solid fa-shield-halved"></i> Logo squadra</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica il logo della società (PNG, meglio senza sfondo). Comparirà sulle card sopra il numero di maglia; puoi posizionarlo dall'Officina card.</p>
             <button class="btn btn-ghost" onclick="pickTeamLogo()"><i class="fa-solid fa-upload"></i> Carica / cambia logo</button></div>
@@ -2235,7 +2238,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v26';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v27';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -3009,7 +3012,9 @@ function shade(hex,amt){ hex=(hex||'').replace('#',''); if(hex.length===3)hex=he
 function applyTheme(){ const t=(DB.settings&&DB.settings.theme)||{}, r=document.documentElement.style;
   if(t.brand){ r.setProperty('--brand',t.brand); r.setProperty('--brand-deep',shade(t.brand,-20)); r.setProperty('--ok',t.brand); }
   if(t.bg){ r.setProperty('--ink',t.bg); r.setProperty('--surface',shade(t.bg,12)); r.setProperty('--surface-2',shade(t.bg,22)); r.setProperty('--surface-3',shade(t.bg,34)); r.setProperty('--line',shade(t.bg,30)); r.setProperty('--line-soft',shade(t.bg,20)); }
-  if(t.text){ r.setProperty('--text',t.text); r.setProperty('--muted',hexA(t.text,.62)); r.setProperty('--muted-2',hexA(t.text,.42)); }
+  if(t.text){ r.setProperty('--text',t.text); }
+  if(t.muted){ r.setProperty('--muted',t.muted); r.setProperty('--muted-2',hexA(t.muted,.72)); }
+  else if(t.text){ r.setProperty('--muted',hexA(t.text,.62)); r.setProperty('--muted-2',hexA(t.text,.42)); }
 }
 function setColor(field,val){ DB.settings=DB.settings||{}; DB.settings.theme=DB.settings.theme||{}; DB.settings.theme[field]=val; save(); applyTheme(); }
 function resetTheme(){ if(DB.settings) DB.settings.theme={}; save(); location.reload(); }
