@@ -1445,15 +1445,26 @@ function openFieldEditor(exKey, exLabel){
         <button class="fe-btn on" id="fe-move" onclick="feTool('move')" title="Sposta"><i class="fa-solid fa-up-down-left-right"></i></button>
         <button class="fe-btn" id="fe-arrow" onclick="feTool('arrow')" title="Freccia movimento"><i class="fa-solid fa-arrow-right-long"></i></button>
         <button class="fe-btn" id="fe-arrowd" onclick="feTool('arrowd')" title="Freccia passaggio (tratteggiata)"><i class="fa-solid fa-ellipsis"></i></button>
+        <button class="fe-btn" id="fe-zone" onclick="feTool('zone')" title="Zona colorata"><i class="fa-solid fa-vector-square"></i></button>
         <button class="fe-btn" id="fe-erase" onclick="feTool('erase')" title="Elimina"><i class="fa-solid fa-eraser"></i></button>
       </div>
       <div class="fe-group">
-        <button class="fe-btn" onclick="feClear()" title="Pulisci tutto"><i class="fa-solid fa-trash-can"></i></button>
+        <button class="fe-btn" onclick="feClear()" title="Pulisci fase corrente"><i class="fa-solid fa-trash-can"></i></button>
         <button class="btn btn-accent btn-sm" onclick="feSave()">${saveBtn}</button>
         <button class="fe-btn" onclick="closeFieldEditor()" title="Chiudi"><i class="fa-solid fa-xmark"></i></button>
       </div>
     </div>
     <div class="fe-canvas-wrap"><canvas id="fe-canvas"></canvas></div>
+    <div class="fe-frames-bar">
+      <button class="fe-fbtn" id="fe-fprev" onclick="feFramePrev()" title="Fase precedente"><i class="fa-solid fa-chevron-left"></i></button>
+      <span class="fe-flabel" id="fe-fdots">Fase 1/1</span>
+      <button class="fe-fbtn" id="fe-fnext" onclick="feFrameNext()" title="Fase successiva"><i class="fa-solid fa-chevron-right"></i></button>
+      <button class="fe-fbtn" onclick="feMoveFrame(-1)" title="Sposta fase indietro"><i class="fa-solid fa-arrow-left-long"></i></button>
+      <button class="fe-fbtn" onclick="feMoveFrame(1)" title="Sposta fase avanti"><i class="fa-solid fa-arrow-right-long"></i></button>
+      <button class="fe-fbtn" id="fe-fadd" onclick="feAddFrame()" title="Aggiungi fase (copia quella corrente)"><i class="fa-solid fa-clone"></i></button>
+      <button class="fe-fbtn" id="fe-fdel" onclick="feDeleteFrameCur()" title="Elimina questa fase"><i class="fa-solid fa-trash-can"></i></button>
+    </div>
+    <input class="fe-cap-input" id="fe-frame-cap" placeholder="Didascalia di questa fase (facoltativa)" oninput="feSetCaption(this.value)">
     <div class="fe-hint">${exLabel?('Illustri: <b>'+exLabel+'</b> · '):''}Tocca un elemento per aggiungerlo · trascina per spostare · la freccia disegna i movimenti</div>`;
   document.body.appendChild(host);
   const cv=document.getElementById('fe-canvas'), wrap=host.querySelector('.fe-canvas-wrap');
@@ -1462,14 +1473,26 @@ function openFieldEditor(exKey, exLabel){
   const dpr=window.devicePixelRatio||1;
   cv.width=W*dpr; cv.height=H*dpr; cv.style.width=W+'px'; cv.style.height=H+'px';
   const ctx=cv.getContext('2d'); ctx.scale(dpr,dpr);
-  FE={sport,tool:'move',elements:[],arrows:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,arrowStart:null,exKey:exKey||null};
-  feBindPointer(); feRedraw();
-  if(exKey){ cIdbGet('exdraw:'+exKey).then(raw=>{ if(!FE)return; if(raw){ try{ const m=JSON.parse(raw); FE.elements=m.elements||[]; FE.arrows=m.arrows||[]; FE.seq=feRecomputeSeq(FE.elements); feRedraw(); }catch(e){} } else { const nm=exKey.split('|').slice(2).join('|'); const s=((window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[]).find(x=>x.name.toLowerCase()===nm); if(s) feApplyModelObj(s); } }); }
+  FE={sport,tool:'move',elements:[],arrows:[],zones:[],seq:{player:0,opp:0},cv,ctx,W,H,drag:null,dragZone:null,resizeZone:null,arrowStart:null,exKey:exKey||null,
+      frames:[{elements:[],arrows:[],zones:[],cap:''}],curFrame:0};
+  feBindPointer(); feRedraw(); feRenderFramesBar();
+  if(exKey){ cIdbGet('exdraw:'+exKey).then(raw=>{ if(!FE)return;
+    if(raw){
+      try{
+        const m=JSON.parse(raw);
+        if(m.frames||m.E){ feLoadExerciseObj(m); }
+        else { FE.elements=m.elements||[]; FE.arrows=m.arrows||[]; FE.zones=[]; FE.frames=[{elements:FE.elements,arrows:FE.arrows,zones:FE.zones,cap:''}]; FE.curFrame=0; FE.seq=feRecomputeSeq(FE.elements); feRedraw(); feRenderFramesBar(); }
+      }catch(e){}
+    } else {
+      const nm=exKey.split('|').slice(2).join('|'); const s=((window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[]).find(x=>x.name.toLowerCase()===nm);
+      if(s) feApplyModelObj(s);
+    }
+  }); }
 }
 function closeFieldEditor(){ const o=document.getElementById('fe-overlay'); if(o) o.remove(); FE=null; }
-function feTool(t){ FE.tool=t; ['move','arrow','arrowd','erase'].forEach(x=>{const b=document.getElementById('fe-'+x); if(b) b.classList.toggle('on',x===t);}); }
+function feTool(t){ FE.tool=t; ['move','arrow','arrowd','erase','zone'].forEach(x=>{const b=document.getElementById('fe-'+x); if(b) b.classList.toggle('on',x===t);}); }
 function feAdd(type){ const n=(type==='player'||type==='opp')?(++FE.seq[type]):0; FE.elements.push({type,x:FE.W/2,y:FE.H/2,n}); feRedraw(); }
-function feClear(){ FE.elements=[]; FE.arrows=[]; FE.seq={player:0,opp:0}; feRedraw(); }
+function feClear(){ FE.elements=[]; FE.arrows=[]; FE.zones=[]; FE.seq={player:0,opp:0}; feRedraw(); }
 function feField(ctx,W,H,sport){
   const m=10, rx=m, ry=m, rw=W-2*m, rh=H-2*m, cx=rx+rw/2, cy=ry+rh/2;
   ctx.fillStyle = sport==='basket' ? '#b5763b' : '#1f7a43'; ctx.fillRect(0,0,W,H);
@@ -1504,32 +1527,155 @@ function feDrawArrow(ctx,a){
   ctx.beginPath(); ctx.moveTo(x2,y2); ctx.lineTo(x2-hl*Math.cos(ang-0.4),y2-hl*Math.sin(ang-0.4)); ctx.lineTo(x2-hl*Math.cos(ang+0.4),y2-hl*Math.sin(ang+0.4)); ctx.closePath(); ctx.fill();
   ctx.restore();
 }
-function feRedraw(){ const {ctx,W,H,sport}=FE; ctx.clearRect(0,0,W,H); feField(ctx,W,H,sport); FE.arrows.forEach(a=>feDrawArrow(ctx,a)); FE.elements.forEach(el=>feDrawEl(ctx,el)); }
+const ZONE_COLORS={red:'#EF4444',yellow:'#FACC15',green:'#22C55E'};
+function feDrawZone(ctx,z){
+  ctx.save();
+  ctx.fillStyle=hexA(ZONE_COLORS[z.c]||ZONE_COLORS.green,.28);
+  ctx.fillRect(z.x,z.y,z.w,z.h);
+  ctx.strokeStyle=ZONE_COLORS[z.c]||ZONE_COLORS.green; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
+  ctx.strokeRect(z.x,z.y,z.w,z.h); ctx.setLineDash([]);
+  ctx.restore();
+}
+function feDrawZoneHandle(ctx,z){
+  ctx.save(); ctx.fillStyle=ZONE_COLORS[z.c]||ZONE_COLORS.green;
+  ctx.beginPath(); ctx.arc(z.x+z.w,z.y+z.h,6,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function feRedraw(){
+  const {ctx,W,H,sport}=FE; ctx.clearRect(0,0,W,H); feField(ctx,W,H,sport);
+  FE.zones.forEach(z=>feDrawZone(ctx,z));
+  FE.arrows.forEach(a=>feDrawArrow(ctx,a));
+  FE.elements.forEach(el=>feDrawEl(ctx,el));
+  if(FE.tool==='move'||FE.tool==='zone') FE.zones.forEach(z=>feDrawZoneHandle(ctx,z));
+}
 function feHit(x,y){ for(let i=FE.elements.length-1;i>=0;i--){ const e=FE.elements[i]; if(Math.hypot(e.x-x,e.y-y)<=18) return i; } return -1; }
+function feHitZone(x,y){ for(let i=FE.zones.length-1;i>=0;i--){ const z=FE.zones[i]; if(x>=z.x&&x<=z.x+z.w&&y>=z.y&&y<=z.y+z.h) return i; } return -1; }
+function feHitZoneHandle(x,y){ for(let i=FE.zones.length-1;i>=0;i--){ const z=FE.zones[i]; if(Math.hypot(x-(z.x+z.w),y-(z.y+z.h))<=14) return i; } return -1; }
 function feDistToSeg(px,py,a,b){ const x1=a[0],y1=a[1],x2=b[0],y2=b[1],dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy||1; let t=((px-x1)*dx+(py-y1)*dy)/l2; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy)); }
 function feEraseArrow(x,y){ let best=-1,bd=16; FE.arrows.forEach((a,i)=>{ const d=feDistToSeg(x,y,a.from,a.to); if(d<bd){bd=d;best=i;} }); if(best>=0){ FE.arrows.splice(best,1); feRedraw(); } }
 function feBindPointer(){
   const cv=FE.cv;
   const pos=e=>{ const r=cv.getBoundingClientRect(); return [ (e.clientX-r.left)*(FE.W/r.width), (e.clientY-r.top)*(FE.H/r.height) ]; };
   cv.addEventListener('pointerdown',e=>{ const p=pos(e),x=p[0],y=p[1];
-    if(FE.tool==='move'){ const i=feHit(x,y); if(i>=0) FE.drag={i,dx:FE.elements[i].x-x,dy:FE.elements[i].y-y}; }
-    else if(FE.tool==='erase'){ const i=feHit(x,y); if(i>=0){ FE.elements.splice(i,1); feRedraw(); } else feEraseArrow(x,y); }
+    if(FE.tool==='move'){
+      const zh=feHitZoneHandle(x,y);
+      if(zh>=0){ FE.resizeZone={i:zh}; }
+      else{ const i=feHit(x,y); if(i>=0) FE.drag={i,dx:FE.elements[i].x-x,dy:FE.elements[i].y-y};
+        else { const zi=feHitZone(x,y); if(zi>=0) FE.dragZone={i:zi,dx:FE.zones[zi].x-x,dy:FE.zones[zi].y-y}; } }
+    }
+    else if(FE.tool==='erase'){ const i=feHit(x,y); if(i>=0){ FE.elements.splice(i,1); feRedraw(); } else { const zi=feHitZone(x,y); if(zi>=0){ FE.zones.splice(zi,1); feRedraw(); } else feEraseArrow(x,y); } }
+    else if(FE.tool==='zone'){
+      const zi=feHitZone(x,y);
+      if(zi>=0) openZoneEdit(zi);
+      else { FE.zones.push({x:x-50,y:y-75,w:100,h:150,c:'green'}); feRedraw(); openZoneEdit(FE.zones.length-1); }
+    }
     else FE.arrowStart=[x,y];
     try{cv.setPointerCapture(e.pointerId);}catch(_){}
   });
   cv.addEventListener('pointermove',e=>{ const p=pos(e),x=p[0],y=p[1];
     if(FE.tool==='move'&&FE.drag){ const el=FE.elements[FE.drag.i]; el.x=x+FE.drag.dx; el.y=y+FE.drag.dy; feRedraw(); }
+    else if(FE.tool==='move'&&FE.dragZone){ const z=FE.zones[FE.dragZone.i]; z.x=x+FE.dragZone.dx; z.y=y+FE.dragZone.dy; feRedraw(); }
+    else if(FE.tool==='move'&&FE.resizeZone){ const z=FE.zones[FE.resizeZone.i]; z.w=Math.max(20,x-z.x); z.h=Math.max(20,y-z.y); feRedraw(); }
     else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ feRedraw(); feDrawArrow(FE.ctx,{from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); }
   });
   cv.addEventListener('pointerup',e=>{ const p=pos(e),x=p[0],y=p[1];
-    if(FE.tool==='move') FE.drag=null;
+    if(FE.tool==='move'){ FE.drag=null; FE.dragZone=null; FE.resizeZone=null; }
     else if((FE.tool==='arrow'||FE.tool==='arrowd')&&FE.arrowStart){ if(Math.hypot(x-FE.arrowStart[0],y-FE.arrowStart[1])>10) FE.arrows.push({from:FE.arrowStart,to:[x,y],dashed:FE.tool==='arrowd'}); FE.arrowStart=null; feRedraw(); }
   });
 }
 function feRecomputeSeq(els){ const s={player:0,opp:0}; (els||[]).forEach(e=>{ if((e.type==='player'||e.type==='opp')&&e.n>s[e.type]) s[e.type]=e.n; }); return s; }
 function hexA(hex,a){ hex=(hex||'').replace('#',''); if(hex.length===3)hex=hex.split('').map(c=>c+c).join(''); const n=parseInt(hex,16); if(isNaN(n))return hex; return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
 function schemeExists(sport,name){ name=(name||'').toLowerCase(); return !!((window.EX_SCHEMES&&window.EX_SCHEMES[sport])||[]).find(x=>x.name.toLowerCase()===name); }
-function feApplyModelObj(s){ if(!s||!FE)return; const sx=FE.W/400, sy=FE.H/600; FE.elements=(s.E||[]).map(e=>({type:e.t,x:e.x*sx,y:e.y*sy,n:e.n})); FE.arrows=(s.A||[]).map(a=>({from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d})); FE.seq=feRecomputeSeq(FE.elements); feRedraw(); }
+/* ---- Zone: modifica colore / elimina ---- */
+function openZoneEdit(i){
+  const z=FE.zones[i]; if(!z) return;
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-vector-square" style="color:var(--brand)"></i> Zona campo</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:10px">Scegli il colore della zona. Trascina il centro per spostarla, il pallino in basso a destra per ridimensionarla.</p>
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        ${['red','yellow','green'].map(c=>`<button onclick="feZoneColor(${i},'${c}')" title="${c}" style="width:44px;height:44px;border-radius:10px;cursor:pointer;border:2px solid ${z.c===c?'#fff':'transparent'};background:${ZONE_COLORS[c]}"></button>`).join('')}
+      </div>
+      <button class="btn btn-danger" style="width:100%" onclick="feZoneDelete(${i})"><i class="fa-solid fa-trash-can"></i> Elimina zona</button>
+    </div>`);
+}
+function feZoneColor(i,c){ if(FE.zones[i]) FE.zones[i].c=c; feRedraw(); closeModal(); }
+function feZoneDelete(i){ FE.zones.splice(i,1); feRedraw(); closeModal(); }
+/* ---- FASI (storyboard): conversione normalizzata 400x600 <-> spazio canvas corrente ---- */
+const FE_MAX_FRAMES=6;
+function feToNormFrame(elements,arrows,zones,W,H,cap){
+  const sx=400/W, sy=600/H, E=[];
+  (zones||[]).forEach(z=>E.push({t:'zone',x:+(z.x*sx).toFixed(1),y:+(z.y*sy).toFixed(1),w:+(z.w*sx).toFixed(1),h:+(z.h*sy).toFixed(1),c:z.c}));
+  (elements||[]).forEach(e=>E.push({t:e.type,x:+(e.x*sx).toFixed(1),y:+(e.y*sy).toFixed(1),n:e.n}));
+  const A=(arrows||[]).map(a=>({f:[+(a.from[0]*sx).toFixed(1),+(a.from[1]*sy).toFixed(1)],p:[+(a.to[0]*sx).toFixed(1),+(a.to[1]*sy).toFixed(1)],d:a.dashed?1:0}));
+  return {E,A,cap:cap||''};
+}
+function feFromNormFrame(fr,W,H){
+  const sx=W/400, sy=H/600, elements=[], zones=[];
+  (fr.E||[]).forEach(e=>{ if(e.t==='zone') zones.push({x:e.x*sx,y:e.y*sy,w:e.w*sx,h:e.h*sy,c:e.c||'green'}); else elements.push({type:e.t,x:e.x*sx,y:e.y*sy,n:e.n}); });
+  const arrows=(fr.A||[]).map(a=>({from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d}));
+  return {elements,arrows,zones,cap:fr.cap||''};
+}
+function feFramesFromObj(obj,W,H){
+  const list=(obj&&obj.frames&&obj.frames.length)?obj.frames:[{E:(obj&&obj.E)||[],A:(obj&&obj.A)||[],cap:(obj&&obj.cap)||''}];
+  return list.map(fr=>feFromNormFrame(fr,W,H));
+}
+function feLoadExerciseObj(obj){ if(!FE) return; FE.frames=feFramesFromObj(obj,FE.W,FE.H); feApplyFrame(0); }
+function feApplyFrame(i){
+  if(!FE||!FE.frames||!FE.frames.length) return;
+  i=Math.max(0,Math.min(FE.frames.length-1,i)); FE.curFrame=i;
+  const fr=FE.frames[i];
+  FE.elements=(fr.elements||[]).map(e=>({...e}));
+  FE.arrows=(fr.arrows||[]).map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed}));
+  FE.zones=(fr.zones||[]).map(z=>({...z}));
+  FE.seq=feRecomputeSeq(FE.elements);
+  feRedraw(); feRenderFramesBar();
+}
+function feSyncCurFrame(){
+  if(!FE||!FE.frames||!FE.frames.length) return;
+  const cap=(FE.frames[FE.curFrame]&&FE.frames[FE.curFrame].cap)||'';
+  FE.frames[FE.curFrame]={
+    elements:FE.elements.map(e=>({...e})),
+    arrows:FE.arrows.map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed})),
+    zones:FE.zones.map(z=>({...z})), cap
+  };
+}
+function feGotoFrame(i){ if(!FE||!FE.frames||i<0||i>=FE.frames.length) return; feSyncCurFrame(); feApplyFrame(i); }
+function feFramePrev(){ feGotoFrame(FE.curFrame-1); }
+function feFrameNext(){ feGotoFrame(FE.curFrame+1); }
+function feAddFrame(){
+  if(!FE) return;
+  if(FE.frames.length>=FE_MAX_FRAMES){ toast('Massimo '+FE_MAX_FRAMES+' fasi','info'); return; }
+  feSyncCurFrame();
+  const cur=FE.frames[FE.curFrame];
+  const clone={elements:cur.elements.map(e=>({...e})),arrows:cur.arrows.map(a=>({from:a.from.slice(),to:a.to.slice(),dashed:a.dashed})),zones:cur.zones.map(z=>({...z})),cap:''};
+  FE.frames.splice(FE.curFrame+1,0,clone);
+  feApplyFrame(FE.curFrame+1);
+}
+function feDeleteFrameCur(){
+  if(!FE||FE.frames.length<=1){ toast('Deve restare almeno una fase','info'); return; }
+  confirmAction('Eliminare questa fase?',()=>{ FE.frames.splice(FE.curFrame,1); feApplyFrame(Math.min(FE.curFrame,FE.frames.length-1)); });
+}
+function feMoveFrame(dir){
+  if(!FE) return;
+  const i=FE.curFrame, j=i+dir; if(j<0||j>=FE.frames.length) return;
+  feSyncCurFrame();
+  const tmp=FE.frames[i]; FE.frames[i]=FE.frames[j]; FE.frames[j]=tmp;
+  FE.curFrame=j; feRenderFramesBar();
+}
+function feSetCaption(v){ if(FE&&FE.frames&&FE.frames[FE.curFrame]) FE.frames[FE.curFrame].cap=v; }
+function feRenderFramesBar(){
+  if(!FE) return;
+  const lbl=document.getElementById('fe-fdots'), cap=document.getElementById('fe-frame-cap'); if(!lbl) return;
+  const n=FE.frames.length;
+  lbl.textContent='Fase '+(FE.curFrame+1)+'/'+n;
+  if(cap) cap.value=(FE.frames[FE.curFrame]&&FE.frames[FE.curFrame].cap)||'';
+  const prevBtn=document.getElementById('fe-fprev'); if(prevBtn) prevBtn.disabled=FE.curFrame<=0;
+  const nextBtn=document.getElementById('fe-fnext'); if(nextBtn) nextBtn.disabled=FE.curFrame>=n-1;
+  const delBtn=document.getElementById('fe-fdel'); if(delBtn) delBtn.disabled=n<=1;
+  const addBtn=document.getElementById('fe-fadd'); if(addBtn) addBtn.disabled=n>=FE_MAX_FRAMES;
+}
+function feApplyModelObj(s){ if(!s||!FE)return; feLoadExerciseObj(s); }
 function initSchemes(){ const S=window.EX_SCHEMES; if(!S)return; ['calcio','pallavolo','basket'].forEach(sp=>{ const list=S[sp]||[]; if(!list.length)return; if(SPORT_CATS[sp]&&SPORT_CATS[sp].indexOf('Schemi pronti')<0) SPORT_CATS[sp].push('Schemi pronti'); EXERCISE_LIB[sp]=EXERCISE_LIB[sp]||{}; EXERCISE_LIB[sp]['Schemi pronti']=list.map(x=>x.name); }); CAT_COLOR['Schemi pronti']='#5b9dff'; }
 function feOpenPresets(){
   const list=(window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[];
@@ -1540,17 +1686,19 @@ function feOpenPresets(){
 }
 function feApplyModel(i){
   const s=((window.EX_SCHEMES&&window.EX_SCHEMES[FE.sport])||[])[i]; if(!s||!FE) return;
-  const sx=FE.W/400, sy=FE.H/600;
-  FE.elements=(s.E||[]).map(e=>({type:e.t,x:e.x*sx,y:e.y*sy,n:e.n}));
-  FE.arrows=(s.A||[]).map(a=>({from:[a.f[0]*sx,a.f[1]*sy],to:[a.p[0]*sx,a.p[1]*sy],dashed:!!a.d}));
-  FE.seq=feRecomputeSeq(FE.elements); feRedraw();
+  feLoadExerciseObj(s);
 }
 function exKeyOf(sport,cat,name){ return (sport+'|'+cat+'|'+name).toLowerCase(); }
 function openExerciseDraw(name,cat){ openFieldEditor(exKeyOf(curSport(),cat,name), name); }
 async function feSave(){
   if(FE.exKey){
     try{ const png=FE.cv.toDataURL('image/png');
-      await cIdbSet('exdraw:'+FE.exKey, JSON.stringify({sport:FE.sport,elements:FE.elements,arrows:FE.arrows,png}));
+      feSyncCurFrame();
+      const framesNorm=FE.frames.map(fr=>feToNormFrame(fr.elements,fr.arrows,fr.zones,FE.W,FE.H,fr.cap));
+      const first=framesNorm[0]||{E:[],A:[]};
+      const payload={sport:FE.sport,E:first.E,A:first.A,png};
+      if(framesNorm.length>1) payload.frames=framesNorm;
+      await cIdbSet('exdraw:'+FE.exKey, JSON.stringify(payload));
       DB.settings=DB.settings||{}; DB.settings.exDrawn=DB.settings.exDrawn||[];
       if(!DB.settings.exDrawn.includes(FE.exKey)) DB.settings.exDrawn.push(FE.exKey);
       save(); toast("Disegno salvato nell'esercizio"); closeFieldEditor();
@@ -1573,7 +1721,12 @@ function fieldEditorCSS(){
   .fe-dot{width:16px;height:16px;border-radius:50%;display:inline-block;border:2px solid #fff;}
   .fe-canvas-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:10px;overflow:hidden;}
   #fe-canvas{border-radius:12px;touch-action:none;box-shadow:0 10px 40px rgba(0,0,0,.5);}
-  .fe-hint{text-align:center;color:rgba(255,255,255,.5);font-size:.76rem;padding:8px 12px 12px;}`;
+  .fe-hint{text-align:center;color:rgba(255,255,255,.5);font-size:.76rem;padding:8px 12px 12px;}
+  .fe-frames-bar{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;padding:6px 12px 0;}
+  .fe-fbtn{width:34px;height:34px;border-radius:9px;border:1px solid rgba(255,255,255,.18);background:transparent;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.85rem;}
+  .fe-fbtn:disabled{opacity:.3;cursor:default;}
+  .fe-flabel{color:#fff;font-family:'Outfit',sans-serif;font-weight:800;font-size:.85rem;min-width:80px;text-align:center;}
+  .fe-cap-input{display:block;width:calc(100% - 24px);margin:8px 12px 0;padding:9px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.04);color:#fff;font-size:.85rem;}`;
   document.head.appendChild(st);
 }
 function addEvent(e){
@@ -2243,7 +2396,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v29';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v30';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
