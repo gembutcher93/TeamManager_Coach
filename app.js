@@ -69,23 +69,32 @@ const SCOUT = {
   },
   calcio:{
     groups:[
-      {label:'Offensiva',  fields:[['gol','Gol'],['assist','Ass'],['tiri','Tiri'],['tiriP','In porta']]},
-      {label:'Disciplina', fields:[['falli','Falli'],['amm','Amm'],['esp','Esp']]},
-      {label:'Portiere',   fields:[['parate','Parate'],['subiti','Subiti']]},
+      {label:'Offensivo',  fields:[['gol','Gol'],['assist','Ass'],['tiroPorta','Tiro P.'],['dribbling','Drib']]},
+      {label:'Difensivo',  fields:[['contrasto','Contr'],['intercetto','Interc'],['chiusura','Chius']]},
+      {label:'Disciplina', fields:[['fallo','Falli'],['ammonizione','Amm'],['espulsione','Esp'],['pallaPersa','P.Persa']]},
+      {label:'Portiere',   fields:[['parata','Parate'],['uscita','Uscite'],['respinta','Resp'],['golSubito','Sub']]},
       {label:'',           fields:[['min','Min']]}
     ],
+    /* Pesi calibrati per dare pari dignità alle azioni difensive/portiere rispetto a gol
+       e assist: un difensore o un portiere che gioca un'ottima gara fatta di sole azioni
+       difensive (contrasti, intercetti, chiusure, parate, uscite) deve poter superare il
+       voto base 6.0 tanto quanto un attaccante che segna, non restare relegato alla sola
+       assenza di demeriti. */
     voto(s){
       let v=6.0;
-      v+=s.gol*1.0 + s.assist*0.6 + s.tiriP*0.1 + s.parate*0.15;
-      v-=s.subiti*0.25 + s.falli*0.05 + s.amm*0.3 + s.esp*1.5;
+      v+=(s.gol||0)*1.0 + (s.assist||0)*0.6 + (s.tiroPorta||0)*0.15 + (s.dribbling||0)*0.12
+        +(s.contrasto||0)*0.15 + (s.intercetto||0)*0.15 + (s.chiusura||0)*0.2
+        +(s.parata||0)*0.3 + (s.uscita||0)*0.25 + (s.respinta||0)*0.2;
+      v-=(s.fallo||0)*0.05 + (s.ammonizione||0)*0.3 + (s.espulsione||0)*1.5
+        +(s.pallaPersa||0)*0.1 + (s.golSubito||0)*0.3;
       return clampVoto(v);
     },
     season(a){
       return [['Gol',a.gol||0,''],['Assist',a.assist||0,''],
-              ['Tiri in porta',a.tiriP||0,''],['Parate',a.parate||0,''],
-              ['Ammonizioni',a.amm||0,'']];
+              ['Contrasti vinti',a.contrasto||0,''],['Parate',a.parata||0,''],
+              ['Ammonizioni',a.ammonizione||0,'']];
     },
-    note:'Voto (base 6.0): +gol, assist, parate · −gol subiti, falli, cartellini.'
+    note:'Voto (base 6.0): +gol, assist, tiri in porta, dribbling, contrasti vinti, intercetti, chiusure, parate, uscite, respinte · −falli, ammonizioni, espulsioni, palle perse, gol subiti.'
   },
   basket:{
     groups:[
@@ -108,7 +117,7 @@ const SCOUT = {
               ['Assist',a.assist||0,''],['% da 3',p3!=null?p3:'—',p3!=null?'%':''],
               ['Stoppate',a.stoppate||0,'']];
     },
-    note:'Voto (base 6.0) dalla valutazione: punti, rimbalzi, assist, rubate, stoppate − perse, errori al tiro, falli.'
+    note:'PT si calcola automaticamente da tiri da 2/3 e liberi fatti (non è modificabile a mano). Voto (base 6.0) dalla valutazione: punti, rimbalzi, assist, rubate, stoppate − perse, errori al tiro, falli.'
   }
 };
 function scoutFields(sport){ return SCOUT[sport||curSport()].groups.flatMap(g=>g.fields.map(f=>f[0])); }
@@ -198,12 +207,31 @@ function openScoutTutorial(){
   weightsCSS();
   const sport=curSport();
   const isVolley = sport==='pallavolo';
+  const isBasket = sport==='basket';
   const uso = isVolley ? `
     <ol class="tut-steps">
       <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
       <li>Scegli il <b>fondamentale</b> (Ricezione / Attacco / Battuta / Muro).</li>
       <li>Tocca il <b>grado</b> del tocco: <b>#</b> perfetto · <b>+</b> positivo · <b>!</b> ok · <b>−</b> negativo · <b>=</b> errore.</li>
       <li>Ogni tocco aggiorna subito le percentuali e il voto del giocatore.</li>
+      <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
+      <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
+    </ol>` : isBasket ? `
+    <ol class="tut-steps">
+      <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
+      <li>Scegli la <b>categoria</b>: Tiro da 2 / da 3 / libero, Rimbalzo, oppure Assist · Palla rubata · Palla persa · Stoppata · Fallo.</li>
+      <li>Per i tiri e il rimbalzo tocca l'<b>esito</b> (Fatto/Sbagliato oppure Offensivo/Difensivo). Per le altre categorie il tocco sulla categoria registra subito l'evento.</li>
+      <li>Il <b>PT</b> si calcola da solo dai tiri fatti: non si inserisce a mano.</li>
+      <li>Il <b>MIN</b> (minutaggio) si inserisce a parte, sotto il nome del giocatore.</li>
+      <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
+      <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
+    </ol>` : sport==='calcio' ? `
+    <ol class="tut-steps">
+      <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
+      <li>Scegli la <b>categoria</b>: Offensivo, Difensivo, Disciplina o (solo per il portiere) Portiere.</li>
+      <li>Tocca l'<b>azione</b>: ogni tocco registra subito l'evento (Gol, Contrasto vinto, Parata, Fallo…).</li>
+      <li>Difensori e portieri guadagnano voto anche senza segnare: contrasti, intercetti, chiusure e parate pesano quanto gol e assist.</li>
+      <li>Il <b>MIN</b> (minutaggio) si inserisce a parte, sotto il nome del giocatore.</li>
       <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
       <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
     </ol>` : `
@@ -1886,7 +1914,10 @@ const SCOUT_ABBR={
   Ace:'Ace (servizio punto)',Err:'Errore',Tot:'Totale',Pos:'Positiva',Prf:'Perfetta',Pt:'Punto',
   Ass:'Assist','In porta':'Tiri in porta',Amm:'Ammonizione',Esp:'Espulsione',Subiti:'Gol subiti',Min:'Minuti',
   Off:'Rimbalzi offensivi',Dif:'Rimbalzi difensivi',Rub:'Palle rubate',Perse:'Palle perse',Stop:'Stoppate',
-  Fatti:'Realizzati',Tent:'Tentati'
+  Fatti:'Realizzati',Tent:'Tentati',
+  'Tiro P.':'Tiro in porta (anche senza segnare)',Drib:'Dribbling riuscito',Contr:'Contrasto vinto',
+  Interc:'Intercetto',Chius:'Chiusura efficace',Falli:'Fallo','P.Persa':'Palla persa',
+  Parate:'Parata',Uscite:'Uscita vinta',Resp:'Respinta',Sub:'Gol subito'
 };
 function renderScoutLegend(sport){
   const el=document.getElementById('scout-legend'); if(!el) return;
@@ -1922,7 +1953,8 @@ function setupScout(){
     document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
     panel.style.display='block';
     const numEl=document.getElementById('scout-numeric'), tapEl=document.getElementById('scout-tap');
-    /* PALLAVOLO → scout a tocchi (versione A) + rotazioni di gara. Altri sport → tabella numerica. */
+    /* PALLAVOLO → scout a tocchi (versione A) + rotazioni di gara. BASKET → scout a tocchi
+       (stepper). Calcio → tabella numerica (per ora). */
     if(sport==='pallavolo'){
         numEl.style.display='none'; tapEl.style.display='block';
         buildScoutTap(id, existing);
@@ -1930,8 +1962,22 @@ function setupScout(){
         renderScoutLegend(sport);
         return;
     }
+    if(sport==='basket'){
+        numEl.style.display='none'; tapEl.style.display='block';
+        buildScoutTapBasket(id, existing);
+        if(rotEl) rotEl.style.display='none';
+        renderScoutLegend(sport);
+        return;
+    }
+    if(sport==='calcio'){
+        numEl.style.display='none'; tapEl.style.display='block';
+        buildScoutTapCalcio(id, existing);
+        if(rotEl) rotEl.style.display='none';
+        renderScoutLegend(sport);
+        return;
+    }
     numEl.style.display='block'; tapEl.style.display='none';
-    if(rotEl) rotEl.style.display='none';   /* niente rotazioni per calcio/basket */
+    if(rotEl) rotEl.style.display='none';
     buildScoutHead(sport);
     const fields=scoutFields(sport), colspan=fields.length+2;
     body.innerHTML='';
@@ -2217,6 +2263,449 @@ function scoutTapCSS(){
 }
 
 /* =========================================================
+   SCOUT BASKET — tap a tocchi (stesso pattern del pallavolo)
+   Tocco giocatore → tocco categoria → tocco esito (Fatto/Sbagliato,
+   Offensivo/Difensivo) oppure, per le categorie a evento singolo
+   (Assist, Palla rubata, Palla persa, Stoppata, Fallo), il tocco
+   sulla categoria stessa registra l'evento. Il PT si ricava sempre
+   da 2/3 punti e liberi fatti: non è mai un campo digitabile.
+   ========================================================= */
+const BASK_CATS = [
+  {k:'fg2', label:'Tiro da 2', icon:'fa-basketball', made:'fg2m', att:'fg2a', outcomes:[['made','Fatto'],['miss','Sbagliato']]},
+  {k:'fg3', label:'Tiro da 3', icon:'fa-basketball', made:'fg3m', att:'fg3a', outcomes:[['made','Fatto'],['miss','Sbagliato']]},
+  {k:'ft',  label:'Tiro libero', icon:'fa-basketball', made:'ftm', att:'fta', outcomes:[['made','Fatto'],['miss','Sbagliato']]},
+  {k:'reb', label:'Rimbalzo', icon:'fa-arrows-up-down', outcomes:[['off','Offensivo'],['def','Difensivo']]},
+  {k:'assist', label:'Assist', icon:'fa-hands-clapping'},
+  {k:'steal', label:'Palla rubata', icon:'fa-hand'},
+  {k:'turnover', label:'Palla persa', icon:'fa-triangle-exclamation'},
+  {k:'block', label:'Stoppata', icon:'fa-hand-back-fist'},
+  {k:'foul', label:'Fallo', icon:'fa-flag'}
+];
+const BASK_SINGLE_FIELD={assist:'assist',steal:'rubate',turnover:'perse',block:'stoppate',foul:'falli'};
+let BTAP = null;
+function bTapApply(o, cat, out){
+  const c=BASK_CATS.find(x=>x.k===cat); if(!c) return;
+  if(BASK_SINGLE_FIELD[cat]){ const f=BASK_SINGLE_FIELD[cat]; o[f]=(o[f]||0)+1; return; }
+  if(cat==='reb'){ if(out==='off') o.roff=(o.roff||0)+1; else o.rdif=(o.rdif||0)+1; return; }
+  o[c.att]=(o[c.att]||0)+1;
+  if(out==='made') o[c.made]=(o[c.made]||0)+1;
+}
+function bTapDeriveRow(pId){
+  const o=Object.assign(blankStat('basket'), BTAP.base[pId]||{});
+  BTAP.events.forEach(e=>{ if(e.pId===pId) bTapApply(o,e.cat,e.out); });
+  o.punti=(o.fg2m||0)*2+(o.fg3m||0)*3+(o.ftm||0)*1;
+  return o;
+}
+function bTapMinValue(pId){ return (BTAP.min[pId]!=null) ? BTAP.min[pId] : 0; }
+function bTapSetMin(pId, val){ if(!BTAP) return; BTAP.min[pId]=Math.max(0,parseInt(val)||0); }
+function buildScoutTapBasket(matchId, existing){
+  scoutTapCSS(); bScoutTapCSS();
+  const base={}, override={}, min={};
+  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('basket'); scoutFields('basket').forEach(k=>b[k]=r[k]||0); base[r.pId]=b;
+    if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride;
+    if(typeof r.min==='number') min[r.pId]=r.min; }); }
+  BTAP={ matchId, base, override, min, events:[], sel:null, cat:'fg2', seq:1 };
+  const el=document.getElementById('scout-tap');
+  el.innerHTML=`
+    <div class="stap-wrap">
+      <div class="stap-left">
+        <div class="stap-hint"><i class="fa-solid fa-hand-pointer"></i> Tocca un giocatore, poi la categoria, poi l'esito. Assist/Palla rubata/Palla persa/Stoppata/Fallo si registrano con un tocco solo sulla categoria.</div>
+        <div class="stap-players" id="stap-players"></div>
+      </div>
+      <div class="stap-pad">
+        <div class="stap-sel" id="stap-sel"></div>
+        <div class="btap-cats" id="btap-cats"></div>
+        <div class="btap-outcomes" id="btap-outcomes"></div>
+        <div class="stap-detail" id="stap-detail"></div>
+        <div class="stap-last" id="stap-last"></div>
+        <button class="stap-undo" id="stap-undo" onclick="bTapUndo()"><i class="fa-solid fa-rotate-left"></i> Annulla ultimo</button>
+        <button class="btn btn-accent stap-save" onclick="saveScoutTapBasket()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+      </div>
+    </div>`;
+  document.getElementById('btap-cats').innerHTML=BASK_CATS.map(c=>
+    `<button class="btap-cat${c.k===BTAP.cat?' on':''}" data-k="${c.k}" onclick="bTapCategory('${c.k}')"><i class="fa-solid ${c.icon}"></i> ${c.label}</button>`).join('');
+  bTapRenderPlayers();
+  bTapRenderSel();
+  bTapRenderOutcomes();
+}
+function bTapRenderPlayers(){
+  const box=document.getElementById('stap-players'); if(!box) return;
+  const roster=activePlayers();
+  if(!roster.length){ box.innerHTML='<div class="empty-row" style="padding:1rem">Nessun atleta in rosa.</div>'; return; }
+  box.innerHTML=roster.map(p=>{
+    const row=bTapDeriveRow(p.id);
+    const ov=BTAP.override[p.id];
+    const v=(typeof ov==='number')?ov:computeVoto(row,'basket',p.role);
+    const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
+    const vClass=v>=7?'hi':v>=5.5?'md':'lo';
+    const minVal=bTapMinValue(p.id);
+    return `<div class="stap-player${BTAP.sel===p.id?' sel':''}" data-pid="${p.id}">
+      <button class="stap-p-btn" onclick="bTapSelect(${p.id})">
+        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+        <div class="stap-p-stat"><span>PT ${row.punti}</span><span>Rim ${(row.roff||0)+(row.rdif||0)}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
+      </button>
+      <label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="bTapSetMin(${p.id}, this.value)"></label>
+    </div>`;
+  }).join('');
+}
+function bTapRenderSel(){
+  const sel=document.getElementById('stap-sel'); if(!sel) return;
+  const p=BTAP.sel?playerById(BTAP.sel):null;
+  sel.innerHTML = p
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
+  const on=!!p;
+  document.querySelectorAll('.btap-cat').forEach(b=>b.disabled=!on);
+  document.querySelectorAll('.btap-outcome').forEach(b=>b.disabled=!on);
+  const undo=document.getElementById('stap-undo'); if(undo) undo.disabled=!BTAP.events.length;
+  const last=document.getElementById('stap-last');
+  if(last){
+    if(BTAP.events.length){ const e=BTAP.events[BTAP.events.length-1]; const pl=playerById(e.pId); const c=BASK_CATS.find(x=>x.k===e.cat);
+      const outLbl = e.out ? ' · '+(((c&&c.outcomes)||[]).find(o=>o[0]===e.out)||[])[1] : '';
+      last.innerHTML=`Ultimo: <b>#${pl?pl.number:'?'}</b> · ${c?c.label:e.cat}${outLbl||''}`; }
+    else last.textContent='';
+  }
+  bTapRenderDetail();
+}
+function bTapRenderOutcomes(){
+  const box=document.getElementById('btap-outcomes'); if(!box) return;
+  const c=BASK_CATS.find(x=>x.k===(BTAP&&BTAP.cat));
+  if(!c || !c.outcomes){ box.innerHTML=`<div class="btap-single-hint">Tocco singolo: ritocca "${c?c.label:''}" per aggiungere un altro evento.</div>`; return; }
+  const on=!!(BTAP&&BTAP.sel);
+  box.innerHTML=c.outcomes.map(o=>`<button class="btap-outcome" ${on?'':'disabled'} onclick="bTapOutcome('${o[0]}')">${o[1]}</button>`).join('');
+}
+function bTapCategory(k){
+  if(!BTAP) return;
+  const c=BASK_CATS.find(x=>x.k===k); if(!c) return;
+  BTAP.cat=k;
+  document.querySelectorAll('.btap-cat').forEach(b=>b.classList.toggle('on', b.dataset.k===k));
+  bTapRenderOutcomes();
+  if(!c.outcomes){
+    if(BTAP.sel){ BTAP.events.push({id:BTAP.seq++, pId:BTAP.sel, cat:k}); bTapRenderPlayers(); bTapRenderSel(); }
+  }
+}
+function bTapOutcome(out){
+  if(!BTAP||!BTAP.sel) return;
+  const c=BASK_CATS.find(x=>x.k===BTAP.cat); if(!c||!c.outcomes) return;
+  BTAP.events.push({id:BTAP.seq++, pId:BTAP.sel, cat:c.k, out});
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapSelect(pId){ if(!BTAP) return; BTAP.sel=pId; bTapRenderPlayers(); bTapRenderSel(); }
+function bTapUndo(){
+  if(!BTAP||!BTAP.events.length) return;
+  const e=BTAP.events.pop();
+  BTAP.sel=e.pId; BTAP.cat=e.cat;
+  document.querySelectorAll('.btap-cat').forEach(b=>b.classList.toggle('on', b.dataset.k===e.cat));
+  bTapRenderOutcomes(); bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapRemoveEvent(id){
+  if(!BTAP) return;
+  const i=BTAP.events.findIndex(e=>e.id===id); if(i<0) return;
+  BTAP.events.splice(i,1);
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapRenderDetail(){
+  const box=document.getElementById('stap-detail'); if(!box) return;
+  if(!BTAP.sel){ box.innerHTML=''; return; }
+  const p=playerById(BTAP.sel);
+  const evs=BTAP.events.filter(e=>e.pId===BTAP.sel);
+  const chips = evs.length
+    ? evs.map(e=>{ const c=BASK_CATS.find(x=>x.k===e.cat); const outLbl=e.out?(((c&&c.outcomes)||[]).find(o=>o[0]===e.out)||[])[1]:'';
+        return `<button class="stap-chip btap-chip" onclick="bTapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
+          <span class="stap-chip-f">${c?c.label:e.cat}</span>${outLbl?`<b>${outLbl}</b>`:''}<i class="fa-solid fa-xmark"></i></button>`; }).join('')
+    : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione.</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
+  const row=bTapDeriveRow(BTAP.sel);
+  const calc=computeVoto(row,'basket',p.role);
+  const ov=BTAP.override[BTAP.sel];
+  box.innerHTML += `<div class="stap-why"><div class="stap-why-h">PT auto <b>${row.punti}</b> · Voto calcolato <b>${calc.toFixed(1)}</b></div></div>`;
+  box.innerHTML += `<div class="stap-ov">
+      <label>Voto manuale del mister</label>
+      <div class="stap-ov-row">
+        <input type="number" min="1" max="10" step="0.1" id="btap-ov-in" placeholder="auto ${calc.toFixed(1)}" value="${typeof ov==='number'?ov:''}">
+        <button class="btn btn-accent" onclick="bTapApplyOverride()">Imposta</button>
+        ${typeof ov==='number'?`<button class="btn btn-ghost" onclick="bTapClearOverride()">Auto</button>`:''}
+      </div>
+      ${typeof ov==='number'?`<div class="stap-ov-note">Ora vale <b>${(+ov).toFixed(1)}</b> (manuale). "Auto" ripristina ${calc.toFixed(1)}.</div>`:`<div class="stap-ov-note">Lascia vuoto per usare il voto automatico.</div>`}
+    </div>`;
+}
+function bTapApplyOverride(){
+  if(!BTAP||!BTAP.sel) return;
+  const inp=document.getElementById('btap-ov-in'); if(!inp) return;
+  const raw=inp.value.trim();
+  if(raw===''){ delete BTAP.override[BTAP.sel]; }
+  else { let v=Math.max(1,Math.min(10,parseFloat(raw))); if(isNaN(v)){ toast('Voto non valido','info'); return; } BTAP.override[BTAP.sel]=v; }
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapClearOverride(){
+  if(!BTAP||!BTAP.sel) return;
+  delete BTAP.override[BTAP.sel];
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function saveScoutTapBasket(){
+  if(!BTAP) return;
+  const match=DB.events.find(e=>e.id===BTAP.matchId);
+  const rows=[];
+  activePlayers().forEach(p=>{
+    const s=bTapDeriveRow(p.id);
+    const ov=BTAP.override[p.id];
+    const min=bTapMinValue(p.id);
+    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'basket').toFixed(1)};
+    if(typeof ov==='number') row.votoOverride=ov;
+    rows.push(row);
+  });
+  DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==BTAP.matchId);
+  DB.scoutHistory.push({matchId:BTAP.matchId, date:match.date, opponent:match.notes, sport:'basket', rows});
+  save(); toast('Statistiche registrate nelle schede atleti');
+  go('roster');
+}
+function bScoutTapCSS(){
+  if(document.getElementById('btap-css')) return;
+  const st=document.createElement('style'); st.id='btap-css';
+  st.textContent=`
+  #scout-tap .stap-player{display:flex;flex-direction:column;gap:0;padding:0;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:14px;background:var(--surface-2,rgba(255,255,255,.03));overflow:hidden;}
+  #scout-tap .stap-player.sel{border-color:var(--brand);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand) 40%,transparent) inset;}
+  #scout-tap .stap-p-btn{display:flex;flex-direction:column;gap:6px;text-align:left;width:100%;padding:10px 12px;border:none;background:transparent;color:inherit;cursor:pointer;}
+  #scout-tap .stap-p-btn:active{transform:scale(.997);}
+  .btap-min{display:flex;align-items:center;gap:8px;padding:6px 12px 10px;font-size:.74rem;color:var(--muted);border-top:1px dashed var(--border,rgba(255,255,255,.1));}
+  .btap-min input{width:60px;padding:5px 8px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.2));background:var(--surface,rgba(0,0,0,.2));color:inherit;font-size:.85rem;}
+  .btap-cats{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .btap-cat{padding:10px 8px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.12));background:transparent;color:var(--muted);font-weight:700;font-size:.8rem;cursor:pointer;display:flex;align-items:center;gap:6px;justify-content:center;}
+  .btap-cat.on{border-color:var(--brand);color:var(--text,#fff);background:color-mix(in srgb,var(--brand) 16%,transparent);}
+  .btap-cat:disabled{opacity:.4;cursor:not-allowed;}
+  .btap-outcomes{display:grid;grid-template-columns:1fr 1fr;gap:8px;min-height:44px;}
+  .btap-outcome{padding:12px 8px;border-radius:12px;border:none;cursor:pointer;color:#0b1220;font-weight:800;font-size:.85rem;background:#8fe388;}
+  .btap-outcome:last-child{background:#ef6461;color:#fff;}
+  .btap-outcome:disabled{opacity:.35;cursor:not-allowed;}
+  .btap-single-hint{font-size:.76rem;color:var(--muted);font-style:italic;padding:8px 2px;}
+  .btap-chip{background:var(--surface,rgba(255,255,255,.08));color:var(--text,#fff);border:1px solid var(--border,rgba(255,255,255,.14));}
+  @media(max-width:820px){ .btap-cats{grid-template-columns:1fr 1fr;} }
+  `;
+  document.head.appendChild(st);
+}
+
+/* =========================================================
+   SCOUT CALCIO — tap a tocchi, tassonomia equilibrata per ruolo
+   Tocco giocatore → tocco categoria (Offensivo/Difensivo/Disciplina/
+   Portiere) → tocco azione: ogni tocco su un'azione registra subito
+   l'evento (non serve un ulteriore esito Fatto/Sbagliato: le azioni
+   difensive e di portiere qui hanno lo stesso peso di gol/assist,
+   vedi SCOUT.calcio.voto). "Palla persa" non si applica al portiere;
+   la categoria "Portiere" compare solo quando il giocatore selezionato
+   ha ruolo Portiere.
+   ========================================================= */
+const CALC_CATS = [
+  {g:'off',  label:'Offensivo',  icon:'fa-futbol', actions:[
+    ['gol','Gol'],['assist','Assist'],['tiroPorta','Tiro in porta'],['dribbling','Dribbling riuscito']
+  ]},
+  {g:'dif',  label:'Difensivo',  icon:'fa-shield-halved', actions:[
+    ['contrasto','Contrasto vinto'],['intercetto','Intercetto'],['chiusura','Chiusura efficace']
+  ]},
+  {g:'disc', label:'Disciplina', icon:'fa-flag', actions:[
+    ['fallo','Fallo'],['ammonizione','Ammonizione'],['espulsione','Espulsione'],['pallaPersa','Palla persa']
+  ]},
+  {g:'gk',   label:'Portiere',   icon:'fa-hand', actions:[
+    ['parata','Parata'],['uscita','Uscita vinta'],['respinta','Respinta'],['golSubito','Gol subito']
+  ]}
+];
+let CTAP = null;
+function cTapCatsForRole(role){
+  const isGK = role==='Portiere';
+  return CALC_CATS.filter(c=>c.g!=='gk' || isGK).map(c=>
+    (c.g==='disc' && isGK) ? {g:c.g,label:c.label,icon:c.icon,actions:c.actions.filter(a=>a[0]!=='pallaPersa')} : c);
+}
+function cTapActionLabel(field){
+  for(const c of CALC_CATS){ const a=c.actions.find(x=>x[0]===field); if(a) return a[1]; }
+  return field;
+}
+function cTapCatOf(field){ const c=CALC_CATS.find(c=>c.actions.some(a=>a[0]===field)); return c?c.g:'off'; }
+function cTapDeriveRow(pId){
+  const o=Object.assign(blankStat('calcio'), CTAP.base[pId]||{});
+  CTAP.events.forEach(e=>{ if(e.pId===pId) o[e.field]=(o[e.field]||0)+1; });
+  return o;
+}
+function cTapMinValue(pId){ return (CTAP.min[pId]!=null) ? CTAP.min[pId] : 0; }
+function cTapSetMin(pId, val){ if(!CTAP) return; CTAP.min[pId]=Math.max(0,parseInt(val)||0); }
+function buildScoutTapCalcio(matchId, existing){
+  scoutTapCSS(); bScoutTapCSS(); cScoutTapCSS();
+  const base={}, override={}, min={};
+  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('calcio'); scoutFields('calcio').forEach(k=>b[k]=r[k]||0); base[r.pId]=b;
+    if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride;
+    if(typeof r.min==='number') min[r.pId]=r.min; }); }
+  CTAP={ matchId, base, override, min, events:[], sel:null, cat:'off', seq:1 };
+  const el=document.getElementById('scout-tap');
+  el.innerHTML=`
+    <div class="stap-wrap">
+      <div class="stap-left">
+        <div class="stap-hint"><i class="fa-solid fa-hand-pointer"></i> Tocca un giocatore, poi la categoria, poi l'azione: ogni tocco registra subito l'evento.</div>
+        <div class="stap-players" id="stap-players"></div>
+      </div>
+      <div class="stap-pad">
+        <div class="stap-sel" id="stap-sel"></div>
+        <div class="ctap-cats" id="ctap-cats"></div>
+        <div class="ctap-actions" id="ctap-actions"></div>
+        <div class="stap-detail" id="stap-detail"></div>
+        <div class="stap-last" id="stap-last"></div>
+        <button class="stap-undo" id="stap-undo" onclick="cTapUndo()"><i class="fa-solid fa-rotate-left"></i> Annulla ultimo</button>
+        <button class="btn btn-accent stap-save" onclick="saveScoutTapCalcio()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+      </div>
+    </div>`;
+  cTapRenderPlayers();
+  cTapRenderSel();
+  cTapRenderCats();
+}
+function cTapRenderPlayers(){
+  const box=document.getElementById('stap-players'); if(!box) return;
+  const roster=activePlayers();
+  if(!roster.length){ box.innerHTML='<div class="empty-row" style="padding:1rem">Nessun atleta in rosa.</div>'; return; }
+  const POS_FIELDS=['gol','assist','tiroPorta','dribbling','contrasto','intercetto','chiusura','parata','uscita','respinta'];
+  const NEG_FIELDS=['fallo','ammonizione','espulsione','pallaPersa','golSubito'];
+  box.innerHTML=roster.map(p=>{
+    const row=cTapDeriveRow(p.id);
+    const ov=CTAP.override[p.id];
+    const v=(typeof ov==='number')?ov:computeVoto(row,'calcio',p.role);
+    const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
+    const vClass=v>=7?'hi':v>=5.5?'md':'lo';
+    const pos=POS_FIELDS.reduce((s,k)=>s+(row[k]||0),0), neg=NEG_FIELDS.reduce((s,k)=>s+(row[k]||0),0);
+    const minVal=cTapMinValue(p.id);
+    return `<div class="stap-player${CTAP.sel===p.id?' sel':''}" data-pid="${p.id}">
+      <button class="stap-p-btn" onclick="cTapSelect(${p.id})">
+        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+        <div class="stap-p-stat"><span>+${pos}</span><span>−${neg}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
+      </button>
+      <label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="cTapSetMin(${p.id}, this.value)"></label>
+    </div>`;
+  }).join('');
+}
+function cTapRenderSel(){
+  const sel=document.getElementById('stap-sel'); if(!sel) return;
+  const p=CTAP.sel?playerById(CTAP.sel):null;
+  sel.innerHTML = p
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
+  const on=!!p;
+  document.querySelectorAll('.ctap-cat').forEach(b=>b.disabled=!on);
+  document.querySelectorAll('.ctap-action').forEach(b=>b.disabled=!on);
+  const undo=document.getElementById('stap-undo'); if(undo) undo.disabled=!CTAP.events.length;
+  const last=document.getElementById('stap-last');
+  if(last){
+    if(CTAP.events.length){ const e=CTAP.events[CTAP.events.length-1]; const pl=playerById(e.pId);
+      last.innerHTML=`Ultimo: <b>#${pl?pl.number:'?'}</b> · ${cTapActionLabel(e.field)}`; }
+    else last.textContent='';
+  }
+  cTapRenderDetail();
+}
+function cTapRenderCats(){
+  const catsBox=document.getElementById('ctap-cats'); if(!catsBox) return;
+  const p=CTAP.sel?playerById(CTAP.sel):null;
+  const cats=cTapCatsForRole(p?p.role:null);
+  if(!cats.find(c=>c.g===CTAP.cat)) CTAP.cat=cats[0].g;
+  catsBox.innerHTML=cats.map(c=>`<button class="ctap-cat${c.g===CTAP.cat?' on':''}" ${p?'':'disabled'} data-g="${c.g}" onclick="cTapCategory('${c.g}')"><i class="fa-solid ${c.icon}"></i> ${c.label}</button>`).join('');
+  cTapRenderActions(cats);
+}
+function cTapRenderActions(cats){
+  const box=document.getElementById('ctap-actions'); if(!box) return;
+  const p=CTAP.sel?playerById(CTAP.sel):null;
+  cats = cats || cTapCatsForRole(p?p.role:null);
+  const cat=cats.find(c=>c.g===CTAP.cat);
+  const on=!!p;
+  box.innerHTML=(cat?cat.actions:[]).map(a=>`<button class="ctap-action" ${on?'':'disabled'} onclick="cTapAction('${a[0]}')">${a[1]}</button>`).join('');
+}
+function cTapCategory(g){
+  if(!CTAP) return;
+  CTAP.cat=g;
+  document.querySelectorAll('.ctap-cat').forEach(b=>b.classList.toggle('on', b.dataset.g===g));
+  cTapRenderActions();
+}
+function cTapAction(field){
+  if(!CTAP||!CTAP.sel) return;
+  CTAP.events.push({id:CTAP.seq++, pId:CTAP.sel, field});
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapSelect(pId){ if(!CTAP) return; CTAP.sel=pId; cTapRenderPlayers(); cTapRenderSel(); cTapRenderCats(); }
+function cTapUndo(){
+  if(!CTAP||!CTAP.events.length) return;
+  const e=CTAP.events.pop();
+  CTAP.sel=e.pId; CTAP.cat=cTapCatOf(e.field);
+  cTapRenderCats(); cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapRemoveEvent(id){
+  if(!CTAP) return;
+  const i=CTAP.events.findIndex(e=>e.id===id); if(i<0) return;
+  CTAP.events.splice(i,1);
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapRenderDetail(){
+  const box=document.getElementById('stap-detail'); if(!box) return;
+  if(!CTAP.sel){ box.innerHTML=''; return; }
+  const p=playerById(CTAP.sel);
+  const evs=CTAP.events.filter(e=>e.pId===CTAP.sel);
+  const chips = evs.length
+    ? evs.map(e=>`<button class="stap-chip btap-chip" onclick="cTapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
+         <span class="stap-chip-f">${cTapActionLabel(e.field)}</span><i class="fa-solid fa-xmark"></i></button>`).join('')
+    : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione.</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
+  const row=cTapDeriveRow(CTAP.sel);
+  const calc=computeVoto(row,'calcio',p.role);
+  const ov=CTAP.override[CTAP.sel];
+  box.innerHTML += `<div class="stap-why"><div class="stap-why-h">Voto calcolato <b>${calc.toFixed(1)}</b></div></div>`;
+  box.innerHTML += `<div class="stap-ov">
+      <label>Voto manuale del mister</label>
+      <div class="stap-ov-row">
+        <input type="number" min="1" max="10" step="0.1" id="ctap-ov-in" placeholder="auto ${calc.toFixed(1)}" value="${typeof ov==='number'?ov:''}">
+        <button class="btn btn-accent" onclick="cTapApplyOverride()">Imposta</button>
+        ${typeof ov==='number'?`<button class="btn btn-ghost" onclick="cTapClearOverride()">Auto</button>`:''}
+      </div>
+      ${typeof ov==='number'?`<div class="stap-ov-note">Ora vale <b>${(+ov).toFixed(1)}</b> (manuale). "Auto" ripristina ${calc.toFixed(1)}.</div>`:`<div class="stap-ov-note">Lascia vuoto per usare il voto automatico.</div>`}
+    </div>`;
+}
+function cTapApplyOverride(){
+  if(!CTAP||!CTAP.sel) return;
+  const inp=document.getElementById('ctap-ov-in'); if(!inp) return;
+  const raw=inp.value.trim();
+  if(raw===''){ delete CTAP.override[CTAP.sel]; }
+  else { let v=Math.max(1,Math.min(10,parseFloat(raw))); if(isNaN(v)){ toast('Voto non valido','info'); return; } CTAP.override[CTAP.sel]=v; }
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapClearOverride(){
+  if(!CTAP||!CTAP.sel) return;
+  delete CTAP.override[CTAP.sel];
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function saveScoutTapCalcio(){
+  if(!CTAP) return;
+  const match=DB.events.find(e=>e.id===CTAP.matchId);
+  const rows=[];
+  activePlayers().forEach(p=>{
+    const s=cTapDeriveRow(p.id);
+    const ov=CTAP.override[p.id];
+    const min=cTapMinValue(p.id);
+    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'calcio').toFixed(1)};
+    if(typeof ov==='number') row.votoOverride=ov;
+    rows.push(row);
+  });
+  DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==CTAP.matchId);
+  DB.scoutHistory.push({matchId:CTAP.matchId, date:match.date, opponent:match.notes, sport:'calcio', rows});
+  save(); toast('Statistiche registrate nelle schede atleti');
+  go('roster');
+}
+function cScoutTapCSS(){
+  if(document.getElementById('ctap-css')) return;
+  const st=document.createElement('style'); st.id='ctap-css';
+  st.textContent=`
+  .ctap-cats{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .ctap-cat{padding:10px 8px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.12));background:transparent;color:var(--muted);font-weight:700;font-size:.8rem;cursor:pointer;display:flex;align-items:center;gap:6px;justify-content:center;}
+  .ctap-cat.on{border-color:var(--brand);color:var(--text,#fff);background:color-mix(in srgb,var(--brand) 16%,transparent);}
+  .ctap-cat:disabled{opacity:.4;cursor:not-allowed;}
+  .ctap-actions{display:flex;flex-direction:column;gap:8px;min-height:44px;}
+  .ctap-action{padding:12px 10px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.14));cursor:pointer;color:var(--text,#fff);font-weight:700;font-size:.85rem;background:var(--surface,rgba(255,255,255,.04));text-align:left;}
+  .ctap-action:disabled{opacity:.35;cursor:not-allowed;}
+  .ctap-action:active{transform:scale(.98);}
+  `;
+  document.head.appendChild(st);
+}
+
+/* =========================================================
    ROTAZIONI
    ========================================================= */
 const ROT_POS={P1:'Zona 1 · battuta',P2:'Zona 2',P3:'Zona 3 · centro',P4:'Zona 4',P5:'Zona 5',P6:'Zona 6'};
@@ -2491,7 +2980,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v47';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v48';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
