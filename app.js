@@ -864,6 +864,12 @@ function buildLayout(){
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
             <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
+        <div class="card"><h3><i class="fa-solid fa-brain"></i> Statistiche mentali</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Mental Gym → "Invia al mister") per aggiornare i suoi valori Riflessi/Percezione sulla card.</p>
+            <button class="btn btn-ghost" onclick="openImportMental()"><i class="fa-solid fa-file-import"></i> Importa statistiche mentali</button></div>
+        <div class="card"><h3><i class="fa-solid fa-heart-pulse"></i> Check-in benessere</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Check-in benessere → "Invia al mister") per vedere sonno, affaticamento, umore e zone segnalate nella sua scheda atleta.</p>
+            <button class="btn btn-ghost" onclick="openImportWellness()"><i class="fa-solid fa-file-import"></i> Importa check-in benessere</button></div>
         <div class="card"><h3><i class="fa-solid fa-circle-play"></i> Guida</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Rivedi la guida introduttiva su squadra, giocatori, allenamenti, scout e card.</p>
             <button class="btn btn-ghost" onclick="openOnboarding(true)"><i class="fa-solid fa-graduation-cap"></i> Rivedi tutorial</button></div>
@@ -1140,6 +1146,8 @@ function openPlayer(id){
         <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
             <button class="btn btn-accent btn-sm" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi</button>
             <button class="btn btn-ghost btn-sm" onclick="openPlayerCard(${id})"><i class="fa-solid fa-id-badge"></i> Card giocatore</button>
+            <button class="btn btn-ghost btn-sm" onclick="openImportMental()"><i class="fa-solid fa-brain"></i> Importa statistiche mentali</button>
+            <button class="btn btn-ghost btn-sm" onclick="openImportWellness()"><i class="fa-solid fa-heart-pulse"></i> Importa check-in benessere</button>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:1.2rem;flex-wrap:wrap">
             <button class="btn btn-sm ${stStatus==='active'?'btn-accent':'btn-ghost'}" onclick="setStatus(${id},'active')">Disponibile</button>
@@ -1156,8 +1164,32 @@ function openPlayer(id){
             ${statCell('Media allenamenti', ts.avg!=null?ts.avg.toFixed(1):'—')}
         </div>
         ${catBars}
+        ${renderWellnessBlock(p, statCell)}
       </div>`, true);
     loadCoachPhoto(id);
+}
+/* ---------- sezione dedicata "Check-in benessere" nella scheda atleta (dati importati dal player) ---------- */
+function wellnessSummaryLine(c){
+    const sonno=(+c.sonno).toFixed(1).replace('.0','');
+    const n=c.zone?c.zone.length:0;
+    return `${sonno}h sonno, affaticamento ${c.affaticamento}/5, umore ${c.umore}/5${n?`, ${n} zona${n===1?'':'e'} segnalat${n===1?'a':'e'}`:''}`;
+}
+function renderWellnessBlock(p, statCell){
+    const list=p.wellness||[];
+    if(!list.length) return '';
+    const last=list[list.length-1];
+    const zonesHtml=(last.zone&&last.zone.length)
+      ? last.zone.map(z=>`<span class="pill" style="margin:2px 4px 2px 0">${z.zone||'Zona'} · ${z.intensita}/5</span>`).join('')
+      : '<span style="color:var(--muted);font-size:.85rem">Nessuna zona segnalata nell\'ultimo check-in.</span>';
+    const histRows=list.slice(0,-1).slice(-5).reverse().map(c=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:.82rem"><span>${fmtDate(c.date)}</span><span style="color:var(--muted)">${wellnessSummaryLine(c)}</span></div>`).join('');
+    return `<h3 style="font-size:.95rem;margin:1.2rem 0 .6rem"><i class="fa-solid fa-heart-pulse"></i> Check-in benessere <span class="hint" style="font-weight:400;font-size:.72rem">(inviato dal giocatore · ultimo ${fmtDate(last.date)})</span></h3>
+        <div class="stat-grid">
+            ${statCell('Ore di sonno', (+last.sonno).toFixed(1).replace('.0',''), 'h')}
+            ${statCell('Affaticamento', last.affaticamento, '/5')}
+            ${statCell('Umore/energia', last.umore, '/5')}
+        </div>
+        <div style="margin-top:.7rem">${zonesHtml}</div>
+        ${histRows?`<div style="margin-top:1rem"><b style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Check-in precedenti</b>${histRows}</div>`:''}`;
 }
 
 /* =========================================================
@@ -2437,7 +2469,7 @@ function resetAll(){
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v43';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v45';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -2626,6 +2658,68 @@ async function downloadPlayerPkg(id){
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
     a.href=url; a.download=`profilo-${slug(p.name)}.vtm.json`; a.click(); URL.revokeObjectURL(url);
     toast('File profilo scaricato');
+}
+
+/* ---------- sync inverso: importa il codice "statistiche mentali" inviato dal giocatore (Mental Gym) ---------- */
+function decodeMentalPkg(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
+function openImportMental(){
+    openModal(`
+      <div class="modal-head"><h3><i class="fa-solid fa-brain" style="color:var(--brand)"></i> Importa statistiche mentali</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Incolla qui il codice che il giocatore ti ha inviato dall'app Player (Mental Gym → "Invia al mister"). Aggiorna i suoi valori Riflessi/Percezione sulla card, trovando il giocatore per numero di maglia (o nome).</p>
+        <textarea id="mental-code" style="width:100%;height:100px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace" placeholder="Incolla qui il codice…"></textarea>
+        <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="importMentalCode()"><i class="fa-solid fa-check"></i> Importa</button>
+      </div>`);
+}
+function importMentalCode(){
+    const ta=document.getElementById('mental-code'); const raw=ta?ta.value:'';
+    let pkg;
+    try{ pkg=decodeMentalPkg(raw); }catch(e){ toast('Codice non valido','danger'); return; }
+    if(!pkg||pkg.k!=='vtm-mental'||!pkg.mentalStats){ toast('Codice non valido','danger'); return; }
+    let p=null;
+    if(pkg.number!=null) p=DB.players.find(x=>x.number===pkg.number);
+    if(!p && pkg.playerName) p=DB.players.find(x=>x.name && x.name.trim().toLowerCase()===String(pkg.playerName).trim().toLowerCase());
+    if(!p){ toast('Giocatore non trovato, verifica numero/nome','danger'); return; }
+    p.mentalStats={
+        riflessi: pkg.mentalStats.riflessi!=null?pkg.mentalStats.riflessi:null,
+        percezione: pkg.mentalStats.percezione!=null?pkg.mentalStats.percezione:null,
+        aggiornato: pkg.mentalStats.aggiornato||new Date().toISOString()
+    };
+    save();
+    closeModal();
+    toast(`Statistiche mentali aggiornate per ${p.name}`);
+}
+
+/* ---------- sync inverso: importa lo storico "check-in benessere" inviato dal giocatore ---------- */
+function decodeWellnessPkg(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
+function openImportWellness(){
+    openModal(`
+      <div class="modal-head"><h3><i class="fa-solid fa-heart-pulse" style="color:var(--brand)"></i> Importa check-in benessere</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Incolla qui il codice che il giocatore ti ha inviato dall'app Player (Check-in benessere → "Invia al mister"). Aggiorna sonno, affaticamento, umore e zone segnalate nella sua scheda atleta, trovando il giocatore per numero di maglia (o nome).</p>
+        <textarea id="wellness-code" style="width:100%;height:100px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace" placeholder="Incolla qui il codice…"></textarea>
+        <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="importWellnessCode()"><i class="fa-solid fa-check"></i> Importa</button>
+      </div>`);
+}
+function importWellnessCode(){
+    const ta=document.getElementById('wellness-code'); const raw=ta?ta.value:'';
+    let pkg;
+    try{ pkg=decodeWellnessPkg(raw); }catch(e){ toast('Codice non valido','danger'); return; }
+    if(!pkg||pkg.k!=='vtm-wellness'||!Array.isArray(pkg.checkins)){ toast('Codice non valido','danger'); return; }
+    let p=null;
+    if(pkg.number!=null) p=DB.players.find(x=>x.number===pkg.number);
+    if(!p && pkg.playerName) p=DB.players.find(x=>x.name && x.name.trim().toLowerCase()===String(pkg.playerName).trim().toLowerCase());
+    if(!p){ toast('Giocatore non trovato, verifica numero/nome','danger'); return; }
+    p.wellness=p.wellness||[];
+    const known=new Set(p.wellness.map(c=>c.date));
+    pkg.checkins.forEach(c=>{ if(c&&c.date&&!known.has(c.date)){ p.wellness.push(c); known.add(c.date); } });
+    p.wellness.sort((a,b)=>new Date(a.date)-new Date(b.date));
+    if(p.wellness.length>30) p.wellness=p.wellness.slice(-30);
+    save();
+    closeModal();
+    toast(`Check-in benessere aggiornato per ${p.name}`);
 }
 
 /* =========================================================
@@ -3355,13 +3449,18 @@ function playerAttributes(id, sport){
   const ovr=cphOverall(getSeasonStats(id).avgVoto)||60;
   let defs=ATTR_MAP[sport]||ATTR_MAP.pallavolo;
   if(sport==='calcio'){ const gk=/portier|^\s*p\s*$|^por/i.test((p&&p.role)||''); defs = gk?ATTR_MAP.calcio_gk:ATTR_MAP.calcio; }
-  return defs.map(([label,short,src])=>{
+  const attrs = defs.map(([label,short,src])=>{
     const vals=src.map(c=>cats[c]).filter(v=>v!=null);
     let rating, est=false;
     if(vals.length){ rating=Math.round(vals.reduce((a,b)=>a+b,0)/vals.length*10); }
     else { rating=ovr; est=true; }
     return {label,short,rating:Math.max(1,Math.min(100,rating)),est};
   });
+  if(p && p.mentalStats){
+    if(p.mentalStats.riflessi!=null) attrs.push({label:'Riflessi',short:'RIFL',rating:p.mentalStats.riflessi,est:false});
+    if(p.mentalStats.percezione!=null) attrs.push({label:'Percezione',short:'PERC',rating:p.mentalStats.percezione,est:false});
+  }
+  return attrs;
 }
 function renderCardAttrs(id, sport, el, width){
   if(!el||!el.show) return '';
