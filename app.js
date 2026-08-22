@@ -400,7 +400,7 @@ function weightsCSS(){
 
 /* ---------- STATO VUOTO (squadra nuova: nessun dato precompilato, qualunque sia lo sport) ---------- */
 function emptyDB(){
-    return {teamName:'TEAM',players:[],events:[],scoutHistory:[],attendance:{},rotationStats:{},trainings:{},nextId:1};
+    return {teamName:'TEAM',players:[],events:[],scoutHistory:[],attendance:{},rotationStats:{},trainings:{},substitutions:{},nextId:1};
 }
 
 /* ---------- LOAD / SAVE ---------- */
@@ -426,6 +426,7 @@ function loadDB(){
 const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra salvato per questo profilo
 let DB = loadDB();
 if(!DB.trainings) DB.trainings = {};
+if(!DB.substitutions) DB.substitutions = {};
 if(!DB.nextId) DB.nextId = Date.now();
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
@@ -887,6 +888,7 @@ function buildLayout(){
             </div>
         </div>
         <div id="scout-rot-summary" style="display:none"></div>
+        <div id="subs-panel" style="display:none"></div>
         <div class="card" id="scout-panel" style="display:none">
             <h3 id="scout-title"><i class="fa-solid fa-clipboard-list"></i> Tabellino</h3>
             <!-- MODALITÀ NUMERICA (calcio/basket + fallback): tabella per fondamentale -->
@@ -992,7 +994,7 @@ function buildLayout(){
                 </div>
                 <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
                 <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
-                <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Nel calcio partono dalla tua formazione salvata.</p>
+                <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Si parte dalla formazione consigliata; usa la panchina per spiegare un cambio senza toccarla.</p>
                 <div id="bench-area" style="margin-top:14px;display:none"></div>
             </div>
         </div>
@@ -2062,6 +2064,7 @@ function setupScout(){
     const summaryEl=document.getElementById('scout-rot-summary'), rotEl=document.getElementById('scout-rot');
     if(!id){
         panel.style.display='none';
+        renderSubsPanel(null);
         if(sport==='pallavolo'){ renderRotAggregate(); if(summaryEl)summaryEl.style.display='block'; }
         else if(summaryEl){ summaryEl.style.display='none'; }
         return;
@@ -2071,6 +2074,7 @@ function setupScout(){
     const existing=DB.scoutHistory.find(s=>s.matchId===id);
     document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
     panel.style.display='block';
+    renderSubsPanel(id);
     const numEl=document.getElementById('scout-numeric'), tapEl=document.getElementById('scout-tap');
     /* PALLAVOLO → scout a tocchi (versione A) + rotazioni di gara. BASKET → scout a tocchi
        (stepper). Calcio → tabella numerica (per ora). */
@@ -2423,7 +2427,9 @@ function buildScoutTapBasket(matchId, existing){
   if(existing){ existing.rows.forEach(r=>{ const b=blankStat('basket'); scoutFields('basket').forEach(k=>b[k]=r[k]||0); base[r.pId]=b;
     if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride;
     if(typeof r.min==='number') min[r.pId]=r.min; }); }
-  BTAP={ matchId, base, override, min, events:[], sel:null, cat:'fg2', seq:1 };
+  const subMin=computeMinutesFromSubs(matchId,'basket');
+  if(subMin) activePlayers().forEach(p=>{ min[p.id]=subMin[p.id]||0; });
+  BTAP={ matchId, base, override, min, minAuto:!!subMin, events:[], sel:null, cat:'fg2', seq:1 };
   const el=document.getElementById('scout-tap');
   el.innerHTML=`
     <div class="stap-wrap">
@@ -2463,7 +2469,9 @@ function bTapRenderPlayers(){
         <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
         <div class="stap-p-stat"><span>PT ${row.punti}</span><span>Rim ${(row.roff||0)+(row.rdif||0)}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
       </button>
-      <label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="bTapSetMin(${p.id}, this.value)"></label>
+      ${BTAP.minAuto
+        ? `<div class="btap-min-auto" title="Calcolato dal registro cambi"><i class="fa-solid fa-lock"></i> Min ${minVal||0}</div>`
+        : `<label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="bTapSetMin(${p.id}, this.value)"></label>`}
     </div>`;
   }).join('');
 }
@@ -2651,7 +2659,9 @@ function buildScoutTapCalcio(matchId, existing){
   if(existing){ existing.rows.forEach(r=>{ const b=blankStat('calcio'); scoutFields('calcio').forEach(k=>b[k]=r[k]||0); base[r.pId]=b;
     if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride;
     if(typeof r.min==='number') min[r.pId]=r.min; }); }
-  CTAP={ matchId, base, override, min, events:[], sel:null, cat:'off', seq:1 };
+  const subMin=computeMinutesFromSubs(matchId,'calcio');
+  if(subMin) activePlayers().forEach(p=>{ min[p.id]=subMin[p.id]||0; });
+  CTAP={ matchId, base, override, min, minAuto:!!subMin, events:[], sel:null, cat:'off', seq:1 };
   const el=document.getElementById('scout-tap');
   el.innerHTML=`
     <div class="stap-wrap">
@@ -2692,7 +2702,9 @@ function cTapRenderPlayers(){
         <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
         <div class="stap-p-stat"><span>+${pos}</span><span>−${neg}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
       </button>
-      <label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="cTapSetMin(${p.id}, this.value)"></label>
+      ${CTAP.minAuto
+        ? `<div class="btap-min-auto" title="Calcolato dal registro cambi"><i class="fa-solid fa-lock"></i> Min ${minVal||0}</div>`
+        : `<label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="cTapSetMin(${p.id}, this.value)"></label>`}
     </div>`;
   }).join('');
 }
@@ -2869,6 +2881,132 @@ function renderRotAggregate(){
 }
 
 /* =========================================================
+   REGISTRO CAMBI/SOSTITUZIONI (Modulo U) — versione semplice.
+   Un elenco cronologico "esce/entra/minuto" per partita, per tutti e
+   3 gli sport. Da questi eventi si ricava il MIN di ogni giocatore
+   in quella gara (calcio/basket, che hanno un campo MIN — la
+   pallavolo non ha un concetto di minutaggio nei suoi dati di scout,
+   quindi qui il registro resta solo cronologico anche per lei).
+   Nessuna attribuzione automatica di statistiche per segmento: resta
+   fuori scope, come richiesto.
+
+   Titolari di partenza (baseline) = la STESSA formazione consigliata
+   già calcolata altrove (soccerLineup/pickLineupPallavolo/
+   pickLineupBasket, riuso — non un nuovo calcolo). È una
+   semplificazione dichiarata: se in quella gara il mister ha davvero
+   schierato una formazione diversa da quella oggi "consigliata", il
+   calcolo del MIN può risultare impreciso — in tal caso resta la via
+   manuale (bastano zero cambi registrati per quella gara).
+   ========================================================= */
+const MATCH_FULL_MIN={calcio:90, basket:40};
+function subsList(matchId){ return (DB.substitutions&&DB.substitutions[matchId])||[]; }
+function subsSorted(matchId){ return subsList(matchId).slice().sort((a,b)=>a.min-b.min); }
+function matchBaselineStarters(sport){
+  if(sport==='calcio'){ const {slots}=soccerLineup(); return slots.filter(s=>s.player).map(s=>s.player); }
+  if(sport==='basket'){ return pickLineupBasket().filter(r=>r.player).map(r=>r.player); }
+  if(sport==='pallavolo'){ return pickLineupPallavolo().filter(r=>r.player).map(r=>r.player); }
+  return [];
+}
+/* {pId: minuti giocati} se ci sono cambi registrati per la gara, altrimenti null (MIN resta manuale) */
+function computeMinutesFromSubs(matchId, sport){
+  const evs=subsSorted(matchId), full=MATCH_FULL_MIN[sport];
+  if(!evs.length || !full) return null;
+  const baseline=new Set(matchBaselineStarters(sport).map(p=>p.id));
+  const onFieldSince={}, totals={};
+  activePlayers().forEach(p=>{ totals[p.id]=0; if(baseline.has(p.id)) onFieldSince[p.id]=0; });
+  evs.forEach(e=>{
+    if(onFieldSince[e.out]!=null){ totals[e.out]=(totals[e.out]||0)+(e.min-onFieldSince[e.out]); delete onFieldSince[e.out]; }
+    onFieldSince[e.in]=e.min;
+  });
+  Object.keys(onFieldSince).forEach(pid=>{ totals[pid]=(totals[pid]||0)+(full-onFieldSince[pid]); });
+  return totals;
+}
+/* Chi è "in campo"/"in panchina" ADESSO per quella gara, applicando tutti i cambi già registrati */
+function matchOnFieldNow(matchId, sport){
+  const onField=new Map(matchBaselineStarters(sport).map(p=>[p.id,p]));
+  subsSorted(matchId).forEach(e=>{ onField.delete(e.out); const p=playerById(e.in); if(p) onField.set(e.in,p); });
+  return onField;
+}
+function subsCSS(){
+  if(document.getElementById('subs-css')) return;
+  const st=document.createElement('style'); st.id='subs-css';
+  st.textContent=`
+  .subs-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+  .subs-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.86rem;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;padding:8px 10px;}
+  .subs-min{font-family:'Outfit',sans-serif;font-weight:800;color:var(--brand);min-width:34px;}
+  .subs-del{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;}
+  .subs-del:hover{color:var(--flame,#F0463C);}
+  .btap-min-auto{display:inline-flex;align-items:center;gap:5px;font-size:.74rem;color:var(--muted);padding:6px 12px 10px;}
+  .btap-min-auto i{font-size:.7rem;}
+  `;
+  document.head.appendChild(st);
+}
+function renderSubsPanel(matchId){
+  const host=document.getElementById('subs-panel'); if(!host) return;
+  if(!matchId){ host.style.display='none'; host.innerHTML=''; return; }
+  subsCSS(); host.style.display='block';
+  const sport=curSport();
+  const evs=subsSorted(matchId);
+  const rows=evs.map(e=>{ const po=playerById(e.out), pi=playerById(e.in);
+    return `<div class="subs-row"><span class="subs-min">${e.min}'</span> Esce <b>#${po?po.number:'?'} ${po?po.name:'?'}</b>, entra <b>#${pi?pi.number:'?'} ${pi?pi.name:'?'}</b>
+      <button class="subs-del" onclick="removeSub(${matchId},${e.id})" title="Rimuovi cambio"><i class="fa-solid fa-xmark"></i></button></div>`; }).join('');
+  const autoMin = !!(MATCH_FULL_MIN[sport] && evs.length);
+  host.innerHTML=`<div class="card">
+      <h3><i class="fa-solid fa-right-left"></i> Cambi</h3>
+      <button class="btn btn-ghost btn-sm" onclick="openAddSub(${matchId})"><i class="fa-solid fa-plus"></i> Registra cambio</button>
+      <div class="subs-list">${rows||'<p class="hint" style="margin-top:8px;margin-bottom:0">Nessun cambio registrato: il MIN resta modificabile a mano.</p>'}</div>
+      ${autoMin?`<p class="hint" style="margin-top:8px;margin-bottom:0"><i class="fa-solid fa-circle-info"></i> Il MIN di questa gara è calcolato dai cambi qui sopra (titolari = formazione consigliata).</p>`:''}
+    </div>`;
+}
+function openAddSub(matchId){
+  const sport=curSport();
+  const onField=[...matchOnFieldNow(matchId,sport).values()];
+  const onFieldIds=new Set(onField.map(p=>p.id));
+  const bench=activePlayers().filter(p=>!onFieldIds.has(p.id));
+  const outOpts=onField.map(p=>`<option value="${p.id}">#${p.number} ${p.name}</option>`).join('');
+  const inOpts=bench.map(p=>`<option value="${p.id}">#${p.number} ${p.name}</option>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Registra cambio</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <div class="fg"><label>Chi esce</label><select id="sub-out">${outOpts||'<option value="">Nessuno in campo</option>'}</select></div>
+      <div class="fg"><label>Chi entra</label><select id="sub-in">${inOpts||'<option value="">Nessuno in panchina</option>'}</select></div>
+      <div class="fg"><label>Minuto</label><input id="sub-min" type="number" min="0" max="200" placeholder="Es. 62"></div>
+      <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="saveSub(${matchId})"><i class="fa-solid fa-check"></i> Registra cambio</button>
+    </div>`);
+}
+function saveSub(matchId){
+  const outSel=document.getElementById('sub-out'), inSel=document.getElementById('sub-in'), minInp=document.getElementById('sub-min');
+  const outId=parseInt(outSel&&outSel.value), inId=parseInt(inSel&&inSel.value), min=parseInt(minInp&&minInp.value);
+  if(!outId||!inId||isNaN(min)){ toast('Compila chi esce, chi entra e il minuto','info'); return; }
+  if(outId===inId){ toast('Chi esce e chi entra non possono coincidere','info'); return; }
+  if(!DB.substitutions) DB.substitutions={};
+  if(!DB.substitutions[matchId]) DB.substitutions[matchId]=[];
+  const seq=DB.substitutions[matchId].reduce((m,e)=>Math.max(m,e.id||0),0)+1;
+  DB.substitutions[matchId].push({id:seq,min,out:outId,in:inId});
+  save(); closeModal(); toast('Cambio registrato');
+  renderSubsPanel(matchId); refreshTapMinFromSubs(matchId);
+}
+function removeSub(matchId,id){
+  if(!DB.substitutions||!DB.substitutions[matchId]) return;
+  DB.substitutions[matchId]=DB.substitutions[matchId].filter(e=>e.id!==id);
+  save(); renderSubsPanel(matchId); refreshTapMinFromSubs(matchId);
+}
+/* Rispecchia il MIN auto-calcolato (se ci sono cambi) nella tap UI di basket/calcio già aperta */
+function refreshTapMinFromSubs(matchId){
+  const sport=curSport();
+  const subMin=computeMinutesFromSubs(matchId, sport);
+  if(sport==='basket' && typeof BTAP!=='undefined' && BTAP && BTAP.matchId===matchId){
+    BTAP.minAuto=!!subMin;
+    if(subMin) activePlayers().forEach(p=>{ BTAP.min[p.id]=subMin[p.id]||0; });
+    bTapRenderPlayers();
+  } else if(sport==='calcio' && typeof CTAP!=='undefined' && CTAP && CTAP.matchId===matchId){
+    CTAP.minAuto=!!subMin;
+    if(subMin) activePlayers().forEach(p=>{ CTAP.min[p.id]=subMin[p.id]||0; });
+    cTapRenderPlayers();
+  }
+}
+
+/* =========================================================
    PRESENZE
    ========================================================= */
 function populateAtt(){
@@ -2980,55 +3118,74 @@ function drawCourt(w,h){
         ctx.beginPath();ctx.arc(cx,ry+rh-kh,kw*0.5,Math.PI,Math.PI*2);ctx.stroke();
     }
 }
+/* Formazione della lavagnetta (Modulo T): SOLO uno specchietto di lavoro in memoria,
+   precaricato dalla stessa formazione/rotazione già calcolata per "Formazione consigliata"
+   (soccerLineup/pickLineupPallavolo/pickLineupBasket — nessun ricalcolo). Le sostituzioni
+   fatte qui (trascinamento gettoni, cambi da panchina) restano locali a questa schermata:
+   non toccano mai DB.settings.lineup, quindi la formazione "ufficiale" non si altera mai. */
+let BOARD_LINEUP=null;
+function boardBuildLineup(sport){
+    if(sport==='calcio'){
+        const {slots}=soccerLineup();
+        return slots.map(s=>({x:s.x,y:s.y,role:s.role,player:s.player}));
+    }
+    const rows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+    return rows.map(r=>({x:r.x,y:r.y,role:r.role,player:r.player}));
+}
 function placeTokens(){
     const area=document.getElementById('court-area');
     area.querySelectorAll('.token').forEach(t=>t.remove());
     const r=area.getBoundingClientRect();
     const sp=(typeof DB!=='undefined'&&DB&&DB.sport)||'pallavolo';
     const base=courtRect(r.width,r.height,sp);
-    if(sp==='calcio'){
-        const {slots}=soccerLineup();
-        slots.forEach(s=>{ if(!s.player) return; const p=s.player;
-            const t=document.createElement('div');
-            t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
-            t.textContent=p.number; t.title=p.name;
-            t.style.left=(base.x+s.x*base.w-23)+'px'; t.style.top=(base.y+s.y*base.h-23)+'px';
-            makeDraggable(t); area.appendChild(t);
-        });
-        renderBench(); return;
-    }
-    const FORM={
-        pallavolo:[[0.75,0.8],[0.75,0.55],[0.5,0.3],[0.25,0.3],[0.25,0.55],[0.5,0.8]],
-        basket:[[0.5,0.75],[0.22,0.62],[0.78,0.62],[0.32,0.4],[0.6,0.38]]
-    };
-    const spots=FORM[sp]||FORM.pallavolo;
-    const roster=activePlayers().slice(0,spots.length);
-    roster.forEach((p,i)=>{
+    BOARD_LINEUP=boardBuildLineup(sp);
+    BOARD_LINEUP.forEach((slot,i)=>{
+        if(!slot.player) return; const p=slot.player;
         const t=document.createElement('div');
         t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
-        t.textContent=p.number;t.title=p.name;
-        const pos=spots[i]||[0.5,0.5];
-        t.style.left=(base.x+pos[0]*base.w-23)+'px';t.style.top=(base.y+pos[1]*base.h-23)+'px';
-        makeDraggable(t);area.appendChild(t);
+        t.textContent=p.number; t.title=p.name; t.dataset.slot=i;
+        t.style.left=(base.x+slot.x*base.w-23)+'px'; t.style.top=(base.y+slot.y*base.h-23)+'px';
+        makeDraggable(t); area.appendChild(t);
     });
     renderBench();
 }
 function renderBench(){
     const host=document.getElementById('bench-area'); if(!host) return;
-    if(curSport()!=='calcio'){ host.style.display='none'; host.innerHTML=''; return; }
-    soccerFieldCSS(); host.style.display='block';
-    const {bench}=soccerLineup();
+    if(!BOARD_LINEUP){ host.style.display='none'; host.innerHTML=''; return; }
+    soccerFieldCSS(); injectFmzCSS(); host.style.display='block';
+    const usedIds=new Set(BOARD_LINEUP.filter(s=>s.player).map(s=>s.player.id));
+    const bench=activePlayers().filter(p=>!usedIds.has(p.id))
+      .map(p=>({p,v:getSeasonStats(p.id).avgVoto}))
+      .sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
     host.innerHTML=`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700;margin-bottom:8px"><i class="fa-solid fa-chair"></i> Panchina</div>`+
       (bench.length ? `<div class="bench-chips">`+bench.map(b=>`<button class="bench-chip" onclick="benchSubstitute(${b.p.id})"><span class="bench-num">${b.p.number}</span> ${(b.p.name||'').split(' ').slice(-1)[0]}</button>`).join('')+`</div>`
                     : '<p class="hint" style="margin:0">Tutti in campo.</p>');
 }
 function benchSubstitute(pid){
-    const {slots}=soccerLineup(); const inField=slots.filter(s=>s.player);
-    const opts=inField.map(s=>`<button class="sub-opt" onclick="setLineupSub(${s.i},${pid});closeModal();placeTokens()"><span class="fmz-num">#${s.player.number}</span> ${s.player.name} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
+    if(!BOARD_LINEUP) return;
+    const inField=BOARD_LINEUP.map((s,i)=>({i,s})).filter(x=>x.s.player);
+    const opts=inField.map(({i,s})=>`<button class="sub-opt" onclick="boardApplySub(${i},${pid});closeModal()"><span class="fmz-num">#${s.player.number}</span> ${s.player.name} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Chi fai uscire?</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
-      <div class="modal-body"><p class="hint" style="margin-bottom:10px">Esce il giocatore che scegli, entra quello dalla panchina.</p>
+      <div class="modal-body"><p class="hint" style="margin-bottom:10px">Solo per spiegare la tattica: non cambia la formazione ufficiale di "Formazione consigliata".</p>
         <div class="sub-list">${opts||'<p class="hint">Nessun titolare in campo.</p>'}</div></div>`, true);
+}
+function boardApplySub(slotIdx,pid){
+    if(!BOARD_LINEUP||!BOARD_LINEUP[slotIdx]) return;
+    const p=playerById(pid); if(!p) return;
+    BOARD_LINEUP[slotIdx].player=p;
+    const area=document.getElementById('court-area');
+    const old=area.querySelector(`.token[data-slot="${slotIdx}"]`);
+    const t=document.createElement('div');
+    t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
+    t.textContent=p.number; t.title=p.name; t.dataset.slot=slotIdx;
+    if(old){ t.style.left=old.style.left; t.style.top=old.style.top; old.remove(); }
+    else {
+        const r=area.getBoundingClientRect(), base=courtRect(r.width,r.height,curSport()), slot=BOARD_LINEUP[slotIdx];
+        t.style.left=(base.x+slot.x*base.w-23)+'px'; t.style.top=(base.y+slot.y*base.h-23)+'px';
+    }
+    makeDraggable(t); area.appendChild(t);
+    renderBench();
 }
 function makeDraggable(token){
     token.addEventListener('pointerdown',e=>{
@@ -3055,7 +3212,8 @@ function bindDraw(w,h){
 function setPen(c,el){penColor=c;document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
 function clearDraw(){const r=document.getElementById('court-area').getBoundingClientRect();drawCourt(r.width,r.height);}
 function resetTokens(){
-    if(curSport()==='calcio'){ const L=getLineupCalcio(); L.pos={}; L.subs={}; save(); }
+    /* Ricarica la formazione ufficiale (Modulo T): scarta solo le sostituzioni/spostamenti
+       fatti qui in lavagnetta, non tocca mai DB.settings.lineup. */
     tokensInit=false;placeTokens();tokensInit=true;toast('Posizioni ripristinate','info');
 }
 
@@ -3127,7 +3285,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v51';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v52';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;

@@ -68,3 +68,24 @@ Contesto: voglio un tutorial contestuale (tooltip/callout che indicano 2-3 eleme
 Applica SOLO a queste 4 schermate in questo giro. Non toccare altre sezioni dell'app. `node --check`, bump versione.
 
 Alla fine di ogni modulo dimmi cosa hai implementato e conferma i bump di versione.
+
+
+========== MODULO T — Lavagnetta collegata alla formazione titolare + panchina ==========
+Contesto: la lavagnetta tattica (Spogliatoio) oggi parte vuota, non riusa la formazione titolare già calcolata altrove nell'app (stessa lineup usata per "Formazione consigliata"). Voglio che all'apertura della lavagnetta per una partita, il campo sia già popolato.
+
+1) Quando si apre la lavagnetta, precarica sul campo i giocatori TITOLARI nelle posizioni della formazione già calcolata (stessa fonte dati/stessa logica della sezione Formazione, non ricalcolarla da zero - riusala).
+2) Rendi disponibile la PANCHINA (tutti i giocatori non titolari) come elenco di gettoni trascinabili accanto al campo, così l'allenatore può trascinare un giocatore di panchina al posto di un titolare per spiegare un cambio/tattica, senza dover ricreare la formazione da zero ogni volta.
+3) Questo comportamento vale per tutti e 3 gli sport (calcio, pallavolo, basket), riusando il rispettivo campo/rendering già esistente nella lavagnetta.
+4) Le modifiche fatte in lavagnetta (spostamenti, sostituzioni provvisorie per spiegare la tattica) NON devono alterare la formazione titolare "ufficiale" salvata altrove - è solo un'area di lavoro/spiegazione.
+
+`node --check`, bump versione.
+
+========== MODULO U — Registro cambi/sostituzioni (versione semplice) ==========
+Contesto: non esiste oggi un modo per registrare i cambi durante una partita (chi esce, chi entra, a che minuto), per tutti e 3 gli sport. Voglio una versione SEMPLICE: un registro cronologico, non un sistema di attribuzione statistiche per segmento (quello resta fuori scope per ora).
+
+1) Nella schermata Scout Gara (o una sezione collegata), aggiungi un bottone "Registra cambio": apre una piccola form con "Chi esce" (selezione tra i giocatori attualmente in campo) e "Chi entra" (selezione tra i giocatori in panchina) e "Minuto" (numero).
+2) Ogni cambio registrato si aggiunge a un elenco cronologico visibile per quella partita (es. "12' - Esce #7 Rossi, entra #14 Bianchi").
+3) Usa questi eventi per calcolare automaticamente il campo MIN (minutaggio) di ciascun giocatore in quella partita, invece di inserirlo a mano (chi non ha mai subito cambio gioca l'intera durata standard dello sport; chi entra/esce ottiene il minutaggio calcolato dagli eventi). Se non ci sono eventi di cambio per un giocatore, mantieni la possibilità di inserire MIN a mano come oggi (retrocompatibile).
+4) NON implementare alcuna attribuzione automatica delle statistiche per segmento di gioco (chi ha fatto cosa mentre era in campo quel giocatore) - resta una funzione futura, esplicitamente fuori da questo giro.
+
+`node --check`, bump versione. Alla fine dimmi come hai gestito il calcolo automatico di MIN e conferma il bump.
