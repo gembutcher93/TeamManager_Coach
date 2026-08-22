@@ -1,0 +1,32 @@
+{
+  "app.js": {
+    "mtime": 1787244165.1456423,
+    "ast_hash": "8dc0a8cfdba6f336754c6920d0f0f1bd",
+    "semantic_hash": "8dc0a8cfdba6f336754c6920d0f0f1bd"
+  },
+  "manifest.json": {
+    "mtime": 1787236735.1521208,
+    "ast_hash": "e5053032fa625f817e321248c6e44c37",
+    "semantic_hash": "e5053032fa625f817e321248c6e44c37"
+  },
+  "marquee.js": {
+    "mtime": 1787076277.0,
+    "ast_hash": "210b1b4188e3ae6b2f47add17c362acf",
+    "semantic_hash": "210b1b4188e3ae6b2f47add17c362acf"
+  },
+  "polisport.js": {
+    "mtime": 1787076277.0,
+    "ast_hash": "c120a31d73a8cdaa033c5432bea37dc3",
+    "semantic_hash": "c120a31d73a8cdaa033c5432bea37dc3"
+  },
+  "schemes.js": {
+    "mtime": 1787208782.0,
+    "ast_hash": "4b4ca00171786ae11e869db8fb3b5ffa",
+    "semantic_hash": "4b4ca00171786ae11e869db8fb3b5ffa"
+  },
+  "sw.js": {
+    "mtime": 1787216175.8246248,
+    "ast_hash": "506bcfc611c680f67effa15336283207",
+    "semantic_hash": "506bcfc611c680f67effa15336283207"
+  }
+}

@@ -1,0 +1,575 @@
+{
+  "communities": {
+    "0": [
+      "app_activeplayers",
+      "app_addevent",
+      "app_addexfromlib",
+      "app_addplayer",
+      "app_calendarcss",
+      "app_calopenscout",
+      "app_calopentraining",
+      "app_calselect",
+      "app_calshift",
+      "app_cardstudiosave",
+      "app_closecardstudio",
+      "app_closefieldeditor",
+      "app_closemodal",
+      "app_closesidebar",
+      "app_closeweightsadmin",
+      "app_confirmaction",
+      "app_confirmcoachphoto",
+      "app_copyshare",
+      "app_createrecurring",
+      "app_currenttraining",
+      "app_cycleleadership",
+      "app_dbkey",
+      "app_exportdata",
+      "app_fesave",
+      "app_go",
+      "app_impconfirm",
+      "app_importdata",
+      "app_removeevent",
+      "app_removeexercise",
+      "app_removeplayer",
+      "app_rendercalendar",
+      "app_rendergradetable",
+      "app_renderroster",
+      "app_renderteamname",
+      "app_rendertraining",
+      "app_resetall",
+      "app_resettheme",
+      "app_resettokens",
+      "app_save",
+      "app_saveresult",
+      "app_savescouttap",
+      "app_savesessionnote",
+      "app_saveteam",
+      "app_sessionavg",
+      "app_setgrade",
+      "app_setstatus",
+      "app_setteamname",
+      "app_toast",
+      "app_toggleteamedit",
+      "app_uid",
+      "app_wsave"
+    ],
+    "1": [
+      "app_buildplayerpackage",
+      "app_calcrow",
+      "app_cidb",
+      "app_cidbdel",
+      "app_cidbget",
+      "app_cidbset",
+      "app_coachmediacss",
+      "app_computevoto",
+      "app_cphabbr",
+      "app_cphinitials",
+      "app_cphoverall",
+      "app_downloadplayerpkg",
+      "app_encodepkg",
+      "app_ensureteamlogo",
+      "app_framecandidates",
+      "app_getplayervoti",
+      "app_getseasonstats",
+      "app_loadcoachphoto",
+      "app_openplayer",
+      "app_openplayercard",
+      "app_openplayercardold",
+      "app_pickphotocoach",
+      "app_playerattendance",
+      "app_playerattributes",
+      "app_playerbyid",
+      "app_playercatratings",
+      "app_playerform",
+      "app_playertier",
+      "app_playertiermap",
+      "app_playertrainingstats",
+      "app_readrow",
+      "app_removephotocoach",
+      "app_rendercardattrs",
+      "app_rendertiercard",
+      "app_repositioncoach",
+      "app_rowvoto",
+      "app_savescout",
+      "app_shareplayer",
+      "app_slug",
+      "app_svgline"
+    ],
+    "2": [
+      "app",
+      "app_att_label",
+      "app_att_states",
+      "app_attr_map",
+      "app_base_card_layout",
+      "app_buildlayout",
+      "app_card_elements",
+      "app_cat_color",
+      "app_db",
+      "app_default_volley_weights",
+      "app_deploy_card_layouts",
+      "app_exercise_lib",
+      "app_exlib_filter",
+      "app_fetool",
+      "app_formation",
+      "app_initschemes",
+      "app_months",
+      "app_months_it",
+      "app_pwaapplyupdate",
+      "app_pwadismissbanner",
+      "app_renderers",
+      "app_rot_pos",
+      "app_rpcreset",
+      "app_scout",
+      "app_scout_abbr",
+      "app_setpen",
+      "app_soccer_modules",
+      "app_sport_cats",
+      "app_sport_label",
+      "app_status_meta",
+      "app_tapfund",
+      "app_tcframefallback",
+      "app_tier_label",
+      "app_tier_order",
+      "app_togglesidebar",
+      "app_wd_it",
+      "app_wpreview_case"
+    ],
+    "3": [
+      "app_benchsubstitute",
+      "app_binddraw",
+      "app_bindsoccerdrag",
+      "app_cleardraw",
+      "app_courtrect",
+      "app_drawcourt",
+      "app_fmzbadge",
+      "app_getlineupcalcio",
+      "app_initboard",
+      "app_injectfmzcss",
+      "app_makedraggable",
+      "app_placetokens",
+      "app_renderbench",
+      "app_renderformazione",
+      "app_rendersoccerformation",
+      "app_resetlineup",
+      "app_setlineupmodule",
+      "app_setlineuppos",
+      "app_setlineupsub",
+      "app_soccerfieldcss",
+      "app_soccerlineup",
+      "app_soccerslottap"
+    ],
+    "4": [
+      "app_caltoday",
+      "app_cardstudioexport",
+      "app_editresult",
+      "app_eventson",
+      "app_feopenpresets",
+      "app_fmtdatelong",
+      "app_genrecurringdates",
+      "app_isoof",
+      "app_logomodal",
+      "app_nextevent",
+      "app_openimportmatches",
+      "app_openmodal",
+      "app_openrecurring",
+      "app_pickteamlogo",
+      "app_recdates",
+      "app_recrefresh",
+      "app_recset",
+      "app_rectoggleday",
+      "app_recurringcss",
+      "app_rendercalday",
+      "app_sessionnote",
+      "app_today"
+    ],
+    "5": [
+      "app_applyteamlogo",
+      "app_brandcss",
+      "app_cardstudiocss",
+      "app_cardstudioloaddraft",
+      "app_cardstudioresettier",
+      "app_cardstudiotier",
+      "app_courtsvg",
+      "app_deepmerge",
+      "app_getcardlayout",
+      "app_opencardstudio",
+      "app_removeteamlogo",
+      "app_rendercardstudio",
+      "app_rendercardstudiopreview",
+      "app_renderdashboard",
+      "app_saveteamlogo",
+      "app_teamattendancepct",
+      "app_teamavgvoto",
+      "app_teamrecord"
+    ],
+    "6": [
+      "app_blankstat",
+      "app_buildscouthead",
+      "app_buildscouttap",
+      "app_fmtdate",
+      "app_loaddb",
+      "app_matchoptions",
+      "app_populatescout",
+      "app_populatetraining",
+      "app_renderrotaggregate",
+      "app_renderrotgrid",
+      "app_renderscoutlegend",
+      "app_rotdata",
+      "app_rotstep",
+      "app_scoutfields",
+      "app_scouttapcss",
+      "app_seeddb",
+      "app_setupscout",
+      "app_svgbars"
+    ],
+    "7": [
+      "manifest",
+      "manifest_background_color",
+      "manifest_categories",
+      "manifest_description",
+      "manifest_dir",
+      "manifest_display",
+      "manifest_icons",
+      "manifest_id",
+      "manifest_lang",
+      "manifest_name",
+      "manifest_orientation",
+      "manifest_scope",
+      "manifest_short_name",
+      "manifest_start_url",
+      "manifest_theme_color",
+      "ref_productivity",
+      "ref_sports"
+    ],
+    "8": [
+      "app_addexercise",
+      "app_catsfor",
+      "app_createlibexercise",
+      "app_cursport",
+      "app_exerciseknown",
+      "app_exkeyof",
+      "app_exlibcss",
+      "app_exlibfor",
+      "app_exlibset",
+      "app_openexercisedraw",
+      "app_openexlibrary",
+      "app_refreshexcats",
+      "app_remembercustomexercise",
+      "app_renderexlibcats",
+      "app_renderexliblist",
+      "app_schemeexists"
+    ],
+    "9": [
+      "app_computewhy",
+      "app_tap_funds",
+      "app_tap_grades",
+      "app_tapapply",
+      "app_tapapplyoverride",
+      "app_tapclearoverride",
+      "app_tapderiverow",
+      "app_tapgrade",
+      "app_tappct",
+      "app_tapremoveevent",
+      "app_taprenderdetail",
+      "app_taprenderplayers",
+      "app_taprendersel",
+      "app_tapselect",
+      "app_tapundo"
+    ],
+    "10": [
+      "app_feadd",
+      "app_feapplymodel",
+      "app_feapplymodelobj",
+      "app_febindpointer",
+      "app_feclear",
+      "app_fedisttoseg",
+      "app_fedrawarrow",
+      "app_fedrawel",
+      "app_feerasearrow",
+      "app_fefield",
+      "app_fehit",
+      "app_ferecomputeseq",
+      "app_feredraw",
+      "app_fieldeditorcss",
+      "app_openfieldeditor"
+    ],
+    "11": [
+      "polisport",
+      "polisport_applyaccent",
+      "polisport_bnactive",
+      "polisport_boot",
+      "polisport_buildbottomnav",
+      "polisport_ensureroles",
+      "polisport_gdb",
+      "polisport_injectsportbutton",
+      "polisport_installreset",
+      "polisport_patchroles",
+      "polisport_persist",
+      "polisport_readdb",
+      "polisport_showsetup"
+    ],
+    "12": [
+      "app_cssid",
+      "app_renderweightseditor",
+      "app_role_order",
+      "app_wget",
+      "app_wpreviewall",
+      "app_wresetall",
+      "app_wresetrole",
+      "app_wset",
+      "app_wsetcurve",
+      "app_wsetraw",
+      "app_wsetscalar"
+    ],
+    "13": [
+      "app_detectmatches",
+      "app_impanalyzetext",
+      "app_impfile",
+      "app_impiso",
+      "app_impshow",
+      "app_loadxlsx",
+      "app_parsecsvtext",
+      "app_parseflexdate",
+      "app_splitcsvline"
+    ],
+    "14": [
+      "app_airemovebg",
+      "app_blobtodataurl",
+      "app_chromaapply",
+      "app_chromakeydataurl",
+      "app_loadimgly",
+      "app_logoremovebg",
+      "app_rpcairemove"
+    ],
+    "15": [
+      "app_clampvoto",
+      "app_getvolleyweights",
+      "app_openscouttutorial",
+      "app_openweightsadmin",
+      "app_volleyvoto",
+      "app_weightscss",
+      "app_weightsexplainerhtml"
+    ],
+    "16": [
+      "marquee",
+      "marquee_boot",
+      "marquee_css",
+      "marquee_measure",
+      "marquee_scan",
+      "marquee_schedulerescan",
+      "marquee_wrap"
+    ],
+    "17": [
+      "app_activeprofile",
+      "app_createteam",
+      "app_getprofiles",
+      "app_openteamsmenu",
+      "app_setprofiles",
+      "app_switchteam"
+    ],
+    "18": [
+      "app_calopenattendance",
+      "app_populateatt",
+      "app_renderattendance",
+      "app_renderattseason",
+      "app_setatt",
+      "app_updateattbar"
+    ],
+    "19": [
+      "app_applytheme",
+      "app_hexa",
+      "app_setcolor",
+      "app_shade"
+    ],
+    "20": [
+      "app_pwachecknow",
+      "app_pwacss",
+      "app_pwamarksettings",
+      "app_pwashowbanner"
+    ],
+    "21": [
+      "app_cardstudioel",
+      "app_cardstudioset",
+      "app_rendercardstudioprops"
+    ],
+    "22": [
+      "sw",
+      "sw_app_shell"
+    ],
+    "23": [
+      "schemes"
+    ]
+  },
+  "cohesion": {
+    "0": 0.08078431372549019,
+    "1": 0.09102564102564102,
+    "2": 0.05405405405405406,
+    "3": 0.12987012987012986,
+    "4": 0.1038961038961039,
+    "5": 0.1437908496732026,
+    "6": 0.1503267973856209,
+    "7": 0.11764705882352941,
+    "8": 0.23333333333333334,
+    "9": 0.2,
+    "10": 0.19047619047619047,
+    "11": 0.3717948717948718,
+    "12": 0.21818181818181817,
+    "13": 0.2777777777777778,
+    "14": 0.3333333333333333,
+    "15": 0.3333333333333333,
+    "16": 0.6190476190476191,
+    "17": 0.4,
+    "18": 0.4,
+    "19": 0.5,
+    "20": 0.6666666666666666,
+    "21": 0.6666666666666666,
+    "22": 1.0,
+    "23": 1.0
+  },
+  "gods": [
+    {
+      "id": "app_toast",
+      "label": "toast()",
+      "degree": 39
+    },
+    {
+      "id": "app_save",
+      "label": "save()",
+      "degree": 37
+    },
+    {
+      "id": "app_cursport",
+      "label": "curSport()",
+      "degree": 30
+    },
+    {
+      "id": "app_openmodal",
+      "label": "openModal()",
+      "degree": 20
+    },
+    {
+      "id": "app_playerbyid",
+      "label": "playerById()",
+      "degree": 18
+    },
+    {
+      "id": "app_getseasonstats",
+      "label": "getSeasonStats()",
+      "degree": 16
+    },
+    {
+      "id": "app_renderdashboard",
+      "label": "renderDashboard()",
+      "degree": 16
+    },
+    {
+      "id": "app_rendercalendar",
+      "label": "renderCalendar()",
+      "degree": 14
+    },
+    {
+      "id": "app_openplayer",
+      "label": "openPlayer()",
+      "degree": 13
+    },
+    {
+      "id": "app_setupscout",
+      "label": "setupScout()",
+      "degree": 13
+    }
+  ],
+  "surprises": [
+    {
+      "source": "dbKey()",
+      "target": "activeProfile()",
+      "source_files": [
+        "app.js",
+        "app.js"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 17 → community 0"
+    },
+    {
+      "source": "loadDB()",
+      "target": "dbKey()",
+      "source_files": [
+        "app.js",
+        "app.js"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 0 → community 6"
+    },
+    {
+      "source": "renderCalendar()",
+      "target": "today()",
+      "source_files": [
+        "app.js",
+        "app.js"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 4 → community 0"
+    },
+    {
+      "source": "renderDashboard()",
+      "target": "today()",
+      "source_files": [
+        "app.js",
+        "app.js"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 4 → community 5"
+    },
+    {
+      "source": "buildPlayerPackage()",
+      "target": "curSport()",
+      "source_files": [
+        "app.js",
+        "app.js"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "note": "Bridges community 8 → community 1"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `toast()` connect `toast` to `playerById`, `app.js`, `placeTokens`, `openModal`, `renderDashboard`, `curSport`, `tapRenderPlayers`, `openScoutTutorial`, `openTeamsMenu`, `pwaCheckNow`?",
+      "why": "High betweenness centrality (0.005) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `save()` connect `toast` to `playerById`, `app.js`, `placeTokens`, `setupScout`, `curSport`, `feRedraw`, `renderAttendance`, `applyTheme`?",
+      "why": "High betweenness centrality (0.004) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `curSport()` connect `curSport` to `toast`, `playerById`, `app.js`, `placeTokens`, `renderDashboard`, `setupScout`, `tapRenderPlayers`, `feRedraw`, `openScoutTutorial`?",
+      "why": "High betweenness centrality (0.003) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `MONTHS`, `SCOUT`, `DEFAULT_VOLLEY_WEIGHTS` to the rest of the system?",
+      "why": "42 weakly-connected nodes found - possible documentation gaps or missing edges."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `toast` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.08078431372549019 - nodes in this community are weakly interconnected."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `playerById` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.09102564102564102 - nodes in this community are weakly interconnected."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `app.js` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.05405405405405406 - nodes in this community are weakly interconnected."
+    }
+  ]
+}
