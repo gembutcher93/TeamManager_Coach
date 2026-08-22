@@ -3224,7 +3224,8 @@ function exportData(){
     const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob);const a=document.createElement('a');
     const d=new Date().toISOString().slice(0,10);
-    a.href=url;a.download=`volleyteam-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
+    const teamSlug=(DB.teamName||'TEAM').trim().replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-')||'TEAM';
+    a.href=url;a.download=`${teamSlug}-Airim-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
     toast('Backup scaricato');
 }
 function importData(e){
@@ -3285,7 +3286,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v52';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v53';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
