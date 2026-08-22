@@ -438,7 +438,9 @@ const ONB_STEPS = [
   {icon:'fa-users',title:'Aggiungi i giocatori',body:'Vai su Roster &amp; Ruoli e costruisci la rosa: nome, numero, ruolo. Da lì assegni anche capitano e vice capitano.'},
   {icon:'fa-calendar-days',title:'Pianifica gli allenamenti',body:'In Calendario crei sedute singole o serie ricorrenti, e assegni gli esercizi da far votare.'},
   {icon:'fa-clipboard-list',title:'In partita usa lo Scout',body:'Durante la gara registra i fondamentali in Scout Gara: il voto di ogni giocatore nasce automaticamente da lì.'},
-  {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'}
+  {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'},
+  {icon:'fa-share-nodes',title:'Condividi con il Player',body:"Da Roster apri un giocatore e tocca Condividi: gli mandi file o codice con card, statistiche e formazione consigliata. Aggiorna e reinvia dopo ogni partita o allenamento. Il giocatore può a sua volta rimandarti le sue statistiche mentali (Mental Gym) da reimportare."},
+  {icon:'fa-database',title:"L'app funziona offline",body:"Tutti i dati restano sul tuo dispositivo, non in un cloud. Fai backup regolari da Impostazioni per non perderli se cambi telefono o disinstalli l'app."}
 ];
 const ONB_DEMO_STEPS = [
   {icon:'fa-hourglass-half',title:`${DEMO_DAYS} giorni per provarla`,body:`Usa l'app con la tua squadra vera per ${DEMO_DAYS} giorni. Alla scadenza scarichi un backup dei dati: le foto restano sul telefono e le ricarichi nella versione completa.`},
@@ -502,6 +504,118 @@ function onbFinish(){
   const o=document.getElementById('onb-overlay'); if(o) o.remove();
   updateDemoBadge(); checkDemoLock();
 }
+
+/* =========================================================
+   TOUR CONTESTUALE (Modulo S) — overlay leggero con 2-3 punti,
+   mostrato alla PRIMA visita di Scout Gara, Formazione consigliata,
+   Calendario e Impostazioni/Backup (traccia con localStorage
+   tut_seen_<schermata>). Non si ripresenta da solo dopo la prima
+   volta: si riapre a mano col bottone "?" su ciascuna delle 4
+   schermate. I passi il cui elemento non è presente/visibile (es.
+   "Importa" nascosto in demo, "Modulo/rotazione" per il basket che
+   non ce l'ha) vengono saltati senza errori.
+   ========================================================= */
+const CTX_TOURS = {
+  scout: [
+    {sel:'#scout-select', title:'Scegli la partita', text:'Seleziona qui la gara da analizzare: lo scout si apre per quella partita.'},
+    {sel:'#scout-panel', title:'Registra i fondamentali', text:"Tocca il giocatore, poi la categoria (o il fondamentale), poi il tocco per registrare l'evento: il voto si aggiorna da solo."},
+    {sel:'#scout-help-btn', title:'Serve aiuto?', text:'Tocca qui in qualsiasi momento per la spiegazione completa di come nasce il voto.'}
+  ],
+  formazione: [
+    {sel:'#formazione-content .fpitch-wrap', title:'Formazione automatica', text:"L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più."},
+    {sel:'#formazione-content .mod-chips', title:'Modulo o rotazione', text:'Per calcio scegli il modulo (4-3-3, 4-4-2…); per pallavolo scegli da che zona (P1…P6) parte il palleggiatore.'},
+    {sel:'#formazione-content .fbench', title:'Panchina per rendimento', text:'Chi non è titolare compare qui, ordinato per media voto: la prima scelta per un cambio.'}
+  ],
+  calendario: [
+    {sel:'#cal-form', title:'Aggiungi un evento', text:'Crea partite e allenamenti da qui: tipo, data e avversario o focus tecnico.'},
+    {sel:'#cal-grid', title:'Agenda del mese', text:'Tocca un giorno per vedere gli eventi già programmati.'},
+    {sel:'#cal-day', title:'Eventi del giorno', text:"Qui gestisci l'evento selezionato, incluso il risultato a set delle partite."}
+  ],
+  backup: [
+    {sel:'#ctx-backup-export', title:'Backup dei dati', text:"Scarica qui un file con tutti i dati: rosa, calendario, statistiche, presenze. Fallo regolarmente — l'app è offline, i dati vivono solo su questo dispositivo."},
+    {sel:'#ctx-backup-import', title:'Ripristina o trasferisci', text:'Carica un backup per ripristinare i dati o spostarli su un altro dispositivo.'},
+    {sel:'#ctx-backup-guide', title:'Rivedi la guida', text:'Puoi riaprire il tutorial introduttivo in qualsiasi momento da qui.'}
+  ]
+};
+let _ctx=null;
+function ctxCSS(){
+  if(document.getElementById('ctx-css')) return;
+  const st=document.createElement('style'); st.id='ctx-css';
+  st.textContent=`
+  .ctx-help-btn{flex:0 0 auto;width:34px;height:34px;border-radius:50%;border:1px solid var(--line,rgba(255,255,255,.18));
+    background:var(--surface-2,rgba(255,255,255,.04));color:var(--muted,#8395B4);font-weight:800;cursor:pointer;font-size:.9rem;
+    display:inline-flex;align-items:center;justify-content:center;}
+  .ctx-help-btn:hover{border-color:var(--brand,#22C55E);color:var(--brand,#22C55E);}
+  #ctx-block{position:fixed;inset:0;z-index:9996;background:transparent;}
+  #ctx-hole{position:fixed;z-index:9997;border-radius:12px;box-shadow:0 0 0 4000px rgba(4,8,18,.6);pointer-events:none;
+    transition:top .18s ease,left .18s ease,width .18s ease,height .18s ease;}
+  #ctx-bubble{position:fixed;z-index:9998;width:280px;max-width:calc(100vw - 24px);background:var(--surface,#0E1525);
+    border:1px solid var(--brand,#22C55E);border-radius:16px;padding:14px 16px;box-shadow:0 16px 40px -14px rgba(0,0,0,.7);}
+  #ctx-bubble h4{font-family:'Outfit',sans-serif;font-size:1rem;font-weight:800;margin-bottom:6px;display:flex;align-items:center;gap:8px;color:var(--text,#fff);}
+  #ctx-bubble h4 i{color:var(--brand,#22C55E);}
+  #ctx-bubble p{color:var(--muted,#8395B4);font-size:.86rem;line-height:1.5;margin-bottom:12px;}
+  #ctx-bubble .ctx-dots{display:flex;gap:5px;margin-bottom:10px;}
+  #ctx-bubble .ctx-dots span{width:6px;height:6px;border-radius:50%;background:var(--line,#22304E);}
+  #ctx-bubble .ctx-dots span.on{background:var(--brand,#22C55E);width:16px;border-radius:4px;}
+  #ctx-bubble .ctx-acts{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  #ctx-bubble .ctx-skip{background:none;border:none;color:var(--muted-2,#5C6C8C);font-size:.8rem;font-weight:600;cursor:pointer;padding:6px;}
+  #ctx-bubble .ctx-next{background:var(--brand,#22C55E);color:#04140a;border:none;border-radius:10px;padding:8px 14px;font-weight:800;cursor:pointer;font-size:.86rem;}
+  `;
+  document.head.appendChild(st);
+}
+function ctxAutoShow(key){
+  if(!CTX_TOURS[key]) return;
+  try{ if(localStorage.getItem('tut_seen_'+key)) return; }catch(e){ return; }
+  ctxStart(key);
+}
+function ctxStart(key){
+  const steps=(CTX_TOURS[key]||[]).filter(s=>{ const el=document.querySelector(s.sel); return el && el.offsetParent!==null; });
+  if(!steps.length) return;
+  ctxCSS();
+  _ctx={key,steps,idx:0};
+  if(!document.getElementById('ctx-block')){
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-block'}));
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-hole'}));
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-bubble'}));
+  }
+  ctxRender();
+}
+function ctxRender(){
+  if(!_ctx) return;
+  const step=_ctx.steps[_ctx.idx];
+  const el=document.querySelector(step.sel);
+  const hole=document.getElementById('ctx-hole'), bub=document.getElementById('ctx-bubble');
+  if(!hole||!bub) return;
+  if(el){
+    const r=el.getBoundingClientRect(), pad=6;
+    hole.style.display='block';
+    hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
+    hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
+    bub.style.transform='none';
+    const bh=220;
+    bub.style.top=((r.bottom+14+bh<window.innerHeight)?(r.bottom+14):Math.max(14,r.top-14-bh))+'px';
+    let left=r.left; if(left+280>window.innerWidth-12) left=window.innerWidth-292; if(left<12) left=12;
+    bub.style.left=left+'px';
+  } else {
+    hole.style.display='none';
+    bub.style.top='40%'; bub.style.left='50%'; bub.style.transform='translate(-50%,-50%)';
+  }
+  const last=_ctx.idx===_ctx.steps.length-1;
+  bub.innerHTML=`<h4><i class="fa-solid fa-circle-info"></i> ${step.title}</h4><p>${step.text}</p>
+    <div class="ctx-dots">${_ctx.steps.map((_,i)=>`<span class="${i===_ctx.idx?'on':''}"></span>`).join('')}</div>
+    <div class="ctx-acts"><button class="ctx-skip" onclick="ctxFinish()">Salta</button><button class="ctx-next" onclick="ctxNext()">${last?'Fatto':'Avanti'}</button></div>`;
+}
+function ctxNext(){
+  if(!_ctx) return;
+  if(_ctx.idx>=_ctx.steps.length-1){ ctxFinish(); return; }
+  _ctx.idx++; ctxRender();
+}
+function ctxFinish(){
+  if(_ctx){ try{ localStorage.setItem('tut_seen_'+_ctx.key,'1'); }catch(e){} }
+  ['ctx-block','ctx-hole','ctx-bubble'].forEach(id=>{ const e=document.getElementById(id); if(e) e.remove(); });
+  _ctx=null;
+}
+window.addEventListener('resize', ()=>{ if(_ctx) ctxRender(); });
 
 /* =========================================================
    COUNTDOWN + SCADENZA (solo DEMO_BUILD)
@@ -729,10 +843,11 @@ function buildLayout(){
     <!-- CALENDARIO -->
     <section id="calendario" class="section">
         <div class="page-head"><div><div class="eyebrow">Agenda</div><h2>Calendario &amp; Match</h2>
-            <p class="sub">Partite e allenamenti in un'unica agenda. Sulle partite puoi registrare il risultato a set.</p></div></div>
+            <p class="sub">Partite e allenamenti in un'unica agenda. Sulle partite puoi registrare il risultato a set.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('calendario')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <h3><i class="fa-solid fa-calendar-plus"></i> Nuovo evento</h3>
-            <form onsubmit="addEvent(event)"><div class="form-row">
+            <form id="cal-form" onsubmit="addEvent(event)"><div class="form-row">
                 <div class="fg"><label>Tipo</label><select id="e-type"><option>Partita</option><option>Allenamento</option></select></div>
                 <div class="fg"><label>Data</label><input id="e-date" type="date" required></div>
                 <div class="fg"><label>Avversario o focus tecnico</label><input id="e-notes" placeholder="Es. vs San Pio X — oppure Ricezione" required></div>
@@ -762,12 +877,13 @@ function buildLayout(){
     <!-- SCOUT -->
     <section id="scout" class="section">
         <div class="page-head"><div><div class="eyebrow">Analisi</div><h2>Scout Gara</h2>
-            <p class="sub">Inserisci il tabellino fondamentale per fondamentale: voti e statistiche vengono salvati nello storico di ogni atleta.</p></div></div>
+            <p class="sub">Inserisci il tabellino fondamentale per fondamentale: voti e statistiche vengono salvati nello storico di ogni atleta.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('scout')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap">
                 <div class="fg" style="max-width:420px;flex:1"><label>Partita da analizzare</label>
                     <select id="scout-select" onchange="setupScout()"><option value="">Scegli una partita…</option></select></div>
-                <button class="btn btn-ghost" onclick="openScoutTutorial()"><i class="fa-solid fa-circle-question"></i> Come funziona</button>
+                <button class="btn btn-ghost" id="scout-help-btn" onclick="openScoutTutorial()"><i class="fa-solid fa-circle-question"></i> Come funziona</button>
             </div>
         </div>
         <div id="scout-rot-summary" style="display:none"></div>
@@ -794,7 +910,8 @@ function buildLayout(){
     <!-- FORMAZIONE -->
     <section id="formazione" class="section">
         <div class="page-head"><div><div class="eyebrow">Meritocrazia</div><h2>Formazione consigliata</h2>
-            <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div></div>
+            <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('formazione')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div id="formazione-content"></div>
     </section>
 
@@ -884,11 +1001,12 @@ function buildLayout(){
     <!-- BACKUP -->
     <section id="backup" class="section">
         <div class="page-head"><div><div class="eyebrow">Configurazione</div><h2><i class="fa-solid fa-gear" style="font-size:1.4rem;color:var(--brand);margin-right:8px"></i>Impostazioni</h2>
-            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — esporta un backup per non perderli e per spostarli su un altro dispositivo.</p></div></div>
-        <div class="card"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
+            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — esporta un backup per non perderli e per spostarli su un altro dispositivo.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('backup')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+        <div class="card" id="ctx-backup-export"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON. Salva i dati, non le foto: quelle restano sul dispositivo.</p>
             <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button></div>
-        ${DEMO_BUILD?'':`<div class="card"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
+        ${DEMO_BUILD?'':`<div class="card" id="ctx-backup-import"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
             <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
@@ -898,7 +1016,7 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-heart-pulse"></i> Check-in benessere</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Check-in benessere → "Invia al mister") per vedere sonno, affaticamento, umore e zone segnalate nella sua scheda atleta.</p>
             <button class="btn btn-ghost" onclick="openImportWellness()"><i class="fa-solid fa-file-import"></i> Importa check-in benessere</button></div>
-        <div class="card"><h3><i class="fa-solid fa-circle-play"></i> Guida</h3>
+        <div class="card" id="ctx-backup-guide"><h3><i class="fa-solid fa-circle-play"></i> Guida</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Rivedi la guida introduttiva su squadra, giocatori, allenamenti, scout e card.</p>
             <button class="btn btn-ghost" onclick="openOnboarding(true)"><i class="fa-solid fa-graduation-cap"></i> Rivedi tutorial</button></div>
         <div class="card"><h3 style="color:var(--flame)"><i class="fa-solid fa-trash-can" style="color:var(--flame)"></i> Azzera tutto</h3>
@@ -955,6 +1073,7 @@ function go(sec){
     window.scrollTo({top:0,behavior:'instant'});
     setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
     updateDemoBadge(); checkDemoLock();
+    if(CTX_TOURS[sec]) setTimeout(()=>ctxAutoShow(sec), 200);
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('backdrop').classList.remove('show');}
@@ -2974,13 +3093,41 @@ function resetAll(){
     });
 }
 
+/* =========================================================
+   PROMEMORIA BACKUP GIORNALIERO (Modulo Q)
+   Non invasivo, una volta al giorno. Non durante l'onboarding di un
+   installazione nuova (nessun dato ancora da perdere) né mentre gira
+   l'animazione di apertura: viene richiamato con un ritardo che la supera.
+   ========================================================= */
+function checkBackupReminder(){
+  try{
+    if(!localStorage.getItem('vt_tutorial_done')) return;   /* prima apertura: niente da salvare ancora */
+    const today=new Date().toDateString();
+    if(localStorage.getItem('vt_last_backup_reminder')===today) return;
+    showBackupReminder();
+  }catch(e){}
+}
+function showBackupReminder(){
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-cloud-arrow-down" style="color:var(--brand)"></i> Ricordati di fare il backup</h3>
+      <button class="modal-close" onclick="dismissBackupReminder()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint">Se cancelli i dati del telefono o disinstalli l'app, perderai tutto ciò che non hai salvato.</p>
+      <div style="display:flex;gap:8px;margin-top:1.2rem;flex-wrap:wrap">
+        <button class="btn btn-accent" style="flex:1" onclick="backupReminderNow()"><i class="fa-solid fa-download"></i> Fai backup ora</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="dismissBackupReminder()">Non oggi</button>
+      </div>
+    </div>`);
+}
+function dismissBackupReminder(){ localStorage.setItem('vt_last_backup_reminder', new Date().toDateString()); closeModal(); }
+function backupReminderNow(){ exportData(); dismissBackupReminder(); }
+
 
 /* =========================================================
    AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v48';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v51';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -3066,7 +3213,20 @@ if('serviceWorker' in navigator){
    Basket: nuovo — 5 posizioni base su mezzo campo (nessun motore per il basket esisteva in Formazione).
    ========================================================= */
 const VOLLEY_ZONES=[['P4',.2,.22],['P3',.5,.18],['P2',.8,.22],['P5',.2,.78],['P6',.5,.82],['P1',.8,.78]];
-const VOLLEY_ZONE_ROLE={P1:['Palleggiatore',0],P4:['Opposto',0],P3:['Centrale',0],P2:['Schiacciatore',0],P5:['Schiacciatore',1],P6:['Libero',0]};
+/* Ordine di ruolo lungo il giro di rotazione P1→P2→P3→P4→P5→P6 quando il palleggiatore
+   parte da P1 (rotazione 1): Palleggiatore, Schiacciatore, Centrale, Opposto (sempre
+   opposto al palleggiatore, 3 zone dopo), Schiacciatore, Libero (sostituisce il centrale
+   che tornerebbe dietro). Per far partire il palleggiatore da un'altra zona (rotazione N)
+   basta scorrere questo stesso ciclo di quante zone lo separano da P1. */
+const VOLLEY_ROLE_CYCLE=[['Palleggiatore',0],['Schiacciatore',0],['Centrale',0],['Opposto',0],['Schiacciatore',1],['Libero',0]];
+function volleyZoneRoleMap(startRot){
+  const off=(((startRot||1)-1)%6+6)%6;
+  const zones=['P1','P2','P3','P4','P5','P6'], map={};
+  zones.forEach((z,i)=>{ map[z]=VOLLEY_ROLE_CYCLE[(i-off+6)%6]; });
+  return map;
+}
+function getLineupPallavolo(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.pallavolo=DB.settings.lineup.pallavolo||{rotation:1}; if(!DB.settings.lineup.pallavolo.rotation) DB.settings.lineup.pallavolo.rotation=1; return DB.settings.lineup.pallavolo; }
+function setLineupRotation(r){ const L=getLineupPallavolo(); L.rotation=r; save(); renderFormazione(); }
 const BASKET_POS={Playmaker:[.5,.85],Guardia:[.82,.55],'Ala piccola':[.18,.55],'Ala grande':[.7,.25],Centro:[.5,.1]};
 function lineupSlot(zr,p,v,x,y){ return {ruolo_o_zona:zr,playerName:p.name,number:p.number,overall:cphOverall(v),tier:playerTier(p.id),x:+x.toFixed(3),y:+y.toFixed(3)}; }
 function computeLineupCalcio(){
@@ -3074,11 +3234,12 @@ function computeLineupCalcio(){
   return slots.filter(s=>s.player).map(s=>lineupSlot(s.role,s.player,getSeasonStats(s.player.id).avgVoto,s.x,s.y));
 }
 function computeLineupPallavolo(){
+  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   const out=[];
   VOLLEY_ZONES.forEach(([z,x,y])=>{
-    const [role,idx]=VOLLEY_ZONE_ROLE[z]; const pick=byRole(role)[idx];
+    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
     if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y));
   });
   return out;
@@ -3744,6 +3905,7 @@ renderDashboard();
 checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
+setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
 
 /* =========================================================
    FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)
@@ -4421,10 +4583,11 @@ function injectFmzCSS(){
 }
 /* ---- Formazione PALLAVOLO/BASKET visuale: campo disegnato (stesso stile del campo calcio) ---- */
 function pickLineupPallavolo(){
+  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   return VOLLEY_ZONES.map(([z,x,y])=>{
-    const [role,idx]=VOLLEY_ZONE_ROLE[z]; const pick=byRole(role)[idx];
+    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
     return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
   });
 }
@@ -4477,9 +4640,18 @@ function renderCourtFormation(sport){
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const bench=players.filter(x=>!usedIds.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+  const rotHeader = sport==='pallavolo' ? (()=>{
+    const rot=getLineupPallavolo().rotation;
+    const chips=[1,2,3,4,5,6].map(n=>`<button class="mod-chip${n===rot?' on':''}" onclick="setLineupRotation(${n})">P${n}</button>`).join('');
+    return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <h3 style="margin:0"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>
+        <div class="mod-chips">${chips}</div>
+      </div>
+      <p class="hint" style="margin:-4px 0 12px">Rotazione di partenza: da che zona parte il palleggiatore.</p>`;
+  })() : `<h3 style="margin:0 0 12px"><i class="fa-solid fa-basketball" style="color:var(--brand)"></i> Formazione in campo</h3>`;
   document.getElementById('formazione-content').innerHTML=`
     <div class="card">
-      <h3 style="margin:0 0 12px"><i class="fa-solid fa-${sport==='pallavolo'?'volleyball':'basketball'}" style="color:var(--brand)"></i> Formazione in campo</h3>
+      ${rotHeader}
       <div class="fpitch-wrap"><div class="fpitch readonly${sport==='basket'?' fpitch-basket':''}">
         ${courtZoneSVG(sport)}
         ${tokens}
