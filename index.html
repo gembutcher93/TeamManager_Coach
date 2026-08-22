@@ -325,9 +325,47 @@
     .empty-state i{font-size:2.4rem;color:var(--surface-3);margin-bottom:.8rem;display:block;}
     .empty-state b{display:block;color:var(--text);font-size:1.05rem;margin-bottom:4px;}
     .row-actions{display:flex;gap:6px;justify-content:center;}
+
+    /* INTRO — animazione di apertura sport-aware (Modulo M), identica al Player.
+       Il campo si disegna da solo, zoom verso il centro, alone che pulsa, esplosione, logo.
+       ~1.5-1.8s totali, saltabile con un tap. Contenuto sport-aware iniettato da app.js
+       (piIntroRun()) appena curSport() è disponibile; il contenitore appare subito via CSS.
+       Nota accessibilità: la scomparsa usa una transition (classe .pi-hide), non una
+       @keyframes ...forwards — la regola reduced-motion qui sopra forza animation:none!important,
+       che lascerebbe l'overlay bloccato per sempre se la scomparsa dipendesse da un'animazione. */
+    #pl-intro{position:fixed;inset:0;z-index:900;display:flex;align-items:center;justify-content:center;overflow:hidden;
+        background:radial-gradient(1100px 700px at 80% -10%,rgba(34,197,94,.18),transparent 60%),radial-gradient(900px 600px at 0% 110%,rgba(91,155,255,.12),transparent 55%),linear-gradient(170deg,#0C1526,#060A18 60%);
+        cursor:pointer;opacity:1;transition:opacity .32s ease;}
+    #pl-intro.pi-hide{opacity:0;pointer-events:none;}
+    #pl-intro-stage{position:relative;width:min(74vw,320px);aspect-ratio:2/1;display:flex;align-items:center;justify-content:center;
+        transition:transform .22s cubic-bezier(.3,.7,.2,1);}
+    #pl-intro-stage.pi-zoom{transform:scale(1.6);}
+    .pi-court{position:absolute;inset:0;width:100%;height:100%;overflow:visible;}
+    .pi-court>*{fill:none;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;transition:stroke-dashoffset .46s cubic-bezier(.25,.65,.3,1);}
+    #pl-intro-stage.pi-draw .pi-court>*{stroke-dashoffset:0;}
+    .pi-halo{position:absolute;left:50%;top:50%;width:40px;height:40px;border-radius:50%;transform:translate(-50%,-50%) scale(0);opacity:0;
+        background:radial-gradient(circle,rgba(34,197,94,.55),rgba(34,197,94,0) 70%);pointer-events:none;}
+    #pl-intro-stage.pi-pulse .pi-halo{animation:pi-halo-pulse .4s cubic-bezier(.3,.6,.3,1) both;}
+    @keyframes pi-halo-pulse{
+        0%{transform:translate(-50%,-50%) scale(0);opacity:0;}
+        18%{transform:translate(-50%,-50%) scale(2.1);opacity:.55;}
+        34%{transform:translate(-50%,-50%) scale(1.15);opacity:.15;}
+        55%{transform:translate(-50%,-50%) scale(3.3);opacity:.65;}
+        72%{transform:translate(-50%,-50%) scale(1.5);opacity:.15;}
+        90%{transform:translate(-50%,-50%) scale(4.4);opacity:.7;}
+        100%{transform:translate(-50%,-50%) scale(1);opacity:0;}
+    }
+    .pi-burst{position:absolute;left:50%;top:50%;width:16px;height:16px;border-radius:50%;transform:translate(-50%,-50%) scale(0);opacity:0;
+        background:radial-gradient(circle,#fff,var(--brand) 40%,rgba(34,197,94,0) 72%);pointer-events:none;}
+    #pl-intro-stage.pi-explode .pi-burst{animation:pi-burst .48s cubic-bezier(.15,.8,.25,1) both;}
+    @keyframes pi-burst{0%{transform:translate(-50%,-50%) scale(0);opacity:1;}55%{transform:translate(-50%,-50%) scale(9);opacity:.8;}100%{transform:translate(-50%,-50%) scale(15);opacity:0;}}
+    .pi-logo{position:relative;z-index:2;width:72px;height:72px;border-radius:18px;opacity:0;transform:scale(.7);
+        box-shadow:0 16px 40px -12px rgba(0,0,0,.7);transition:opacity .36s ease,transform .36s cubic-bezier(.2,.8,.2,1);}
+    #pl-intro-stage.pi-logo-in .pi-logo{opacity:1;transform:scale(1);}
     </style>
 </head>
 <body>
+<div id="pl-intro"><div id="pl-intro-stage"></div></div>
 <button id="menu-toggle" onclick="toggleSidebar()" aria-label="Apri menu"><i class="fa-solid fa-bars"></i></button>
 <div id="backdrop" onclick="closeSidebar()"></div>
 <div id="toast-stack"></div>
@@ -396,6 +434,7 @@
 </div>
 
 <script src="schemes.js"></script>
+<script src="soundkit.js"></script>
 <script src="app.js"></script>
 <script src="polisport.js"></script>
     <script src="marquee.js"></script>

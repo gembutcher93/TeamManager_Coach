@@ -69,23 +69,32 @@ const SCOUT = {
   },
   calcio:{
     groups:[
-      {label:'Offensiva',  fields:[['gol','Gol'],['assist','Ass'],['tiri','Tiri'],['tiriP','In porta']]},
-      {label:'Disciplina', fields:[['falli','Falli'],['amm','Amm'],['esp','Esp']]},
-      {label:'Portiere',   fields:[['parate','Parate'],['subiti','Subiti']]},
+      {label:'Offensivo',  fields:[['gol','Gol'],['assist','Ass'],['tiroPorta','Tiro P.'],['dribbling','Drib']]},
+      {label:'Difensivo',  fields:[['contrasto','Contr'],['intercetto','Interc'],['chiusura','Chius']]},
+      {label:'Disciplina', fields:[['fallo','Falli'],['ammonizione','Amm'],['espulsione','Esp'],['pallaPersa','P.Persa']]},
+      {label:'Portiere',   fields:[['parata','Parate'],['uscita','Uscite'],['respinta','Resp'],['golSubito','Sub']]},
       {label:'',           fields:[['min','Min']]}
     ],
+    /* Pesi calibrati per dare pari dignità alle azioni difensive/portiere rispetto a gol
+       e assist: un difensore o un portiere che gioca un'ottima gara fatta di sole azioni
+       difensive (contrasti, intercetti, chiusure, parate, uscite) deve poter superare il
+       voto base 6.0 tanto quanto un attaccante che segna, non restare relegato alla sola
+       assenza di demeriti. */
     voto(s){
       let v=6.0;
-      v+=s.gol*1.0 + s.assist*0.6 + s.tiriP*0.1 + s.parate*0.15;
-      v-=s.subiti*0.25 + s.falli*0.05 + s.amm*0.3 + s.esp*1.5;
+      v+=(s.gol||0)*1.0 + (s.assist||0)*0.6 + (s.tiroPorta||0)*0.15 + (s.dribbling||0)*0.12
+        +(s.contrasto||0)*0.15 + (s.intercetto||0)*0.15 + (s.chiusura||0)*0.2
+        +(s.parata||0)*0.3 + (s.uscita||0)*0.25 + (s.respinta||0)*0.2;
+      v-=(s.fallo||0)*0.05 + (s.ammonizione||0)*0.3 + (s.espulsione||0)*1.5
+        +(s.pallaPersa||0)*0.1 + (s.golSubito||0)*0.3;
       return clampVoto(v);
     },
     season(a){
       return [['Gol',a.gol||0,''],['Assist',a.assist||0,''],
-              ['Tiri in porta',a.tiriP||0,''],['Parate',a.parate||0,''],
-              ['Ammonizioni',a.amm||0,'']];
+              ['Contrasti vinti',a.contrasto||0,''],['Parate',a.parata||0,''],
+              ['Ammonizioni',a.ammonizione||0,'']];
     },
-    note:'Voto (base 6.0): +gol, assist, parate · −gol subiti, falli, cartellini.'
+    note:'Voto (base 6.0): +gol, assist, tiri in porta, dribbling, contrasti vinti, intercetti, chiusure, parate, uscite, respinte · −falli, ammonizioni, espulsioni, palle perse, gol subiti.'
   },
   basket:{
     groups:[
@@ -108,7 +117,7 @@ const SCOUT = {
               ['Assist',a.assist||0,''],['% da 3',p3!=null?p3:'—',p3!=null?'%':''],
               ['Stoppate',a.stoppate||0,'']];
     },
-    note:'Voto (base 6.0) dalla valutazione: punti, rimbalzi, assist, rubate, stoppate − perse, errori al tiro, falli.'
+    note:'PT si calcola automaticamente da tiri da 2/3 e liberi fatti (non è modificabile a mano). Voto (base 6.0) dalla valutazione: punti, rimbalzi, assist, rubate, stoppate − perse, errori al tiro, falli.'
   }
 };
 function scoutFields(sport){ return SCOUT[sport||curSport()].groups.flatMap(g=>g.fields.map(f=>f[0])); }
@@ -198,12 +207,31 @@ function openScoutTutorial(){
   weightsCSS();
   const sport=curSport();
   const isVolley = sport==='pallavolo';
+  const isBasket = sport==='basket';
   const uso = isVolley ? `
     <ol class="tut-steps">
       <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
       <li>Scegli il <b>fondamentale</b> (Ricezione / Attacco / Battuta / Muro).</li>
       <li>Tocca il <b>grado</b> del tocco: <b>#</b> perfetto · <b>+</b> positivo · <b>!</b> ok · <b>−</b> negativo · <b>=</b> errore.</li>
       <li>Ogni tocco aggiorna subito le percentuali e il voto del giocatore.</li>
+      <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
+      <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
+    </ol>` : isBasket ? `
+    <ol class="tut-steps">
+      <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
+      <li>Scegli la <b>categoria</b>: Tiro da 2 / da 3 / libero, Rimbalzo, oppure Assist · Palla rubata · Palla persa · Stoppata · Fallo.</li>
+      <li>Per i tiri e il rimbalzo tocca l'<b>esito</b> (Fatto/Sbagliato oppure Offensivo/Difensivo). Per le altre categorie il tocco sulla categoria registra subito l'evento.</li>
+      <li>Il <b>PT</b> si calcola da solo dai tiri fatti: non si inserisce a mano.</li>
+      <li>Il <b>MIN</b> (minutaggio) si inserisce a parte, sotto il nome del giocatore.</li>
+      <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
+      <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
+    </ol>` : sport==='calcio' ? `
+    <ol class="tut-steps">
+      <li><b>Tocca un giocatore</b> nella lista a sinistra: si evidenzia.</li>
+      <li>Scegli la <b>categoria</b>: Offensivo, Difensivo, Disciplina o (solo per il portiere) Portiere.</li>
+      <li>Tocca l'<b>azione</b>: ogni tocco registra subito l'evento (Gol, Contrasto vinto, Parata, Fallo…).</li>
+      <li>Difensori e portieri guadagnano voto anche senza segnare: contrasti, intercetti, chiusure e parate pesano quanto gol e assist.</li>
+      <li>Il <b>MIN</b> (minutaggio) si inserisce a parte, sotto il nome del giocatore.</li>
       <li>Sbagliato? Usa <b>Annulla ultimo</b>, oppure seleziona il giocatore e togli il singolo tocco dalla lista delle <b>chip</b>.</li>
       <li><b>Registra statistiche</b> per salvare tutto nelle schede atleti.</li>
     </ol>` : `
@@ -372,7 +400,7 @@ function weightsCSS(){
 
 /* ---------- STATO VUOTO (squadra nuova: nessun dato precompilato, qualunque sia lo sport) ---------- */
 function emptyDB(){
-    return {teamName:'TEAM',players:[],events:[],scoutHistory:[],attendance:{},rotationStats:{},trainings:{},nextId:1};
+    return {teamName:'TEAM',players:[],events:[],scoutHistory:[],attendance:{},rotationStats:{},trainings:{},substitutions:{},nextId:1};
 }
 
 /* ---------- LOAD / SAVE ---------- */
@@ -398,6 +426,7 @@ function loadDB(){
 const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra salvato per questo profilo
 let DB = loadDB();
 if(!DB.trainings) DB.trainings = {};
+if(!DB.substitutions) DB.substitutions = {};
 if(!DB.nextId) DB.nextId = Date.now();
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
@@ -410,7 +439,9 @@ const ONB_STEPS = [
   {icon:'fa-users',title:'Aggiungi i giocatori',body:'Vai su Roster &amp; Ruoli e costruisci la rosa: nome, numero, ruolo. Da lì assegni anche capitano e vice capitano.'},
   {icon:'fa-calendar-days',title:'Pianifica gli allenamenti',body:'In Calendario crei sedute singole o serie ricorrenti, e assegni gli esercizi da far votare.'},
   {icon:'fa-clipboard-list',title:'In partita usa lo Scout',body:'Durante la gara registra i fondamentali in Scout Gara: il voto di ogni giocatore nasce automaticamente da lì.'},
-  {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'}
+  {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'},
+  {icon:'fa-share-nodes',title:'Condividi con il Player',body:"Da Roster apri un giocatore e tocca Condividi: gli mandi file o codice con card, statistiche e formazione consigliata. Aggiorna e reinvia dopo ogni partita o allenamento. Il giocatore può a sua volta rimandarti le sue statistiche mentali (Mental Gym) da reimportare."},
+  {icon:'fa-database',title:"L'app funziona offline",body:"Tutti i dati restano sul tuo dispositivo, non in un cloud. Fai backup regolari da Impostazioni per non perderli se cambi telefono o disinstalli l'app."}
 ];
 const ONB_DEMO_STEPS = [
   {icon:'fa-hourglass-half',title:`${DEMO_DAYS} giorni per provarla`,body:`Usa l'app con la tua squadra vera per ${DEMO_DAYS} giorni. Alla scadenza scarichi un backup dei dati: le foto restano sul telefono e le ricarichi nella versione completa.`},
@@ -474,6 +505,118 @@ function onbFinish(){
   const o=document.getElementById('onb-overlay'); if(o) o.remove();
   updateDemoBadge(); checkDemoLock();
 }
+
+/* =========================================================
+   TOUR CONTESTUALE (Modulo S) — overlay leggero con 2-3 punti,
+   mostrato alla PRIMA visita di Scout Gara, Formazione consigliata,
+   Calendario e Impostazioni/Backup (traccia con localStorage
+   tut_seen_<schermata>). Non si ripresenta da solo dopo la prima
+   volta: si riapre a mano col bottone "?" su ciascuna delle 4
+   schermate. I passi il cui elemento non è presente/visibile (es.
+   "Importa" nascosto in demo, "Modulo/rotazione" per il basket che
+   non ce l'ha) vengono saltati senza errori.
+   ========================================================= */
+const CTX_TOURS = {
+  scout: [
+    {sel:'#scout-select', title:'Scegli la partita', text:'Seleziona qui la gara da analizzare: lo scout si apre per quella partita.'},
+    {sel:'#scout-panel', title:'Registra i fondamentali', text:"Tocca il giocatore, poi la categoria (o il fondamentale), poi il tocco per registrare l'evento: il voto si aggiorna da solo."},
+    {sel:'#scout-help-btn', title:'Serve aiuto?', text:'Tocca qui in qualsiasi momento per la spiegazione completa di come nasce il voto.'}
+  ],
+  formazione: [
+    {sel:'#formazione-content .fpitch-wrap', title:'Formazione automatica', text:"L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più."},
+    {sel:'#formazione-content .mod-chips', title:'Modulo o rotazione', text:'Per calcio scegli il modulo (4-3-3, 4-4-2…); per pallavolo scegli da che zona (P1…P6) parte il palleggiatore.'},
+    {sel:'#formazione-content .fbench', title:'Panchina per rendimento', text:'Chi non è titolare compare qui, ordinato per media voto: la prima scelta per un cambio.'}
+  ],
+  calendario: [
+    {sel:'#cal-form', title:'Aggiungi un evento', text:'Crea partite e allenamenti da qui: tipo, data e avversario o focus tecnico.'},
+    {sel:'#cal-grid', title:'Agenda del mese', text:'Tocca un giorno per vedere gli eventi già programmati.'},
+    {sel:'#cal-day', title:'Eventi del giorno', text:"Qui gestisci l'evento selezionato, incluso il risultato a set delle partite."}
+  ],
+  backup: [
+    {sel:'#ctx-backup-export', title:'Backup dei dati', text:"Scarica qui un file con tutti i dati: rosa, calendario, statistiche, presenze. Fallo regolarmente — l'app è offline, i dati vivono solo su questo dispositivo."},
+    {sel:'#ctx-backup-import', title:'Ripristina o trasferisci', text:'Carica un backup per ripristinare i dati o spostarli su un altro dispositivo.'},
+    {sel:'#ctx-backup-guide', title:'Rivedi la guida', text:'Puoi riaprire il tutorial introduttivo in qualsiasi momento da qui.'}
+  ]
+};
+let _ctx=null;
+function ctxCSS(){
+  if(document.getElementById('ctx-css')) return;
+  const st=document.createElement('style'); st.id='ctx-css';
+  st.textContent=`
+  .ctx-help-btn{flex:0 0 auto;width:34px;height:34px;border-radius:50%;border:1px solid var(--line,rgba(255,255,255,.18));
+    background:var(--surface-2,rgba(255,255,255,.04));color:var(--muted,#8395B4);font-weight:800;cursor:pointer;font-size:.9rem;
+    display:inline-flex;align-items:center;justify-content:center;}
+  .ctx-help-btn:hover{border-color:var(--brand,#22C55E);color:var(--brand,#22C55E);}
+  #ctx-block{position:fixed;inset:0;z-index:9996;background:transparent;}
+  #ctx-hole{position:fixed;z-index:9997;border-radius:12px;box-shadow:0 0 0 4000px rgba(4,8,18,.6);pointer-events:none;
+    transition:top .18s ease,left .18s ease,width .18s ease,height .18s ease;}
+  #ctx-bubble{position:fixed;z-index:9998;width:280px;max-width:calc(100vw - 24px);background:var(--surface,#0E1525);
+    border:1px solid var(--brand,#22C55E);border-radius:16px;padding:14px 16px;box-shadow:0 16px 40px -14px rgba(0,0,0,.7);}
+  #ctx-bubble h4{font-family:'Outfit',sans-serif;font-size:1rem;font-weight:800;margin-bottom:6px;display:flex;align-items:center;gap:8px;color:var(--text,#fff);}
+  #ctx-bubble h4 i{color:var(--brand,#22C55E);}
+  #ctx-bubble p{color:var(--muted,#8395B4);font-size:.86rem;line-height:1.5;margin-bottom:12px;}
+  #ctx-bubble .ctx-dots{display:flex;gap:5px;margin-bottom:10px;}
+  #ctx-bubble .ctx-dots span{width:6px;height:6px;border-radius:50%;background:var(--line,#22304E);}
+  #ctx-bubble .ctx-dots span.on{background:var(--brand,#22C55E);width:16px;border-radius:4px;}
+  #ctx-bubble .ctx-acts{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  #ctx-bubble .ctx-skip{background:none;border:none;color:var(--muted-2,#5C6C8C);font-size:.8rem;font-weight:600;cursor:pointer;padding:6px;}
+  #ctx-bubble .ctx-next{background:var(--brand,#22C55E);color:#04140a;border:none;border-radius:10px;padding:8px 14px;font-weight:800;cursor:pointer;font-size:.86rem;}
+  `;
+  document.head.appendChild(st);
+}
+function ctxAutoShow(key){
+  if(!CTX_TOURS[key]) return;
+  try{ if(localStorage.getItem('tut_seen_'+key)) return; }catch(e){ return; }
+  ctxStart(key);
+}
+function ctxStart(key){
+  const steps=(CTX_TOURS[key]||[]).filter(s=>{ const el=document.querySelector(s.sel); return el && el.offsetParent!==null; });
+  if(!steps.length) return;
+  ctxCSS();
+  _ctx={key,steps,idx:0};
+  if(!document.getElementById('ctx-block')){
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-block'}));
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-hole'}));
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-bubble'}));
+  }
+  ctxRender();
+}
+function ctxRender(){
+  if(!_ctx) return;
+  const step=_ctx.steps[_ctx.idx];
+  const el=document.querySelector(step.sel);
+  const hole=document.getElementById('ctx-hole'), bub=document.getElementById('ctx-bubble');
+  if(!hole||!bub) return;
+  if(el){
+    const r=el.getBoundingClientRect(), pad=6;
+    hole.style.display='block';
+    hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
+    hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
+    bub.style.transform='none';
+    const bh=220;
+    bub.style.top=((r.bottom+14+bh<window.innerHeight)?(r.bottom+14):Math.max(14,r.top-14-bh))+'px';
+    let left=r.left; if(left+280>window.innerWidth-12) left=window.innerWidth-292; if(left<12) left=12;
+    bub.style.left=left+'px';
+  } else {
+    hole.style.display='none';
+    bub.style.top='40%'; bub.style.left='50%'; bub.style.transform='translate(-50%,-50%)';
+  }
+  const last=_ctx.idx===_ctx.steps.length-1;
+  bub.innerHTML=`<h4><i class="fa-solid fa-circle-info"></i> ${step.title}</h4><p>${step.text}</p>
+    <div class="ctx-dots">${_ctx.steps.map((_,i)=>`<span class="${i===_ctx.idx?'on':''}"></span>`).join('')}</div>
+    <div class="ctx-acts"><button class="ctx-skip" onclick="ctxFinish()">Salta</button><button class="ctx-next" onclick="ctxNext()">${last?'Fatto':'Avanti'}</button></div>`;
+}
+function ctxNext(){
+  if(!_ctx) return;
+  if(_ctx.idx>=_ctx.steps.length-1){ ctxFinish(); return; }
+  _ctx.idx++; ctxRender();
+}
+function ctxFinish(){
+  if(_ctx){ try{ localStorage.setItem('tut_seen_'+_ctx.key,'1'); }catch(e){} }
+  ['ctx-block','ctx-hole','ctx-bubble'].forEach(id=>{ const e=document.getElementById(id); if(e) e.remove(); });
+  _ctx=null;
+}
+window.addEventListener('resize', ()=>{ if(_ctx) ctxRender(); });
 
 /* =========================================================
    COUNTDOWN + SCADENZA (solo DEMO_BUILD)
@@ -701,10 +844,11 @@ function buildLayout(){
     <!-- CALENDARIO -->
     <section id="calendario" class="section">
         <div class="page-head"><div><div class="eyebrow">Agenda</div><h2>Calendario &amp; Match</h2>
-            <p class="sub">Partite e allenamenti in un'unica agenda. Sulle partite puoi registrare il risultato a set.</p></div></div>
+            <p class="sub">Partite e allenamenti in un'unica agenda. Sulle partite puoi registrare il risultato a set.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('calendario')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <h3><i class="fa-solid fa-calendar-plus"></i> Nuovo evento</h3>
-            <form onsubmit="addEvent(event)"><div class="form-row">
+            <form id="cal-form" onsubmit="addEvent(event)"><div class="form-row">
                 <div class="fg"><label>Tipo</label><select id="e-type"><option>Partita</option><option>Allenamento</option></select></div>
                 <div class="fg"><label>Data</label><input id="e-date" type="date" required></div>
                 <div class="fg"><label>Avversario o focus tecnico</label><input id="e-notes" placeholder="Es. vs San Pio X — oppure Ricezione" required></div>
@@ -734,15 +878,17 @@ function buildLayout(){
     <!-- SCOUT -->
     <section id="scout" class="section">
         <div class="page-head"><div><div class="eyebrow">Analisi</div><h2>Scout Gara</h2>
-            <p class="sub">Inserisci il tabellino fondamentale per fondamentale: voti e statistiche vengono salvati nello storico di ogni atleta.</p></div></div>
+            <p class="sub">Inserisci il tabellino fondamentale per fondamentale: voti e statistiche vengono salvati nello storico di ogni atleta.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('scout')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap">
                 <div class="fg" style="max-width:420px;flex:1"><label>Partita da analizzare</label>
                     <select id="scout-select" onchange="setupScout()"><option value="">Scegli una partita…</option></select></div>
-                <button class="btn btn-ghost" onclick="openScoutTutorial()"><i class="fa-solid fa-circle-question"></i> Come funziona</button>
+                <button class="btn btn-ghost" id="scout-help-btn" onclick="openScoutTutorial()"><i class="fa-solid fa-circle-question"></i> Come funziona</button>
             </div>
         </div>
         <div id="scout-rot-summary" style="display:none"></div>
+        <div id="subs-panel" style="display:none"></div>
         <div class="card" id="scout-panel" style="display:none">
             <h3 id="scout-title"><i class="fa-solid fa-clipboard-list"></i> Tabellino</h3>
             <!-- MODALITÀ NUMERICA (calcio/basket + fallback): tabella per fondamentale -->
@@ -766,7 +912,8 @@ function buildLayout(){
     <!-- FORMAZIONE -->
     <section id="formazione" class="section">
         <div class="page-head"><div><div class="eyebrow">Meritocrazia</div><h2>Formazione consigliata</h2>
-            <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div></div>
+            <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('formazione')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div id="formazione-content"></div>
     </section>
 
@@ -847,7 +994,7 @@ function buildLayout(){
                 </div>
                 <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
                 <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
-                <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Nel calcio partono dalla tua formazione salvata.</p>
+                <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Si parte dalla formazione consigliata; usa la panchina per spiegare un cambio senza toccarla.</p>
                 <div id="bench-area" style="margin-top:14px;display:none"></div>
             </div>
         </div>
@@ -856,11 +1003,12 @@ function buildLayout(){
     <!-- BACKUP -->
     <section id="backup" class="section">
         <div class="page-head"><div><div class="eyebrow">Configurazione</div><h2><i class="fa-solid fa-gear" style="font-size:1.4rem;color:var(--brand);margin-right:8px"></i>Impostazioni</h2>
-            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — esporta un backup per non perderli e per spostarli su un altro dispositivo.</p></div></div>
-        <div class="card"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
+            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — esporta un backup per non perderli e per spostarli su un altro dispositivo.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('backup')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+        <div class="card" id="ctx-backup-export"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON. Salva i dati, non le foto: quelle restano sul dispositivo.</p>
             <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button></div>
-        ${DEMO_BUILD?'':`<div class="card"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
+        ${DEMO_BUILD?'':`<div class="card" id="ctx-backup-import"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
             <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
@@ -870,7 +1018,7 @@ function buildLayout(){
         <div class="card"><h3><i class="fa-solid fa-heart-pulse"></i> Check-in benessere</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Check-in benessere → "Invia al mister") per vedere sonno, affaticamento, umore e zone segnalate nella sua scheda atleta.</p>
             <button class="btn btn-ghost" onclick="openImportWellness()"><i class="fa-solid fa-file-import"></i> Importa check-in benessere</button></div>
-        <div class="card"><h3><i class="fa-solid fa-circle-play"></i> Guida</h3>
+        <div class="card" id="ctx-backup-guide"><h3><i class="fa-solid fa-circle-play"></i> Guida</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Rivedi la guida introduttiva su squadra, giocatori, allenamenti, scout e card.</p>
             <button class="btn btn-ghost" onclick="openOnboarding(true)"><i class="fa-solid fa-graduation-cap"></i> Rivedi tutorial</button></div>
         <div class="card"><h3 style="color:var(--flame)"><i class="fa-solid fa-trash-can" style="color:var(--flame)"></i> Azzera tutto</h3>
@@ -927,6 +1075,7 @@ function go(sec){
     window.scrollTo({top:0,behavior:'instant'});
     setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
     updateDemoBadge(); checkDemoLock();
+    if(CTX_TOURS[sec]) setTimeout(()=>ctxAutoShow(sec), 200);
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
 function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('backdrop').classList.remove('show');}
@@ -1164,11 +1313,26 @@ function openPlayer(id){
             ${statCell('Media allenamenti', ts.avg!=null?ts.avg.toFixed(1):'—')}
         </div>
         ${catBars}
+        ${renderMentalStatsBlock(p, statCell)}
         ${renderWellnessBlock(p, statCell)}
       </div>`, true);
     loadCoachPhoto(id);
 }
-/* ---------- sezione dedicata "Check-in benessere" nella scheda atleta (dati importati dal player) ---------- */
+/* ---------- sezione dedicata "Statistiche mentali" nella scheda atleta (Modulo L: fuori dalla card, numeri grandi) ---------- */
+function renderMentalStatsBlock(p, statCell){
+    const ms=p.mentalStats;
+    if(!ms || (ms.riflessi==null && ms.percezione==null)){
+        return `<h3 style="font-size:.95rem;margin:1.2rem 0 .6rem"><i class="fa-solid fa-brain"></i> Statistiche mentali</h3>
+            <div class="empty-state" style="padding:1.2rem"><i class="fa-solid fa-brain"></i>Nessuna statistica mentale ricevuta ancora.<br><span style="font-size:.82rem">Il giocatore può inviarla da Mental Gym → "Invia al mister".</span></div>`;
+    }
+    const upd=ms.aggiornato?fmtDate(ms.aggiornato):null;
+    return `<h3 style="font-size:.95rem;margin:1.2rem 0 .6rem"><i class="fa-solid fa-brain"></i> Statistiche mentali ${upd?`<span class="hint" style="font-weight:400;font-size:.72rem">(aggiornato ${upd})</span>`:''}</h3>
+        <div class="stat-grid">
+            ${ms.riflessi!=null?statCell('Riflessi', ms.riflessi, '/100'):''}
+            ${ms.percezione!=null?statCell('Percezione', ms.percezione, '/100'):''}
+        </div>`;
+}
+/* ---------- sezione dedicata "Check-in benessere" nella scheda atleta (Modulo L: ultimo aggiornamento in grande, storico compatto sotto) ---------- */
 function wellnessSummaryLine(c){
     const sonno=(+c.sonno).toFixed(1).replace('.0','');
     const n=c.zone?c.zone.length:0;
@@ -1178,18 +1342,25 @@ function renderWellnessBlock(p, statCell){
     const list=p.wellness||[];
     if(!list.length) return '';
     const last=list[list.length-1];
+    const bigCell=(lbl,v,suf='')=>`<div class="stat-cell" style="padding:1.1rem"><div class="lbl">${lbl}</div><div class="v num" style="font-size:2.1rem">${v}${suf?`<small style="font-size:.9rem">${suf}</small>`:''}</div></div>`;
     const zonesHtml=(last.zone&&last.zone.length)
       ? last.zone.map(z=>`<span class="pill" style="margin:2px 4px 2px 0">${z.zone||'Zona'} · ${z.intensita}/5</span>`).join('')
       : '<span style="color:var(--muted);font-size:.85rem">Nessuna zona segnalata nell\'ultimo check-in.</span>';
-    const histRows=list.slice(0,-1).slice(-5).reverse().map(c=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft);font-size:.82rem"><span>${fmtDate(c.date)}</span><span style="color:var(--muted)">${wellnessSummaryLine(c)}</span></div>`).join('');
-    return `<h3 style="font-size:.95rem;margin:1.2rem 0 .6rem"><i class="fa-solid fa-heart-pulse"></i> Check-in benessere <span class="hint" style="font-weight:400;font-size:.72rem">(inviato dal giocatore · ultimo ${fmtDate(last.date)})</span></h3>
-        <div class="stat-grid">
-            ${statCell('Ore di sonno', (+last.sonno).toFixed(1).replace('.0',''), 'h')}
-            ${statCell('Affaticamento', last.affaticamento, '/5')}
-            ${statCell('Umore/energia', last.umore, '/5')}
+    const histRows=list.slice(0,-1).slice(-5).reverse().map(c=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line-soft);font-size:.74rem;color:var(--muted)"><span>${fmtDate(c.date)}</span><span>${wellnessSummaryLine(c)}</span></div>`).join('');
+    return `<h3 style="font-size:.95rem;margin:1.2rem 0 .3rem"><i class="fa-solid fa-heart-pulse"></i> Check-in benessere</h3>
+        <div style="background:linear-gradient(135deg,rgba(34,197,94,.08),transparent);border:1px solid rgba(34,197,94,.22);border-radius:14px;padding:1rem;margin-top:.4rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.7rem">
+                <b style="font-size:.78rem;color:var(--brand);text-transform:uppercase;letter-spacing:.6px">Ultimo check-in</b>
+                <span class="hint" style="font-size:.74rem">${fmtDate(last.date)}</span>
+            </div>
+            <div class="stat-grid">
+                ${bigCell('Ore di sonno', (+last.sonno).toFixed(1).replace('.0',''), 'h')}
+                ${bigCell('Affaticamento', last.affaticamento, '/5')}
+                ${bigCell('Umore/energia', last.umore, '/5')}
+            </div>
+            <div style="margin-top:.8rem">${zonesHtml}</div>
         </div>
-        <div style="margin-top:.7rem">${zonesHtml}</div>
-        ${histRows?`<div style="margin-top:1rem"><b style="font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Check-in precedenti</b>${histRows}</div>`:''}`;
+        ${histRows?`<div style="margin-top:.8rem"><b style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Aggiornamenti precedenti</b>${histRows}</div>`:''}`;
 }
 
 /* =========================================================
@@ -1864,7 +2035,10 @@ const SCOUT_ABBR={
   Ace:'Ace (servizio punto)',Err:'Errore',Tot:'Totale',Pos:'Positiva',Prf:'Perfetta',Pt:'Punto',
   Ass:'Assist','In porta':'Tiri in porta',Amm:'Ammonizione',Esp:'Espulsione',Subiti:'Gol subiti',Min:'Minuti',
   Off:'Rimbalzi offensivi',Dif:'Rimbalzi difensivi',Rub:'Palle rubate',Perse:'Palle perse',Stop:'Stoppate',
-  Fatti:'Realizzati',Tent:'Tentati'
+  Fatti:'Realizzati',Tent:'Tentati',
+  'Tiro P.':'Tiro in porta (anche senza segnare)',Drib:'Dribbling riuscito',Contr:'Contrasto vinto',
+  Interc:'Intercetto',Chius:'Chiusura efficace',Falli:'Fallo','P.Persa':'Palla persa',
+  Parate:'Parata',Uscite:'Uscita vinta',Resp:'Respinta',Sub:'Gol subito'
 };
 function renderScoutLegend(sport){
   const el=document.getElementById('scout-legend'); if(!el) return;
@@ -1890,6 +2064,7 @@ function setupScout(){
     const summaryEl=document.getElementById('scout-rot-summary'), rotEl=document.getElementById('scout-rot');
     if(!id){
         panel.style.display='none';
+        renderSubsPanel(null);
         if(sport==='pallavolo'){ renderRotAggregate(); if(summaryEl)summaryEl.style.display='block'; }
         else if(summaryEl){ summaryEl.style.display='none'; }
         return;
@@ -1899,8 +2074,10 @@ function setupScout(){
     const existing=DB.scoutHistory.find(s=>s.matchId===id);
     document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
     panel.style.display='block';
+    renderSubsPanel(id);
     const numEl=document.getElementById('scout-numeric'), tapEl=document.getElementById('scout-tap');
-    /* PALLAVOLO → scout a tocchi (versione A) + rotazioni di gara. Altri sport → tabella numerica. */
+    /* PALLAVOLO → scout a tocchi (versione A) + rotazioni di gara. BASKET → scout a tocchi
+       (stepper). Calcio → tabella numerica (per ora). */
     if(sport==='pallavolo'){
         numEl.style.display='none'; tapEl.style.display='block';
         buildScoutTap(id, existing);
@@ -1908,8 +2085,22 @@ function setupScout(){
         renderScoutLegend(sport);
         return;
     }
+    if(sport==='basket'){
+        numEl.style.display='none'; tapEl.style.display='block';
+        buildScoutTapBasket(id, existing);
+        if(rotEl) rotEl.style.display='none';
+        renderScoutLegend(sport);
+        return;
+    }
+    if(sport==='calcio'){
+        numEl.style.display='none'; tapEl.style.display='block';
+        buildScoutTapCalcio(id, existing);
+        if(rotEl) rotEl.style.display='none';
+        renderScoutLegend(sport);
+        return;
+    }
     numEl.style.display='block'; tapEl.style.display='none';
-    if(rotEl) rotEl.style.display='none';   /* niente rotazioni per calcio/basket */
+    if(rotEl) rotEl.style.display='none';
     buildScoutHead(sport);
     const fields=scoutFields(sport), colspan=fields.length+2;
     body.innerHTML='';
@@ -2195,6 +2386,457 @@ function scoutTapCSS(){
 }
 
 /* =========================================================
+   SCOUT BASKET — tap a tocchi (stesso pattern del pallavolo)
+   Tocco giocatore → tocco categoria → tocco esito (Fatto/Sbagliato,
+   Offensivo/Difensivo) oppure, per le categorie a evento singolo
+   (Assist, Palla rubata, Palla persa, Stoppata, Fallo), il tocco
+   sulla categoria stessa registra l'evento. Il PT si ricava sempre
+   da 2/3 punti e liberi fatti: non è mai un campo digitabile.
+   ========================================================= */
+const BASK_CATS = [
+  {k:'fg2', label:'Tiro da 2', icon:'fa-basketball', made:'fg2m', att:'fg2a', outcomes:[['made','Fatto'],['miss','Sbagliato']]},
+  {k:'fg3', label:'Tiro da 3', icon:'fa-basketball', made:'fg3m', att:'fg3a', outcomes:[['made','Fatto'],['miss','Sbagliato']]},
+  {k:'ft',  label:'Tiro libero', icon:'fa-basketball', made:'ftm', att:'fta', outcomes:[['made','Fatto'],['miss','Sbagliato']]},
+  {k:'reb', label:'Rimbalzo', icon:'fa-arrows-up-down', outcomes:[['off','Offensivo'],['def','Difensivo']]},
+  {k:'assist', label:'Assist', icon:'fa-hands-clapping'},
+  {k:'steal', label:'Palla rubata', icon:'fa-hand'},
+  {k:'turnover', label:'Palla persa', icon:'fa-triangle-exclamation'},
+  {k:'block', label:'Stoppata', icon:'fa-hand-back-fist'},
+  {k:'foul', label:'Fallo', icon:'fa-flag'}
+];
+const BASK_SINGLE_FIELD={assist:'assist',steal:'rubate',turnover:'perse',block:'stoppate',foul:'falli'};
+let BTAP = null;
+function bTapApply(o, cat, out){
+  const c=BASK_CATS.find(x=>x.k===cat); if(!c) return;
+  if(BASK_SINGLE_FIELD[cat]){ const f=BASK_SINGLE_FIELD[cat]; o[f]=(o[f]||0)+1; return; }
+  if(cat==='reb'){ if(out==='off') o.roff=(o.roff||0)+1; else o.rdif=(o.rdif||0)+1; return; }
+  o[c.att]=(o[c.att]||0)+1;
+  if(out==='made') o[c.made]=(o[c.made]||0)+1;
+}
+function bTapDeriveRow(pId){
+  const o=Object.assign(blankStat('basket'), BTAP.base[pId]||{});
+  BTAP.events.forEach(e=>{ if(e.pId===pId) bTapApply(o,e.cat,e.out); });
+  o.punti=(o.fg2m||0)*2+(o.fg3m||0)*3+(o.ftm||0)*1;
+  return o;
+}
+function bTapMinValue(pId){ return (BTAP.min[pId]!=null) ? BTAP.min[pId] : 0; }
+function bTapSetMin(pId, val){ if(!BTAP) return; BTAP.min[pId]=Math.max(0,parseInt(val)||0); }
+function buildScoutTapBasket(matchId, existing){
+  scoutTapCSS(); bScoutTapCSS();
+  const base={}, override={}, min={};
+  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('basket'); scoutFields('basket').forEach(k=>b[k]=r[k]||0); base[r.pId]=b;
+    if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride;
+    if(typeof r.min==='number') min[r.pId]=r.min; }); }
+  const subMin=computeMinutesFromSubs(matchId,'basket');
+  if(subMin) activePlayers().forEach(p=>{ min[p.id]=subMin[p.id]||0; });
+  BTAP={ matchId, base, override, min, minAuto:!!subMin, events:[], sel:null, cat:'fg2', seq:1 };
+  const el=document.getElementById('scout-tap');
+  el.innerHTML=`
+    <div class="stap-wrap">
+      <div class="stap-left">
+        <div class="stap-hint"><i class="fa-solid fa-hand-pointer"></i> Tocca un giocatore, poi la categoria, poi l'esito. Assist/Palla rubata/Palla persa/Stoppata/Fallo si registrano con un tocco solo sulla categoria.</div>
+        <div class="stap-players" id="stap-players"></div>
+      </div>
+      <div class="stap-pad">
+        <div class="stap-sel" id="stap-sel"></div>
+        <div class="btap-cats" id="btap-cats"></div>
+        <div class="btap-outcomes" id="btap-outcomes"></div>
+        <div class="stap-detail" id="stap-detail"></div>
+        <div class="stap-last" id="stap-last"></div>
+        <button class="stap-undo" id="stap-undo" onclick="bTapUndo()"><i class="fa-solid fa-rotate-left"></i> Annulla ultimo</button>
+        <button class="btn btn-accent stap-save" onclick="saveScoutTapBasket()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+      </div>
+    </div>`;
+  document.getElementById('btap-cats').innerHTML=BASK_CATS.map(c=>
+    `<button class="btap-cat${c.k===BTAP.cat?' on':''}" data-k="${c.k}" onclick="bTapCategory('${c.k}')"><i class="fa-solid ${c.icon}"></i> ${c.label}</button>`).join('');
+  bTapRenderPlayers();
+  bTapRenderSel();
+  bTapRenderOutcomes();
+}
+function bTapRenderPlayers(){
+  const box=document.getElementById('stap-players'); if(!box) return;
+  const roster=activePlayers();
+  if(!roster.length){ box.innerHTML='<div class="empty-row" style="padding:1rem">Nessun atleta in rosa.</div>'; return; }
+  box.innerHTML=roster.map(p=>{
+    const row=bTapDeriveRow(p.id);
+    const ov=BTAP.override[p.id];
+    const v=(typeof ov==='number')?ov:computeVoto(row,'basket',p.role);
+    const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
+    const vClass=v>=7?'hi':v>=5.5?'md':'lo';
+    const minVal=bTapMinValue(p.id);
+    return `<div class="stap-player${BTAP.sel===p.id?' sel':''}" data-pid="${p.id}">
+      <button class="stap-p-btn" onclick="bTapSelect(${p.id})">
+        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+        <div class="stap-p-stat"><span>PT ${row.punti}</span><span>Rim ${(row.roff||0)+(row.rdif||0)}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
+      </button>
+      ${BTAP.minAuto
+        ? `<div class="btap-min-auto" title="Calcolato dal registro cambi"><i class="fa-solid fa-lock"></i> Min ${minVal||0}</div>`
+        : `<label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="bTapSetMin(${p.id}, this.value)"></label>`}
+    </div>`;
+  }).join('');
+}
+function bTapRenderSel(){
+  const sel=document.getElementById('stap-sel'); if(!sel) return;
+  const p=BTAP.sel?playerById(BTAP.sel):null;
+  sel.innerHTML = p
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
+  const on=!!p;
+  document.querySelectorAll('.btap-cat').forEach(b=>b.disabled=!on);
+  document.querySelectorAll('.btap-outcome').forEach(b=>b.disabled=!on);
+  const undo=document.getElementById('stap-undo'); if(undo) undo.disabled=!BTAP.events.length;
+  const last=document.getElementById('stap-last');
+  if(last){
+    if(BTAP.events.length){ const e=BTAP.events[BTAP.events.length-1]; const pl=playerById(e.pId); const c=BASK_CATS.find(x=>x.k===e.cat);
+      const outLbl = e.out ? ' · '+(((c&&c.outcomes)||[]).find(o=>o[0]===e.out)||[])[1] : '';
+      last.innerHTML=`Ultimo: <b>#${pl?pl.number:'?'}</b> · ${c?c.label:e.cat}${outLbl||''}`; }
+    else last.textContent='';
+  }
+  bTapRenderDetail();
+}
+function bTapRenderOutcomes(){
+  const box=document.getElementById('btap-outcomes'); if(!box) return;
+  const c=BASK_CATS.find(x=>x.k===(BTAP&&BTAP.cat));
+  if(!c || !c.outcomes){ box.innerHTML=`<div class="btap-single-hint">Tocco singolo: ritocca "${c?c.label:''}" per aggiungere un altro evento.</div>`; return; }
+  const on=!!(BTAP&&BTAP.sel);
+  box.innerHTML=c.outcomes.map(o=>`<button class="btap-outcome" ${on?'':'disabled'} onclick="bTapOutcome('${o[0]}')">${o[1]}</button>`).join('');
+}
+function bTapCategory(k){
+  if(!BTAP) return;
+  const c=BASK_CATS.find(x=>x.k===k); if(!c) return;
+  BTAP.cat=k;
+  document.querySelectorAll('.btap-cat').forEach(b=>b.classList.toggle('on', b.dataset.k===k));
+  bTapRenderOutcomes();
+  if(!c.outcomes){
+    if(BTAP.sel){ BTAP.events.push({id:BTAP.seq++, pId:BTAP.sel, cat:k}); bTapRenderPlayers(); bTapRenderSel(); }
+  }
+}
+function bTapOutcome(out){
+  if(!BTAP||!BTAP.sel) return;
+  const c=BASK_CATS.find(x=>x.k===BTAP.cat); if(!c||!c.outcomes) return;
+  BTAP.events.push({id:BTAP.seq++, pId:BTAP.sel, cat:c.k, out});
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapSelect(pId){ if(!BTAP) return; BTAP.sel=pId; bTapRenderPlayers(); bTapRenderSel(); }
+function bTapUndo(){
+  if(!BTAP||!BTAP.events.length) return;
+  const e=BTAP.events.pop();
+  BTAP.sel=e.pId; BTAP.cat=e.cat;
+  document.querySelectorAll('.btap-cat').forEach(b=>b.classList.toggle('on', b.dataset.k===e.cat));
+  bTapRenderOutcomes(); bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapRemoveEvent(id){
+  if(!BTAP) return;
+  const i=BTAP.events.findIndex(e=>e.id===id); if(i<0) return;
+  BTAP.events.splice(i,1);
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapRenderDetail(){
+  const box=document.getElementById('stap-detail'); if(!box) return;
+  if(!BTAP.sel){ box.innerHTML=''; return; }
+  const p=playerById(BTAP.sel);
+  const evs=BTAP.events.filter(e=>e.pId===BTAP.sel);
+  const chips = evs.length
+    ? evs.map(e=>{ const c=BASK_CATS.find(x=>x.k===e.cat); const outLbl=e.out?(((c&&c.outcomes)||[]).find(o=>o[0]===e.out)||[])[1]:'';
+        return `<button class="stap-chip btap-chip" onclick="bTapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
+          <span class="stap-chip-f">${c?c.label:e.cat}</span>${outLbl?`<b>${outLbl}</b>`:''}<i class="fa-solid fa-xmark"></i></button>`; }).join('')
+    : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione.</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
+  const row=bTapDeriveRow(BTAP.sel);
+  const calc=computeVoto(row,'basket',p.role);
+  const ov=BTAP.override[BTAP.sel];
+  box.innerHTML += `<div class="stap-why"><div class="stap-why-h">PT auto <b>${row.punti}</b> · Voto calcolato <b>${calc.toFixed(1)}</b></div></div>`;
+  box.innerHTML += `<div class="stap-ov">
+      <label>Voto manuale del mister</label>
+      <div class="stap-ov-row">
+        <input type="number" min="1" max="10" step="0.1" id="btap-ov-in" placeholder="auto ${calc.toFixed(1)}" value="${typeof ov==='number'?ov:''}">
+        <button class="btn btn-accent" onclick="bTapApplyOverride()">Imposta</button>
+        ${typeof ov==='number'?`<button class="btn btn-ghost" onclick="bTapClearOverride()">Auto</button>`:''}
+      </div>
+      ${typeof ov==='number'?`<div class="stap-ov-note">Ora vale <b>${(+ov).toFixed(1)}</b> (manuale). "Auto" ripristina ${calc.toFixed(1)}.</div>`:`<div class="stap-ov-note">Lascia vuoto per usare il voto automatico.</div>`}
+    </div>`;
+}
+function bTapApplyOverride(){
+  if(!BTAP||!BTAP.sel) return;
+  const inp=document.getElementById('btap-ov-in'); if(!inp) return;
+  const raw=inp.value.trim();
+  if(raw===''){ delete BTAP.override[BTAP.sel]; }
+  else { let v=Math.max(1,Math.min(10,parseFloat(raw))); if(isNaN(v)){ toast('Voto non valido','info'); return; } BTAP.override[BTAP.sel]=v; }
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function bTapClearOverride(){
+  if(!BTAP||!BTAP.sel) return;
+  delete BTAP.override[BTAP.sel];
+  bTapRenderPlayers(); bTapRenderSel();
+}
+function saveScoutTapBasket(){
+  if(!BTAP) return;
+  const match=DB.events.find(e=>e.id===BTAP.matchId);
+  const rows=[];
+  activePlayers().forEach(p=>{
+    const s=bTapDeriveRow(p.id);
+    const ov=BTAP.override[p.id];
+    const min=bTapMinValue(p.id);
+    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'basket').toFixed(1)};
+    if(typeof ov==='number') row.votoOverride=ov;
+    rows.push(row);
+  });
+  DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==BTAP.matchId);
+  DB.scoutHistory.push({matchId:BTAP.matchId, date:match.date, opponent:match.notes, sport:'basket', rows});
+  save(); toast('Statistiche registrate nelle schede atleti');
+  go('roster');
+}
+function bScoutTapCSS(){
+  if(document.getElementById('btap-css')) return;
+  const st=document.createElement('style'); st.id='btap-css';
+  st.textContent=`
+  #scout-tap .stap-player{display:flex;flex-direction:column;gap:0;padding:0;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:14px;background:var(--surface-2,rgba(255,255,255,.03));overflow:hidden;}
+  #scout-tap .stap-player.sel{border-color:var(--brand);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand) 40%,transparent) inset;}
+  #scout-tap .stap-p-btn{display:flex;flex-direction:column;gap:6px;text-align:left;width:100%;padding:10px 12px;border:none;background:transparent;color:inherit;cursor:pointer;}
+  #scout-tap .stap-p-btn:active{transform:scale(.997);}
+  .btap-min{display:flex;align-items:center;gap:8px;padding:6px 12px 10px;font-size:.74rem;color:var(--muted);border-top:1px dashed var(--border,rgba(255,255,255,.1));}
+  .btap-min input{width:60px;padding:5px 8px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.2));background:var(--surface,rgba(0,0,0,.2));color:inherit;font-size:.85rem;}
+  .btap-cats{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .btap-cat{padding:10px 8px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.12));background:transparent;color:var(--muted);font-weight:700;font-size:.8rem;cursor:pointer;display:flex;align-items:center;gap:6px;justify-content:center;}
+  .btap-cat.on{border-color:var(--brand);color:var(--text,#fff);background:color-mix(in srgb,var(--brand) 16%,transparent);}
+  .btap-cat:disabled{opacity:.4;cursor:not-allowed;}
+  .btap-outcomes{display:grid;grid-template-columns:1fr 1fr;gap:8px;min-height:44px;}
+  .btap-outcome{padding:12px 8px;border-radius:12px;border:none;cursor:pointer;color:#0b1220;font-weight:800;font-size:.85rem;background:#8fe388;}
+  .btap-outcome:last-child{background:#ef6461;color:#fff;}
+  .btap-outcome:disabled{opacity:.35;cursor:not-allowed;}
+  .btap-single-hint{font-size:.76rem;color:var(--muted);font-style:italic;padding:8px 2px;}
+  .btap-chip{background:var(--surface,rgba(255,255,255,.08));color:var(--text,#fff);border:1px solid var(--border,rgba(255,255,255,.14));}
+  @media(max-width:820px){ .btap-cats{grid-template-columns:1fr 1fr;} }
+  `;
+  document.head.appendChild(st);
+}
+
+/* =========================================================
+   SCOUT CALCIO — tap a tocchi, tassonomia equilibrata per ruolo
+   Tocco giocatore → tocco categoria (Offensivo/Difensivo/Disciplina/
+   Portiere) → tocco azione: ogni tocco su un'azione registra subito
+   l'evento (non serve un ulteriore esito Fatto/Sbagliato: le azioni
+   difensive e di portiere qui hanno lo stesso peso di gol/assist,
+   vedi SCOUT.calcio.voto). "Palla persa" non si applica al portiere;
+   la categoria "Portiere" compare solo quando il giocatore selezionato
+   ha ruolo Portiere.
+   ========================================================= */
+const CALC_CATS = [
+  {g:'off',  label:'Offensivo',  icon:'fa-futbol', actions:[
+    ['gol','Gol'],['assist','Assist'],['tiroPorta','Tiro in porta'],['dribbling','Dribbling riuscito']
+  ]},
+  {g:'dif',  label:'Difensivo',  icon:'fa-shield-halved', actions:[
+    ['contrasto','Contrasto vinto'],['intercetto','Intercetto'],['chiusura','Chiusura efficace']
+  ]},
+  {g:'disc', label:'Disciplina', icon:'fa-flag', actions:[
+    ['fallo','Fallo'],['ammonizione','Ammonizione'],['espulsione','Espulsione'],['pallaPersa','Palla persa']
+  ]},
+  {g:'gk',   label:'Portiere',   icon:'fa-hand', actions:[
+    ['parata','Parata'],['uscita','Uscita vinta'],['respinta','Respinta'],['golSubito','Gol subito']
+  ]}
+];
+let CTAP = null;
+function cTapCatsForRole(role){
+  const isGK = role==='Portiere';
+  return CALC_CATS.filter(c=>c.g!=='gk' || isGK).map(c=>
+    (c.g==='disc' && isGK) ? {g:c.g,label:c.label,icon:c.icon,actions:c.actions.filter(a=>a[0]!=='pallaPersa')} : c);
+}
+function cTapActionLabel(field){
+  for(const c of CALC_CATS){ const a=c.actions.find(x=>x[0]===field); if(a) return a[1]; }
+  return field;
+}
+function cTapCatOf(field){ const c=CALC_CATS.find(c=>c.actions.some(a=>a[0]===field)); return c?c.g:'off'; }
+function cTapDeriveRow(pId){
+  const o=Object.assign(blankStat('calcio'), CTAP.base[pId]||{});
+  CTAP.events.forEach(e=>{ if(e.pId===pId) o[e.field]=(o[e.field]||0)+1; });
+  return o;
+}
+function cTapMinValue(pId){ return (CTAP.min[pId]!=null) ? CTAP.min[pId] : 0; }
+function cTapSetMin(pId, val){ if(!CTAP) return; CTAP.min[pId]=Math.max(0,parseInt(val)||0); }
+function buildScoutTapCalcio(matchId, existing){
+  scoutTapCSS(); bScoutTapCSS(); cScoutTapCSS();
+  const base={}, override={}, min={};
+  if(existing){ existing.rows.forEach(r=>{ const b=blankStat('calcio'); scoutFields('calcio').forEach(k=>b[k]=r[k]||0); base[r.pId]=b;
+    if(typeof r.votoOverride==='number') override[r.pId]=r.votoOverride;
+    if(typeof r.min==='number') min[r.pId]=r.min; }); }
+  const subMin=computeMinutesFromSubs(matchId,'calcio');
+  if(subMin) activePlayers().forEach(p=>{ min[p.id]=subMin[p.id]||0; });
+  CTAP={ matchId, base, override, min, minAuto:!!subMin, events:[], sel:null, cat:'off', seq:1 };
+  const el=document.getElementById('scout-tap');
+  el.innerHTML=`
+    <div class="stap-wrap">
+      <div class="stap-left">
+        <div class="stap-hint"><i class="fa-solid fa-hand-pointer"></i> Tocca un giocatore, poi la categoria, poi l'azione: ogni tocco registra subito l'evento.</div>
+        <div class="stap-players" id="stap-players"></div>
+      </div>
+      <div class="stap-pad">
+        <div class="stap-sel" id="stap-sel"></div>
+        <div class="ctap-cats" id="ctap-cats"></div>
+        <div class="ctap-actions" id="ctap-actions"></div>
+        <div class="stap-detail" id="stap-detail"></div>
+        <div class="stap-last" id="stap-last"></div>
+        <button class="stap-undo" id="stap-undo" onclick="cTapUndo()"><i class="fa-solid fa-rotate-left"></i> Annulla ultimo</button>
+        <button class="btn btn-accent stap-save" onclick="saveScoutTapCalcio()"><i class="fa-solid fa-floppy-disk"></i> Registra statistiche</button>
+      </div>
+    </div>`;
+  cTapRenderPlayers();
+  cTapRenderSel();
+  cTapRenderCats();
+}
+function cTapRenderPlayers(){
+  const box=document.getElementById('stap-players'); if(!box) return;
+  const roster=activePlayers();
+  if(!roster.length){ box.innerHTML='<div class="empty-row" style="padding:1rem">Nessun atleta in rosa.</div>'; return; }
+  const POS_FIELDS=['gol','assist','tiroPorta','dribbling','contrasto','intercetto','chiusura','parata','uscita','respinta'];
+  const NEG_FIELDS=['fallo','ammonizione','espulsione','pallaPersa','golSubito'];
+  box.innerHTML=roster.map(p=>{
+    const row=cTapDeriveRow(p.id);
+    const ov=CTAP.override[p.id];
+    const v=(typeof ov==='number')?ov:computeVoto(row,'calcio',p.role);
+    const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
+    const vClass=v>=7?'hi':v>=5.5?'md':'lo';
+    const pos=POS_FIELDS.reduce((s,k)=>s+(row[k]||0),0), neg=NEG_FIELDS.reduce((s,k)=>s+(row[k]||0),0);
+    const minVal=cTapMinValue(p.id);
+    return `<div class="stap-player${CTAP.sel===p.id?' sel':''}" data-pid="${p.id}">
+      <button class="stap-p-btn" onclick="cTapSelect(${p.id})">
+        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+        <div class="stap-p-stat"><span>+${pos}</span><span>−${neg}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
+      </button>
+      ${CTAP.minAuto
+        ? `<div class="btap-min-auto" title="Calcolato dal registro cambi"><i class="fa-solid fa-lock"></i> Min ${minVal||0}</div>`
+        : `<label class="btap-min"><span>Min</span><input type="number" min="0" max="200" value="${minVal||0}" oninput="cTapSetMin(${p.id}, this.value)"></label>`}
+    </div>`;
+  }).join('');
+}
+function cTapRenderSel(){
+  const sel=document.getElementById('stap-sel'); if(!sel) return;
+  const p=CTAP.sel?playerById(CTAP.sel):null;
+  sel.innerHTML = p
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
+  const on=!!p;
+  document.querySelectorAll('.ctap-cat').forEach(b=>b.disabled=!on);
+  document.querySelectorAll('.ctap-action').forEach(b=>b.disabled=!on);
+  const undo=document.getElementById('stap-undo'); if(undo) undo.disabled=!CTAP.events.length;
+  const last=document.getElementById('stap-last');
+  if(last){
+    if(CTAP.events.length){ const e=CTAP.events[CTAP.events.length-1]; const pl=playerById(e.pId);
+      last.innerHTML=`Ultimo: <b>#${pl?pl.number:'?'}</b> · ${cTapActionLabel(e.field)}`; }
+    else last.textContent='';
+  }
+  cTapRenderDetail();
+}
+function cTapRenderCats(){
+  const catsBox=document.getElementById('ctap-cats'); if(!catsBox) return;
+  const p=CTAP.sel?playerById(CTAP.sel):null;
+  const cats=cTapCatsForRole(p?p.role:null);
+  if(!cats.find(c=>c.g===CTAP.cat)) CTAP.cat=cats[0].g;
+  catsBox.innerHTML=cats.map(c=>`<button class="ctap-cat${c.g===CTAP.cat?' on':''}" ${p?'':'disabled'} data-g="${c.g}" onclick="cTapCategory('${c.g}')"><i class="fa-solid ${c.icon}"></i> ${c.label}</button>`).join('');
+  cTapRenderActions(cats);
+}
+function cTapRenderActions(cats){
+  const box=document.getElementById('ctap-actions'); if(!box) return;
+  const p=CTAP.sel?playerById(CTAP.sel):null;
+  cats = cats || cTapCatsForRole(p?p.role:null);
+  const cat=cats.find(c=>c.g===CTAP.cat);
+  const on=!!p;
+  box.innerHTML=(cat?cat.actions:[]).map(a=>`<button class="ctap-action" ${on?'':'disabled'} onclick="cTapAction('${a[0]}')">${a[1]}</button>`).join('');
+}
+function cTapCategory(g){
+  if(!CTAP) return;
+  CTAP.cat=g;
+  document.querySelectorAll('.ctap-cat').forEach(b=>b.classList.toggle('on', b.dataset.g===g));
+  cTapRenderActions();
+}
+function cTapAction(field){
+  if(!CTAP||!CTAP.sel) return;
+  CTAP.events.push({id:CTAP.seq++, pId:CTAP.sel, field});
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapSelect(pId){ if(!CTAP) return; CTAP.sel=pId; cTapRenderPlayers(); cTapRenderSel(); cTapRenderCats(); }
+function cTapUndo(){
+  if(!CTAP||!CTAP.events.length) return;
+  const e=CTAP.events.pop();
+  CTAP.sel=e.pId; CTAP.cat=cTapCatOf(e.field);
+  cTapRenderCats(); cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapRemoveEvent(id){
+  if(!CTAP) return;
+  const i=CTAP.events.findIndex(e=>e.id===id); if(i<0) return;
+  CTAP.events.splice(i,1);
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapRenderDetail(){
+  const box=document.getElementById('stap-detail'); if(!box) return;
+  if(!CTAP.sel){ box.innerHTML=''; return; }
+  const p=playerById(CTAP.sel);
+  const evs=CTAP.events.filter(e=>e.pId===CTAP.sel);
+  const chips = evs.length
+    ? evs.map(e=>`<button class="stap-chip btap-chip" onclick="cTapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
+         <span class="stap-chip-f">${cTapActionLabel(e.field)}</span><i class="fa-solid fa-xmark"></i></button>`).join('')
+    : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione.</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
+  const row=cTapDeriveRow(CTAP.sel);
+  const calc=computeVoto(row,'calcio',p.role);
+  const ov=CTAP.override[CTAP.sel];
+  box.innerHTML += `<div class="stap-why"><div class="stap-why-h">Voto calcolato <b>${calc.toFixed(1)}</b></div></div>`;
+  box.innerHTML += `<div class="stap-ov">
+      <label>Voto manuale del mister</label>
+      <div class="stap-ov-row">
+        <input type="number" min="1" max="10" step="0.1" id="ctap-ov-in" placeholder="auto ${calc.toFixed(1)}" value="${typeof ov==='number'?ov:''}">
+        <button class="btn btn-accent" onclick="cTapApplyOverride()">Imposta</button>
+        ${typeof ov==='number'?`<button class="btn btn-ghost" onclick="cTapClearOverride()">Auto</button>`:''}
+      </div>
+      ${typeof ov==='number'?`<div class="stap-ov-note">Ora vale <b>${(+ov).toFixed(1)}</b> (manuale). "Auto" ripristina ${calc.toFixed(1)}.</div>`:`<div class="stap-ov-note">Lascia vuoto per usare il voto automatico.</div>`}
+    </div>`;
+}
+function cTapApplyOverride(){
+  if(!CTAP||!CTAP.sel) return;
+  const inp=document.getElementById('ctap-ov-in'); if(!inp) return;
+  const raw=inp.value.trim();
+  if(raw===''){ delete CTAP.override[CTAP.sel]; }
+  else { let v=Math.max(1,Math.min(10,parseFloat(raw))); if(isNaN(v)){ toast('Voto non valido','info'); return; } CTAP.override[CTAP.sel]=v; }
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function cTapClearOverride(){
+  if(!CTAP||!CTAP.sel) return;
+  delete CTAP.override[CTAP.sel];
+  cTapRenderPlayers(); cTapRenderSel();
+}
+function saveScoutTapCalcio(){
+  if(!CTAP) return;
+  const match=DB.events.find(e=>e.id===CTAP.matchId);
+  const rows=[];
+  activePlayers().forEach(p=>{
+    const s=cTapDeriveRow(p.id);
+    const ov=CTAP.override[p.id];
+    const min=cTapMinValue(p.id);
+    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'calcio').toFixed(1)};
+    if(typeof ov==='number') row.votoOverride=ov;
+    rows.push(row);
+  });
+  DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==CTAP.matchId);
+  DB.scoutHistory.push({matchId:CTAP.matchId, date:match.date, opponent:match.notes, sport:'calcio', rows});
+  save(); toast('Statistiche registrate nelle schede atleti');
+  go('roster');
+}
+function cScoutTapCSS(){
+  if(document.getElementById('ctap-css')) return;
+  const st=document.createElement('style'); st.id='ctap-css';
+  st.textContent=`
+  .ctap-cats{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .ctap-cat{padding:10px 8px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.12));background:transparent;color:var(--muted);font-weight:700;font-size:.8rem;cursor:pointer;display:flex;align-items:center;gap:6px;justify-content:center;}
+  .ctap-cat.on{border-color:var(--brand);color:var(--text,#fff);background:color-mix(in srgb,var(--brand) 16%,transparent);}
+  .ctap-cat:disabled{opacity:.4;cursor:not-allowed;}
+  .ctap-actions{display:flex;flex-direction:column;gap:8px;min-height:44px;}
+  .ctap-action{padding:12px 10px;border-radius:12px;border:1px solid var(--border,rgba(255,255,255,.14));cursor:pointer;color:var(--text,#fff);font-weight:700;font-size:.85rem;background:var(--surface,rgba(255,255,255,.04));text-align:left;}
+  .ctap-action:disabled{opacity:.35;cursor:not-allowed;}
+  .ctap-action:active{transform:scale(.98);}
+  `;
+  document.head.appendChild(st);
+}
+
+/* =========================================================
    ROTAZIONI
    ========================================================= */
 const ROT_POS={P1:'Zona 1 · battuta',P2:'Zona 2',P3:'Zona 3 · centro',P4:'Zona 4',P5:'Zona 5',P6:'Zona 6'};
@@ -2236,6 +2878,132 @@ function renderRotAggregate(){
     box.innerHTML=`<div class="card"><h3><i class="fa-solid fa-arrows-spin"></i> Rotazioni · media squadra <span class="pill" style="margin-left:6px">${nMatch} ${nMatch===1?'gara':'gare'}</span></h3>
         ${svgBars(items)}
         <p class="hint">Su tutte le gare, la rotazione più critica è <b style="color:var(--flame)">${worst}</b> (${ROT_POS[worst]}); la più forte è <b style="color:var(--ok)">${best}</b>. Scegli una partita qui sopra per registrare o correggere le rotazioni.</p></div>`;
+}
+
+/* =========================================================
+   REGISTRO CAMBI/SOSTITUZIONI (Modulo U) — versione semplice.
+   Un elenco cronologico "esce/entra/minuto" per partita, per tutti e
+   3 gli sport. Da questi eventi si ricava il MIN di ogni giocatore
+   in quella gara (calcio/basket, che hanno un campo MIN — la
+   pallavolo non ha un concetto di minutaggio nei suoi dati di scout,
+   quindi qui il registro resta solo cronologico anche per lei).
+   Nessuna attribuzione automatica di statistiche per segmento: resta
+   fuori scope, come richiesto.
+
+   Titolari di partenza (baseline) = la STESSA formazione consigliata
+   già calcolata altrove (soccerLineup/pickLineupPallavolo/
+   pickLineupBasket, riuso — non un nuovo calcolo). È una
+   semplificazione dichiarata: se in quella gara il mister ha davvero
+   schierato una formazione diversa da quella oggi "consigliata", il
+   calcolo del MIN può risultare impreciso — in tal caso resta la via
+   manuale (bastano zero cambi registrati per quella gara).
+   ========================================================= */
+const MATCH_FULL_MIN={calcio:90, basket:40};
+function subsList(matchId){ return (DB.substitutions&&DB.substitutions[matchId])||[]; }
+function subsSorted(matchId){ return subsList(matchId).slice().sort((a,b)=>a.min-b.min); }
+function matchBaselineStarters(sport){
+  if(sport==='calcio'){ const {slots}=soccerLineup(); return slots.filter(s=>s.player).map(s=>s.player); }
+  if(sport==='basket'){ return pickLineupBasket().filter(r=>r.player).map(r=>r.player); }
+  if(sport==='pallavolo'){ return pickLineupPallavolo().filter(r=>r.player).map(r=>r.player); }
+  return [];
+}
+/* {pId: minuti giocati} se ci sono cambi registrati per la gara, altrimenti null (MIN resta manuale) */
+function computeMinutesFromSubs(matchId, sport){
+  const evs=subsSorted(matchId), full=MATCH_FULL_MIN[sport];
+  if(!evs.length || !full) return null;
+  const baseline=new Set(matchBaselineStarters(sport).map(p=>p.id));
+  const onFieldSince={}, totals={};
+  activePlayers().forEach(p=>{ totals[p.id]=0; if(baseline.has(p.id)) onFieldSince[p.id]=0; });
+  evs.forEach(e=>{
+    if(onFieldSince[e.out]!=null){ totals[e.out]=(totals[e.out]||0)+(e.min-onFieldSince[e.out]); delete onFieldSince[e.out]; }
+    onFieldSince[e.in]=e.min;
+  });
+  Object.keys(onFieldSince).forEach(pid=>{ totals[pid]=(totals[pid]||0)+(full-onFieldSince[pid]); });
+  return totals;
+}
+/* Chi è "in campo"/"in panchina" ADESSO per quella gara, applicando tutti i cambi già registrati */
+function matchOnFieldNow(matchId, sport){
+  const onField=new Map(matchBaselineStarters(sport).map(p=>[p.id,p]));
+  subsSorted(matchId).forEach(e=>{ onField.delete(e.out); const p=playerById(e.in); if(p) onField.set(e.in,p); });
+  return onField;
+}
+function subsCSS(){
+  if(document.getElementById('subs-css')) return;
+  const st=document.createElement('style'); st.id='subs-css';
+  st.textContent=`
+  .subs-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;}
+  .subs-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.86rem;background:var(--surface-2,rgba(255,255,255,.03));border:1px solid var(--line,rgba(255,255,255,.1));border-radius:10px;padding:8px 10px;}
+  .subs-min{font-family:'Outfit',sans-serif;font-weight:800;color:var(--brand);min-width:34px;}
+  .subs-del{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;}
+  .subs-del:hover{color:var(--flame,#F0463C);}
+  .btap-min-auto{display:inline-flex;align-items:center;gap:5px;font-size:.74rem;color:var(--muted);padding:6px 12px 10px;}
+  .btap-min-auto i{font-size:.7rem;}
+  `;
+  document.head.appendChild(st);
+}
+function renderSubsPanel(matchId){
+  const host=document.getElementById('subs-panel'); if(!host) return;
+  if(!matchId){ host.style.display='none'; host.innerHTML=''; return; }
+  subsCSS(); host.style.display='block';
+  const sport=curSport();
+  const evs=subsSorted(matchId);
+  const rows=evs.map(e=>{ const po=playerById(e.out), pi=playerById(e.in);
+    return `<div class="subs-row"><span class="subs-min">${e.min}'</span> Esce <b>#${po?po.number:'?'} ${po?po.name:'?'}</b>, entra <b>#${pi?pi.number:'?'} ${pi?pi.name:'?'}</b>
+      <button class="subs-del" onclick="removeSub(${matchId},${e.id})" title="Rimuovi cambio"><i class="fa-solid fa-xmark"></i></button></div>`; }).join('');
+  const autoMin = !!(MATCH_FULL_MIN[sport] && evs.length);
+  host.innerHTML=`<div class="card">
+      <h3><i class="fa-solid fa-right-left"></i> Cambi</h3>
+      <button class="btn btn-ghost btn-sm" onclick="openAddSub(${matchId})"><i class="fa-solid fa-plus"></i> Registra cambio</button>
+      <div class="subs-list">${rows||'<p class="hint" style="margin-top:8px;margin-bottom:0">Nessun cambio registrato: il MIN resta modificabile a mano.</p>'}</div>
+      ${autoMin?`<p class="hint" style="margin-top:8px;margin-bottom:0"><i class="fa-solid fa-circle-info"></i> Il MIN di questa gara è calcolato dai cambi qui sopra (titolari = formazione consigliata).</p>`:''}
+    </div>`;
+}
+function openAddSub(matchId){
+  const sport=curSport();
+  const onField=[...matchOnFieldNow(matchId,sport).values()];
+  const onFieldIds=new Set(onField.map(p=>p.id));
+  const bench=activePlayers().filter(p=>!onFieldIds.has(p.id));
+  const outOpts=onField.map(p=>`<option value="${p.id}">#${p.number} ${p.name}</option>`).join('');
+  const inOpts=bench.map(p=>`<option value="${p.id}">#${p.number} ${p.name}</option>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Registra cambio</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <div class="fg"><label>Chi esce</label><select id="sub-out">${outOpts||'<option value="">Nessuno in campo</option>'}</select></div>
+      <div class="fg"><label>Chi entra</label><select id="sub-in">${inOpts||'<option value="">Nessuno in panchina</option>'}</select></div>
+      <div class="fg"><label>Minuto</label><input id="sub-min" type="number" min="0" max="200" placeholder="Es. 62"></div>
+      <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="saveSub(${matchId})"><i class="fa-solid fa-check"></i> Registra cambio</button>
+    </div>`);
+}
+function saveSub(matchId){
+  const outSel=document.getElementById('sub-out'), inSel=document.getElementById('sub-in'), minInp=document.getElementById('sub-min');
+  const outId=parseInt(outSel&&outSel.value), inId=parseInt(inSel&&inSel.value), min=parseInt(minInp&&minInp.value);
+  if(!outId||!inId||isNaN(min)){ toast('Compila chi esce, chi entra e il minuto','info'); return; }
+  if(outId===inId){ toast('Chi esce e chi entra non possono coincidere','info'); return; }
+  if(!DB.substitutions) DB.substitutions={};
+  if(!DB.substitutions[matchId]) DB.substitutions[matchId]=[];
+  const seq=DB.substitutions[matchId].reduce((m,e)=>Math.max(m,e.id||0),0)+1;
+  DB.substitutions[matchId].push({id:seq,min,out:outId,in:inId});
+  save(); closeModal(); toast('Cambio registrato');
+  renderSubsPanel(matchId); refreshTapMinFromSubs(matchId);
+}
+function removeSub(matchId,id){
+  if(!DB.substitutions||!DB.substitutions[matchId]) return;
+  DB.substitutions[matchId]=DB.substitutions[matchId].filter(e=>e.id!==id);
+  save(); renderSubsPanel(matchId); refreshTapMinFromSubs(matchId);
+}
+/* Rispecchia il MIN auto-calcolato (se ci sono cambi) nella tap UI di basket/calcio già aperta */
+function refreshTapMinFromSubs(matchId){
+  const sport=curSport();
+  const subMin=computeMinutesFromSubs(matchId, sport);
+  if(sport==='basket' && typeof BTAP!=='undefined' && BTAP && BTAP.matchId===matchId){
+    BTAP.minAuto=!!subMin;
+    if(subMin) activePlayers().forEach(p=>{ BTAP.min[p.id]=subMin[p.id]||0; });
+    bTapRenderPlayers();
+  } else if(sport==='calcio' && typeof CTAP!=='undefined' && CTAP && CTAP.matchId===matchId){
+    CTAP.minAuto=!!subMin;
+    if(subMin) activePlayers().forEach(p=>{ CTAP.min[p.id]=subMin[p.id]||0; });
+    cTapRenderPlayers();
+  }
 }
 
 /* =========================================================
@@ -2350,55 +3118,74 @@ function drawCourt(w,h){
         ctx.beginPath();ctx.arc(cx,ry+rh-kh,kw*0.5,Math.PI,Math.PI*2);ctx.stroke();
     }
 }
+/* Formazione della lavagnetta (Modulo T): SOLO uno specchietto di lavoro in memoria,
+   precaricato dalla stessa formazione/rotazione già calcolata per "Formazione consigliata"
+   (soccerLineup/pickLineupPallavolo/pickLineupBasket — nessun ricalcolo). Le sostituzioni
+   fatte qui (trascinamento gettoni, cambi da panchina) restano locali a questa schermata:
+   non toccano mai DB.settings.lineup, quindi la formazione "ufficiale" non si altera mai. */
+let BOARD_LINEUP=null;
+function boardBuildLineup(sport){
+    if(sport==='calcio'){
+        const {slots}=soccerLineup();
+        return slots.map(s=>({x:s.x,y:s.y,role:s.role,player:s.player}));
+    }
+    const rows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+    return rows.map(r=>({x:r.x,y:r.y,role:r.role,player:r.player}));
+}
 function placeTokens(){
     const area=document.getElementById('court-area');
     area.querySelectorAll('.token').forEach(t=>t.remove());
     const r=area.getBoundingClientRect();
     const sp=(typeof DB!=='undefined'&&DB&&DB.sport)||'pallavolo';
     const base=courtRect(r.width,r.height,sp);
-    if(sp==='calcio'){
-        const {slots}=soccerLineup();
-        slots.forEach(s=>{ if(!s.player) return; const p=s.player;
-            const t=document.createElement('div');
-            t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
-            t.textContent=p.number; t.title=p.name;
-            t.style.left=(base.x+s.x*base.w-23)+'px'; t.style.top=(base.y+s.y*base.h-23)+'px';
-            makeDraggable(t); area.appendChild(t);
-        });
-        renderBench(); return;
-    }
-    const FORM={
-        pallavolo:[[0.75,0.8],[0.75,0.55],[0.5,0.3],[0.25,0.3],[0.25,0.55],[0.5,0.8]],
-        basket:[[0.5,0.75],[0.22,0.62],[0.78,0.62],[0.32,0.4],[0.6,0.38]]
-    };
-    const spots=FORM[sp]||FORM.pallavolo;
-    const roster=activePlayers().slice(0,spots.length);
-    roster.forEach((p,i)=>{
+    BOARD_LINEUP=boardBuildLineup(sp);
+    BOARD_LINEUP.forEach((slot,i)=>{
+        if(!slot.player) return; const p=slot.player;
         const t=document.createElement('div');
         t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
-        t.textContent=p.number;t.title=p.name;
-        const pos=spots[i]||[0.5,0.5];
-        t.style.left=(base.x+pos[0]*base.w-23)+'px';t.style.top=(base.y+pos[1]*base.h-23)+'px';
-        makeDraggable(t);area.appendChild(t);
+        t.textContent=p.number; t.title=p.name; t.dataset.slot=i;
+        t.style.left=(base.x+slot.x*base.w-23)+'px'; t.style.top=(base.y+slot.y*base.h-23)+'px';
+        makeDraggable(t); area.appendChild(t);
     });
     renderBench();
 }
 function renderBench(){
     const host=document.getElementById('bench-area'); if(!host) return;
-    if(curSport()!=='calcio'){ host.style.display='none'; host.innerHTML=''; return; }
-    soccerFieldCSS(); host.style.display='block';
-    const {bench}=soccerLineup();
+    if(!BOARD_LINEUP){ host.style.display='none'; host.innerHTML=''; return; }
+    soccerFieldCSS(); injectFmzCSS(); host.style.display='block';
+    const usedIds=new Set(BOARD_LINEUP.filter(s=>s.player).map(s=>s.player.id));
+    const bench=activePlayers().filter(p=>!usedIds.has(p.id))
+      .map(p=>({p,v:getSeasonStats(p.id).avgVoto}))
+      .sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
     host.innerHTML=`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700;margin-bottom:8px"><i class="fa-solid fa-chair"></i> Panchina</div>`+
       (bench.length ? `<div class="bench-chips">`+bench.map(b=>`<button class="bench-chip" onclick="benchSubstitute(${b.p.id})"><span class="bench-num">${b.p.number}</span> ${(b.p.name||'').split(' ').slice(-1)[0]}</button>`).join('')+`</div>`
                     : '<p class="hint" style="margin:0">Tutti in campo.</p>');
 }
 function benchSubstitute(pid){
-    const {slots}=soccerLineup(); const inField=slots.filter(s=>s.player);
-    const opts=inField.map(s=>`<button class="sub-opt" onclick="setLineupSub(${s.i},${pid});closeModal();placeTokens()"><span class="fmz-num">#${s.player.number}</span> ${s.player.name} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
+    if(!BOARD_LINEUP) return;
+    const inField=BOARD_LINEUP.map((s,i)=>({i,s})).filter(x=>x.s.player);
+    const opts=inField.map(({i,s})=>`<button class="sub-opt" onclick="boardApplySub(${i},${pid});closeModal()"><span class="fmz-num">#${s.player.number}</span> ${s.player.name} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Chi fai uscire?</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
-      <div class="modal-body"><p class="hint" style="margin-bottom:10px">Esce il giocatore che scegli, entra quello dalla panchina.</p>
+      <div class="modal-body"><p class="hint" style="margin-bottom:10px">Solo per spiegare la tattica: non cambia la formazione ufficiale di "Formazione consigliata".</p>
         <div class="sub-list">${opts||'<p class="hint">Nessun titolare in campo.</p>'}</div></div>`, true);
+}
+function boardApplySub(slotIdx,pid){
+    if(!BOARD_LINEUP||!BOARD_LINEUP[slotIdx]) return;
+    const p=playerById(pid); if(!p) return;
+    BOARD_LINEUP[slotIdx].player=p;
+    const area=document.getElementById('court-area');
+    const old=area.querySelector(`.token[data-slot="${slotIdx}"]`);
+    const t=document.createElement('div');
+    t.className='token'+(p.isCaptain?' captain':p.isViceCaptain?' vice':'');
+    t.textContent=p.number; t.title=p.name; t.dataset.slot=slotIdx;
+    if(old){ t.style.left=old.style.left; t.style.top=old.style.top; old.remove(); }
+    else {
+        const r=area.getBoundingClientRect(), base=courtRect(r.width,r.height,curSport()), slot=BOARD_LINEUP[slotIdx];
+        t.style.left=(base.x+slot.x*base.w-23)+'px'; t.style.top=(base.y+slot.y*base.h-23)+'px';
+    }
+    makeDraggable(t); area.appendChild(t);
+    renderBench();
 }
 function makeDraggable(token){
     token.addEventListener('pointerdown',e=>{
@@ -2425,7 +3212,8 @@ function bindDraw(w,h){
 function setPen(c,el){penColor=c;document.querySelectorAll('.color-btn').forEach(b=>b.classList.remove('active'));el.classList.add('active');}
 function clearDraw(){const r=document.getElementById('court-area').getBoundingClientRect();drawCourt(r.width,r.height);}
 function resetTokens(){
-    if(curSport()==='calcio'){ const L=getLineupCalcio(); L.pos={}; L.subs={}; save(); }
+    /* Ricarica la formazione ufficiale (Modulo T): scarta solo le sostituzioni/spostamenti
+       fatti qui in lavagnetta, non tocca mai DB.settings.lineup. */
     tokensInit=false;placeTokens();tokensInit=true;toast('Posizioni ripristinate','info');
 }
 
@@ -2463,13 +3251,41 @@ function resetAll(){
     });
 }
 
+/* =========================================================
+   PROMEMORIA BACKUP GIORNALIERO (Modulo Q)
+   Non invasivo, una volta al giorno. Non durante l'onboarding di un
+   installazione nuova (nessun dato ancora da perdere) né mentre gira
+   l'animazione di apertura: viene richiamato con un ritardo che la supera.
+   ========================================================= */
+function checkBackupReminder(){
+  try{
+    if(!localStorage.getItem('vt_tutorial_done')) return;   /* prima apertura: niente da salvare ancora */
+    const today=new Date().toDateString();
+    if(localStorage.getItem('vt_last_backup_reminder')===today) return;
+    showBackupReminder();
+  }catch(e){}
+}
+function showBackupReminder(){
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-cloud-arrow-down" style="color:var(--brand)"></i> Ricordati di fare il backup</h3>
+      <button class="modal-close" onclick="dismissBackupReminder()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <p class="hint">Se cancelli i dati del telefono o disinstalli l'app, perderai tutto ciò che non hai salvato.</p>
+      <div style="display:flex;gap:8px;margin-top:1.2rem;flex-wrap:wrap">
+        <button class="btn btn-accent" style="flex:1" onclick="backupReminderNow()"><i class="fa-solid fa-download"></i> Fai backup ora</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="dismissBackupReminder()">Non oggi</button>
+      </div>
+    </div>`);
+}
+function dismissBackupReminder(){ localStorage.setItem('vt_last_backup_reminder', new Date().toDateString()); closeModal(); }
+function backupReminderNow(){ exportData(); dismissBackupReminder(); }
+
 
 /* =========================================================
    AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v45';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v52';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -2555,7 +3371,20 @@ if('serviceWorker' in navigator){
    Basket: nuovo — 5 posizioni base su mezzo campo (nessun motore per il basket esisteva in Formazione).
    ========================================================= */
 const VOLLEY_ZONES=[['P4',.2,.22],['P3',.5,.18],['P2',.8,.22],['P5',.2,.78],['P6',.5,.82],['P1',.8,.78]];
-const VOLLEY_ZONE_ROLE={P1:['Palleggiatore',0],P4:['Opposto',0],P3:['Centrale',0],P2:['Schiacciatore',0],P5:['Schiacciatore',1],P6:['Libero',0]};
+/* Ordine di ruolo lungo il giro di rotazione P1→P2→P3→P4→P5→P6 quando il palleggiatore
+   parte da P1 (rotazione 1): Palleggiatore, Schiacciatore, Centrale, Opposto (sempre
+   opposto al palleggiatore, 3 zone dopo), Schiacciatore, Libero (sostituisce il centrale
+   che tornerebbe dietro). Per far partire il palleggiatore da un'altra zona (rotazione N)
+   basta scorrere questo stesso ciclo di quante zone lo separano da P1. */
+const VOLLEY_ROLE_CYCLE=[['Palleggiatore',0],['Schiacciatore',0],['Centrale',0],['Opposto',0],['Schiacciatore',1],['Libero',0]];
+function volleyZoneRoleMap(startRot){
+  const off=(((startRot||1)-1)%6+6)%6;
+  const zones=['P1','P2','P3','P4','P5','P6'], map={};
+  zones.forEach((z,i)=>{ map[z]=VOLLEY_ROLE_CYCLE[(i-off+6)%6]; });
+  return map;
+}
+function getLineupPallavolo(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.pallavolo=DB.settings.lineup.pallavolo||{rotation:1}; if(!DB.settings.lineup.pallavolo.rotation) DB.settings.lineup.pallavolo.rotation=1; return DB.settings.lineup.pallavolo; }
+function setLineupRotation(r){ const L=getLineupPallavolo(); L.rotation=r; save(); renderFormazione(); }
 const BASKET_POS={Playmaker:[.5,.85],Guardia:[.82,.55],'Ala piccola':[.18,.55],'Ala grande':[.7,.25],Centro:[.5,.1]};
 function lineupSlot(zr,p,v,x,y){ return {ruolo_o_zona:zr,playerName:p.name,number:p.number,overall:cphOverall(v),tier:playerTier(p.id),x:+x.toFixed(3),y:+y.toFixed(3)}; }
 function computeLineupCalcio(){
@@ -2563,11 +3392,12 @@ function computeLineupCalcio(){
   return slots.filter(s=>s.player).map(s=>lineupSlot(s.role,s.player,getSeasonStats(s.player.id).avgVoto,s.x,s.y));
 }
 function computeLineupPallavolo(){
+  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   const out=[];
   VOLLEY_ZONES.forEach(([z,x,y])=>{
-    const [role,idx]=VOLLEY_ZONE_ROLE[z]; const pick=byRole(role)[idx];
+    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
     if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y));
   });
   return out;
@@ -3136,6 +3966,95 @@ document.getElementById('confirm-no').addEventListener('click',()=>{document.get
 document.getElementById('modal-overlay').addEventListener('click',e=>{if(e.target.id==='modal-overlay')closeModal();});
 window.addEventListener('resize',()=>{if(document.getElementById('tattica').classList.contains('active')){const a=document.getElementById('court-area').getBoundingClientRect();initBoard();}});
 
+/* =========================================================
+   INTRO — animazione di apertura sport-aware (Modulo M+Bis+Ter), identica al Player.
+   Il campo si disegna da solo, zoom verso il centro, alone che pulsa 2-3 volte con
+   intensità crescente, esplosione (whoosh) e logo (chime). ~1.65s totali, saltabile
+   con un tap, una sola volta per apertura. Il contenitore #pl-intro è già nel markup
+   statico di index.html (appare subito); qui costruiamo solo il contenuto sport-aware.
+   ========================================================= */
+function ciIntroSport(){
+  /* a differenza di curSport() (che ha un fallback silenzioso a 'pallavolo' per il
+     rendering normale), qui vogliamo sapere se lo sport è stato DAVVERO impostato:
+     se DB.sport non c'è ancora (primissima squadra non ancora creata) → campo neutro. */
+  try{ if(DB && DB.sport && ['pallavolo','calcio','basket'].includes(DB.sport)) return DB.sport; }catch(e){}
+  return null;
+}
+function ciIntroCourtHTML(sport){
+  const STAG=35; // ms tra un tratto e il successivo
+  const c='rgba(255,255,255,.85)';
+  let shapes;
+  if(sport==='pallavolo'){
+    shapes=[
+      `<rect x="6" y="6" width="388" height="188" stroke="#22C55E" stroke-width="2.5" pathLength="1"/>`,
+      `<line x1="200" y1="6" x2="200" y2="194" stroke="#22C55E" stroke-width="3" pathLength="1"/>`,
+      `<line x1="135" y1="6" x2="135" y2="194" stroke="#22C55E" stroke-width="1.4" pathLength="1"/>`,
+      `<line x1="265" y1="6" x2="265" y2="194" stroke="#22C55E" stroke-width="1.4" pathLength="1"/>`
+    ];
+  } else if(sport==='calcio'){
+    shapes=[
+      `<rect x="6" y="6" width="388" height="188" stroke="${c}" stroke-width="2.5" pathLength="1"/>`,
+      `<line x1="200" y1="6" x2="200" y2="194" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<circle cx="200" cy="100" r="34" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<rect x="6" y="55" width="58" height="90" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<rect x="336" y="55" width="58" height="90" stroke="${c}" stroke-width="2" pathLength="1"/>`
+    ];
+  } else if(sport==='basket'){
+    shapes=[
+      `<rect x="6" y="6" width="388" height="188" stroke="${c}" stroke-width="2.5" pathLength="1"/>`,
+      `<line x1="200" y1="6" x2="200" y2="194" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<circle cx="200" cy="100" r="26" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<rect x="6" y="64" width="74" height="72" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<rect x="320" y="64" width="74" height="72" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<path d="M80 64 A36 36 0 0 1 80 136" stroke="${c}" stroke-width="2" pathLength="1"/>`,
+      `<path d="M320 64 A36 36 0 0 0 320 136" stroke="${c}" stroke-width="2" pathLength="1"/>`
+    ];
+  } else {
+    /* fallback primo avvio: nessuna squadra/sport ancora creato — rettangolo + linea
+       centrale, l'elemento comune a tutti i campi, con lo stesso identico effetto di disegno */
+    shapes=[
+      `<rect x="6" y="6" width="388" height="188" stroke="${c}" stroke-width="2.5" pathLength="1"/>`,
+      `<line x1="200" y1="6" x2="200" y2="194" stroke="${c}" stroke-width="2" pathLength="1"/>`
+    ];
+  }
+  const withDelay=shapes.map((s,i)=>s.replace('/>',` style="transition-delay:${(i*STAG/1000).toFixed(3)}s"/>`));
+  return `<svg class="pi-court" viewBox="0 0 400 200" preserveAspectRatio="xMidYMid meet">${withDelay.join('')}</svg>`;
+}
+function ciIntroRun(){
+  const stageEl=document.getElementById('pl-intro-stage'), rootEl=document.getElementById('pl-intro');
+  if(!stageEl||!rootEl) return;
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sport = ciIntroSport();
+  stageEl.innerHTML = ciIntroCourtHTML(sport)+
+    `<div class="pi-halo"></div><div class="pi-burst"></div>`+
+    `<img class="pi-logo" src="icons/logo-badge.png" alt="">`;
+
+  const timers=[]; let hidden=false;
+  const at=(ms,fn)=>timers.push(setTimeout(fn,ms));
+  function hide(){
+    if(hidden) return; hidden=true;
+    timers.forEach(clearTimeout);
+    rootEl.classList.add('pi-hide');
+    setTimeout(()=>{ if(rootEl&&rootEl.parentNode) rootEl.parentNode.removeChild(rootEl); },380);
+  }
+  rootEl.addEventListener('click',()=>{ if(window.SoundKit) SoundKit.unlock(); hide(); },{once:true});
+
+  if(reduced){
+    stageEl.querySelectorAll('.pi-court>*').forEach(el=>{ el.style.transitionDelay='0s'; });
+    stageEl.classList.add('pi-draw','pi-logo-in');
+    at(550,hide);
+    return;
+  }
+  at(10, ()=>stageEl.classList.add('pi-draw'));
+  at(650, ()=>stageEl.classList.add('pi-zoom'));
+  at(850, ()=>stageEl.classList.add('pi-pulse'));
+  at(1230, ()=>{ stageEl.classList.add('pi-explode','pi-logo-in'); if(window.SoundKit) SoundKit.playWhoosh(); });
+  at(1380, ()=>{ if(window.SoundKit) SoundKit.playChime(); });
+  at(1650, hide);
+}
+ciIntroRun();
+document.addEventListener('pointerdown',function unlockAudioOnce(){ if(window.SoundKit) SoundKit.unlock(); document.removeEventListener('pointerdown',unlockAudioOnce); },{once:true});
+
 buildLayout();
 initSchemes();
 renderTeamName();
@@ -3144,6 +4063,7 @@ renderDashboard();
 checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
+setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
 
 /* =========================================================
    FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)
@@ -3821,10 +4741,11 @@ function injectFmzCSS(){
 }
 /* ---- Formazione PALLAVOLO/BASKET visuale: campo disegnato (stesso stile del campo calcio) ---- */
 function pickLineupPallavolo(){
+  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   return VOLLEY_ZONES.map(([z,x,y])=>{
-    const [role,idx]=VOLLEY_ZONE_ROLE[z]; const pick=byRole(role)[idx];
+    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
     return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
   });
 }
@@ -3877,9 +4798,18 @@ function renderCourtFormation(sport){
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const bench=players.filter(x=>!usedIds.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+  const rotHeader = sport==='pallavolo' ? (()=>{
+    const rot=getLineupPallavolo().rotation;
+    const chips=[1,2,3,4,5,6].map(n=>`<button class="mod-chip${n===rot?' on':''}" onclick="setLineupRotation(${n})">P${n}</button>`).join('');
+    return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <h3 style="margin:0"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>
+        <div class="mod-chips">${chips}</div>
+      </div>
+      <p class="hint" style="margin:-4px 0 12px">Rotazione di partenza: da che zona parte il palleggiatore.</p>`;
+  })() : `<h3 style="margin:0 0 12px"><i class="fa-solid fa-basketball" style="color:var(--brand)"></i> Formazione in campo</h3>`;
   document.getElementById('formazione-content').innerHTML=`
     <div class="card">
-      <h3 style="margin:0 0 12px"><i class="fa-solid fa-${sport==='pallavolo'?'volleyball':'basketball'}" style="color:var(--brand)"></i> Formazione in campo</h3>
+      ${rotHeader}
       <div class="fpitch-wrap"><div class="fpitch readonly${sport==='basket'?' fpitch-basket':''}">
         ${courtZoneSVG(sport)}
         ${tokens}
