@@ -588,24 +588,32 @@ function ctxRender(){
   const el=document.querySelector(step.sel);
   const hole=document.getElementById('ctx-hole'), bub=document.getElementById('ctx-bubble');
   if(!hole||!bub) return;
-  if(el){
+  const last=_ctx.idx===_ctx.steps.length-1;
+  bub.style.transform='none';
+  bub.innerHTML=`<h4><i class="fa-solid fa-circle-info"></i> ${step.title}</h4><p>${step.text}</p>
+    <div class="ctx-dots">${_ctx.steps.map((_,i)=>`<span class="${i===_ctx.idx?'on':''}"></span>`).join('')}</div>
+    <div class="ctx-acts"><button class="ctx-skip" onclick="ctxFinish()">Salta</button><button class="ctx-next" onclick="ctxNext()">${last?'Fatto':'Avanti'}</button></div>`;
+
+  const isMobile = window.innerWidth < 600; // sotto questa soglia: sempre al centro, niente calcoli
+  if(el && !isMobile){
     const r=el.getBoundingClientRect(), pad=6;
     hole.style.display='block';
     hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
     hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
-    bub.style.transform='none';
-    const bh=220;
-    bub.style.top=((r.bottom+14+bh<window.innerHeight)?(r.bottom+14):Math.max(14,r.top-14-bh))+'px';
+
+    const spaceBelow = window.innerHeight-navGuard-(r.bottom+14)-bh;
+    const spaceAbove = (r.top-14-bh)-margin;
+    let top;
+    if(spaceBelow>=0) top=r.bottom+14;
+    else if(spaceAbove>=0) top=r.top-14-bh;
+    else top=Math.max(margin,(window.innerHeight-navGuard-bh)/2);
+
     let left=r.left; if(left+280>window.innerWidth-12) left=window.innerWidth-292; if(left<12) left=12;
-    bub.style.left=left+'px';
-  } else {
+    bub.style.top=top+'px'; bub.style.left=left+'px';} 
+  else {
     hole.style.display='none';
     bub.style.top='40%'; bub.style.left='50%'; bub.style.transform='translate(-50%,-50%)';
   }
-  const last=_ctx.idx===_ctx.steps.length-1;
-  bub.innerHTML=`<h4><i class="fa-solid fa-circle-info"></i> ${step.title}</h4><p>${step.text}</p>
-    <div class="ctx-dots">${_ctx.steps.map((_,i)=>`<span class="${i===_ctx.idx?'on':''}"></span>`).join('')}</div>
-    <div class="ctx-acts"><button class="ctx-skip" onclick="ctxFinish()">Salta</button><button class="ctx-next" onclick="ctxNext()">${last?'Fatto':'Avanti'}</button></div>`;
 }
 function ctxNext(){
   if(!_ctx) return;
