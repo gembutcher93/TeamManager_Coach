@@ -427,7 +427,8 @@ const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra sal
 let DB = loadDB();
 if(!DB.trainings) DB.trainings = {};
 if(!DB.substitutions) DB.substitutions = {};
-if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[]};
+if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
+if(!DB.physicalTests.height) DB.physicalTests.height = [];
 if(!DB.nextId) DB.nextId = Date.now();
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
@@ -1020,10 +1021,17 @@ function buildLayout(){
                 <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('sprint')"><i class="fa-solid fa-stopwatch"></i> Nuovo test Sprint</button>
             </div>
             <div class="card">
-                <h3><i class="fa-solid fa-arrow-up-long"></i> Salto Verticale</h3>
-                <p class="hint" style="margin-bottom:.8rem">Altezza del salto dalla differenza fra stacco e massima elevazione, con calibrazione pixel→metri.</p>
+                <h3><i class="fa-solid fa-hand-point-up"></i> Altezza Raggiunta</h3>
+                <p class="hint" style="margin-bottom:.8rem" title="Altezza Raggiunta = quanto in alto tocchi. Elevazione del Salto = di quanto ti sollevi da terra.">Quanto in alto tocchi da terra (mano, testa o palla), con calibrazione pixel→metri rispetto a un riferimento noto (rete/muro/soffitto).</p>
+                <div class="fg"><label>Giocatore</label><select id="phys-height-player"></select></div>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('height')"><i class="fa-solid fa-ruler-vertical"></i> Nuovo test Altezza Raggiunta</button>
+                <p class="hint" style="margin-top:8px" title="Versione base a marcatori manuali. In arrivo (V2) tracking automatico su dispositivi più potenti."><i class="fa-solid fa-circle-info"></i> Versione base a marcatori manuali. In arrivo (V2) tracking automatico.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fa-solid fa-arrow-up-long"></i> Elevazione del Salto</h3>
+                <p class="hint" style="margin-bottom:.8rem" title="Altezza Raggiunta = quanto in alto tocchi. Elevazione del Salto = di quanto ti sollevi da terra.">Di quanto ti sollevi da terra: differenza fra stacco e massima elevazione sullo stesso punto (bacino o piedi).</p>
                 <div class="fg"><label>Giocatore</label><select id="phys-jump-player"></select></div>
-                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('jump')"><i class="fa-solid fa-ruler-vertical"></i> Nuovo test Salto</button>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('jump')"><i class="fa-solid fa-ruler-vertical"></i> Nuovo test Elevazione</button>
                 <p class="hint" style="margin-top:8px" title="Versione base a marcatori manuali. In arrivo (V2) tracking automatico su dispositivi più potenti."><i class="fa-solid fa-circle-info"></i> Versione base a marcatori manuali. In arrivo (V2) tracking automatico.</p>
             </div>
         </div>
@@ -1120,8 +1128,12 @@ function buildLayout(){
 }
 
 /* =========================================================
-   TEST FISICI V1 (Prompt8, Moduli A+B) — calibrazione manuale
+   TEST FISICI V1 (Prompt8/9, Moduli A+B+C) — calibrazione manuale
    pixel→metri + marcatori su frame, nessuna pose detection/AI.
+   Modulo C (Altezza Raggiunta, Prompt9) usa una calibrazione con
+   riferimento a terra (punto più basso dei 2 = y0, altezza nota
+   del punto più alto) cosi' da poter leggere un'altezza assoluta
+   da terra, invece della sola differenza fra due frame (Modulo B).
    Il video non viene MAI salvato (solo un object URL per la
    sessione corrente): si registra solo il risultato calcolato.
    NOTA implementativa: lo stepping frame-by-frame usa currentTime
@@ -1156,7 +1168,7 @@ function physCameraNoteHTML(){
 function renderPhysicalTests(){
     physCSS();
     const opts = DB.players.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-    ['phys-sprint-player','phys-jump-player','phys-hist-player'].forEach(id=>{
+    ['phys-sprint-player','phys-height-player','phys-jump-player','phys-hist-player'].forEach(id=>{
         const el=document.getElementById(id); if(!el) return;
         const prev=el.value;
         el.innerHTML = DB.players.length ? opts : '<option value="">Nessun giocatore in rosa</option>';
@@ -1165,23 +1177,27 @@ function renderPhysicalTests(){
     renderPhysHistory();
 }
 function physPlayerTests(pid){
-    return { sprint:(DB.physicalTests.sprint||[]).filter(t=>t.playerId===pid), jump:(DB.physicalTests.jump||[]).filter(t=>t.playerId===pid) };
+    return { sprint:(DB.physicalTests.sprint||[]).filter(t=>t.playerId===pid), jump:(DB.physicalTests.jump||[]).filter(t=>t.playerId===pid), height:(DB.physicalTests.height||[]).filter(t=>t.playerId===pid) };
 }
 function renderPhysHistory(){
     const sel=document.getElementById('phys-hist-player'), box=document.getElementById('phys-hist');
     if(!sel||!box) return;
     const pid=parseInt(sel.value);
     if(!pid){ box.innerHTML='<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i>Aggiungi un giocatore in rosa per registrare test.</div>'; return; }
-    const {sprint,jump}=physPlayerTests(pid);
+    const {sprint,jump,height}=physPlayerTests(pid);
     const rowsS=sprint.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
         `<tr><td>${fmtDate(t.date)}</td><td class="num">${t.tempoReazione.toFixed(3)}s</td><td class="num">${t.tempoSprint.toFixed(3)}s</td><td class="num">${t.distanza}m</td><td class="num">${t.velocitaMedia.toFixed(2)} m/s</td><td class="num">${(t.velocitaMedia*3.6).toFixed(1)} km/h</td></tr>`).join('');
+    const rowsH=height.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
+        `<tr><td>${fmtDate(t.date)}</td><td class="num">${(t.altezzaRaggiunta/100).toFixed(2)} m</td><td>${t.puntoUsato}</td></tr>`).join('');
     const rowsJ=jump.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
         `<tr><td>${fmtDate(t.date)}</td><td class="num">${t.altezzaSalto} cm</td><td>${t.puntoRiferimentoUsato}</td></tr>`).join('');
     box.innerHTML=`
         <h4 style="font-size:.8rem;margin-bottom:6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Sprint &amp; Reazione</h4>
         ${sprint.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Reazione</th><th>Sprint</th><th>Distanza</th><th>Vel. media</th><th>Km/h</th></tr></thead><tbody>${rowsS}</tbody></table></div>`:'<p class="hint">Nessun test sprint registrato.</p>'}
-        <h4 style="font-size:.8rem;margin:14px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Salto Verticale</h4>
-        ${jump.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Altezza</th><th>Riferimento</th></tr></thead><tbody>${rowsJ}</tbody></table></div>`:'<p class="hint">Nessun test salto registrato.</p>'}`;
+        <h4 style="font-size:.8rem;margin:14px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Altezza Raggiunta</h4>
+        ${height.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Altezza</th><th>Punto</th></tr></thead><tbody>${rowsH}</tbody></table></div>`:'<p class="hint">Nessun test altezza raggiunta registrato.</p>'}
+        <h4 style="font-size:.8rem;margin:14px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Elevazione del Salto</h4>
+        ${jump.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Elevazione</th><th>Punto</th></tr></thead><tbody>${rowsJ}</tbody></table></div>`:'<p class="hint">Nessun test elevazione registrato.</p>'}`;
 }
 /* ---- video + canvas overlay condivisi fra tutti gli step ---- */
 function physVideoBlock(){
@@ -1240,7 +1256,7 @@ function openPhysTest(type){
     physStepUpload();
 }
 function physStepUpload(){
-    const label = PHYS.type==='sprint' ? 'Sprint &amp; Reazione' : 'Salto Verticale';
+    const label = PHYS.type==='sprint' ? 'Sprint &amp; Reazione' : (PHYS.type==='height' ? 'Altezza Raggiunta' : 'Elevazione del Salto');
     const p=playerById(PHYS.playerId);
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-video" style="color:var(--brand)"></i> Test Fisici · ${label}</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
@@ -1261,14 +1277,17 @@ function physPickVideo(input){
 }
 /* ---- calibrazione (comune ai due moduli) ---- */
 function physStepCalibrate(){
+    const isHeight = PHYS.type==='height';
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-ruler-combined" style="color:var(--brand)"></i> Calibrazione</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
       <div class="modal-body">
         ${physCameraNoteHTML()}
-        <p class="hint" style="margin-bottom:10px">Scorri al frame in cui vedi un riferimento noto e fermo (rete, muro con nastro, linea di campo), poi tocca i suoi due estremi sul video.</p>
+        <p class="hint" style="margin-bottom:10px">${isHeight
+            ? 'Scorri al frame in cui vedi un riferimento noto e fermo (rete, muro con nastro, soffitto). Tocca prima il punto A TERRA (livello del pavimento), poi il punto di riferimento noto a un\'altezza nota (es. altezza soffitto/canestro/segno sul muro).'
+            : 'Scorri al frame in cui vedi un riferimento noto e fermo (rete, muro con nastro, linea di campo), poi tocca i suoi due estremi sul video.'}</p>
         ${physVideoBlock()}
         <div id="phys-calib-form" style="margin-top:12px;display:none">
-            <div class="fg"><label>Distanza reale fra i due punti (metri)</label><input id="phys-calib-dist" type="number" min="0.01" step="0.01" placeholder="Es. 1.00"></div>
+            <div class="fg"><label>${isHeight ? 'Altezza da terra del punto di riferimento (metri)' : 'Distanza reale fra i due punti (metri)'}</label><input id="phys-calib-dist" type="number" min="0.01" step="0.01" placeholder="Es. 1.00"></div>
             <button type="button" class="btn btn-accent" style="width:100%;margin-top:8px" onclick="physCalibCompute()"><i class="fa-solid fa-check"></i> Calcola calibrazione</button>
         </div>
         <div id="phys-calib-result" style="margin-top:12px"></div>
@@ -1314,7 +1333,16 @@ function physCalibRetry(){
 }
 function physCalibAccept(pxPerMeter){
     PHYS.calib.pxPerMeter=pxPerMeter;
-    if(PHYS.type==='sprint') physStepMarkersSprint(0); else physStepJumpRef();
+    if(PHYS.type==='sprint'){
+        physStepMarkersSprint(0);
+    } else if(PHYS.type==='height'){
+        const pts=PHYS.calib.pts;
+        const groundPt = pts[0].y>pts[1].y ? pts[0] : pts[1]; // y maggiore = più in basso sullo schermo = a terra
+        PHYS.calib.groundY=groundPt.y;
+        physStepHeightRef();
+    } else {
+        physStepJumpRef();
+    }
 }
 /* ---- Modulo A: Sprint + Reazione (3 marcatori) ---- */
 const PHYS_SPRINT_STEPS=[
@@ -1367,13 +1395,13 @@ function physSaveSprint(){
     if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
     PHYS=null; closeModal(); toast('Test sprint salvato'); renderPhysHistory();
 }
-/* ---- Modulo B: Salto Verticale (calibrazione + 2 marcatori) ---- */
+/* ---- Modulo B: Elevazione del Salto (calibrazione + 2 marcatori) ---- */
 function physStepJumpRef(){
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crosshairs" style="color:var(--brand)"></i> Punto di riferimento</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
       <div class="modal-body">
-        <p class="hint" style="margin-bottom:10px">Scegli il punto del corpo che userai per marcare stacco e massima elevazione: userai sempre lo stesso punto su entrambi i frame.</p>
-        <div class="fg"><label>Punto di riferimento</label><select id="phys-jump-refpt"><option>Bacino</option><option>Mano</option><option>Testa</option><option>Altro</option></select></div>
+        <p class="hint" style="margin-bottom:10px">Scegli il punto del corpo che userai per marcare stacco e massima elevazione (bacino o piedi): userai sempre lo stesso punto su entrambi i frame.</p>
+        <div class="fg"><label>Punto di riferimento</label><select id="phys-jump-refpt"><option>Bacino</option><option>Piedi</option></select></div>
         <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physJumpRefConfirm()"><i class="fa-solid fa-arrow-right"></i> Continua</button>
       </div>`, true);
 }
@@ -1410,7 +1438,46 @@ function physSaveJump(){
         altezzaSalto, puntoRiferimentoUsato:PHYS.refPoint});
     save();
     if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
-    PHYS=null; closeModal(); toast('Test salto salvato'); renderPhysHistory();
+    PHYS=null; closeModal(); toast('Test elevazione salvato'); renderPhysHistory();
+}
+/* ---- Modulo C: Altezza Raggiunta (calibrazione con riferimento a terra + 1 marcatore) ---- */
+function physStepHeightRef(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crosshairs" style="color:var(--brand)"></i> Punto raggiunto</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Scegli cosa hai marcato come punto più alto toccato/raggiunto dal giocatore.</p>
+        <div class="fg"><label>Punto raggiunto</label><select id="phys-height-refpt"><option>Mano</option><option>Testa</option><option>Palla</option><option>Altro</option></select></div>
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physHeightRefConfirm()"><i class="fa-solid fa-arrow-right"></i> Continua</button>
+      </div>`, true);
+}
+function physHeightRefConfirm(){ PHYS.refPoint=document.getElementById('phys-height-refpt').value; physStepMarkerHeight(); }
+function physStepMarkerHeight(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-arrow-up" style="color:var(--brand)"></i> Marcatore — Punto più alto</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Scorri fino al frame di massima elevazione e tocca il punto più alto toccato/raggiunto. Punto: <b>${PHYS.refPoint}</b>.</p>
+        ${physVideoBlock()}
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:12px" id="phys-mark-btn" onclick="physMarkHeight()" disabled><i class="fa-solid fa-map-pin"></i> Conferma marcatore</button>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+    PHYS._pendingPoint=null;
+    PHYS.overlayDraw=(ctx,cv)=>{ if(PHYS._pendingPoint) physDot(ctx,cv,PHYS._pendingPoint.x,PHYS._pendingPoint.y,'#22C55E'); };
+    physInitVideo(null, {onCanvasClick:(x,y)=>{ PHYS._pendingPoint={x,y}; physRedraw(); const b=document.getElementById('phys-mark-btn'); if(b) b.disabled=false; }});
+}
+function physMarkHeight(){
+    PHYS.markers.punto=PHYS._pendingPoint;
+    physSaveHeight();
+}
+function physSaveHeight(){
+    const {punto}=PHYS.markers;
+    const pxDelta=PHYS.calib.groundY-punto.y; // più in alto sullo schermo = y minore
+    if(pxDelta<=0){ toast('Il punto marcato deve essere più in alto del livello del terreno','danger'); return; }
+    const altezzaRaggiunta=+((pxDelta/PHYS.calib.pxPerMeter)*100).toFixed(1); // cm da terra
+    DB.physicalTests.height.push({id:uid(), playerId:PHYS.playerId, date:today().toISOString().slice(0,10),
+        altezzaRaggiunta, puntoUsato:PHYS.refPoint});
+    save();
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS=null; closeModal(); toast('Test altezza raggiunta salvato'); renderPhysHistory();
 }
 
 /* =========================================================
