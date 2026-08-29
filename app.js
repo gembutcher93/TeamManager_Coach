@@ -1247,8 +1247,8 @@ function physStepUpload(){
       <div class="modal-body">
         <p class="hint" style="margin-bottom:10px">Giocatore: <b>${p?p.name:'—'}</b></p>
         ${physCameraNoteHTML()}
-        <div class="fg"><label>Carica il video del test</label><input type="file" accept="video/*" onchange="physPickVideo(this)"></div>
-        <p class="hint" style="margin-top:8px">Da smartphone puoi anche registrarlo al volo scegliendo la fotocamera dal selettore file.</p>
+        <div class="fg"><label>Carica il video del test</label><input type="file" accept="video/*" capture="environment" onchange="physPickVideo(this)"></div>
+        <p class="hint" style="margin-top:8px">Da smartphone il selettore ti fa scegliere fra "Registra video" al volo e "Scegli dalla libreria" per uno già pronto.</p>
         ${physDisclaimerHTML()}
       </div>`, true);
 }
