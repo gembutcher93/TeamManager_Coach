@@ -427,6 +427,7 @@ const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra sal
 let DB = loadDB();
 if(!DB.trainings) DB.trainings = {};
 if(!DB.substitutions) DB.substitutions = {};
+if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[]};
 if(!DB.nextId) DB.nextId = Date.now();
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
@@ -588,32 +589,24 @@ function ctxRender(){
   const el=document.querySelector(step.sel);
   const hole=document.getElementById('ctx-hole'), bub=document.getElementById('ctx-bubble');
   if(!hole||!bub) return;
-  const last=_ctx.idx===_ctx.steps.length-1;
-  bub.style.transform='none';
-  bub.innerHTML=`<h4><i class="fa-solid fa-circle-info"></i> ${step.title}</h4><p>${step.text}</p>
-    <div class="ctx-dots">${_ctx.steps.map((_,i)=>`<span class="${i===_ctx.idx?'on':''}"></span>`).join('')}</div>
-    <div class="ctx-acts"><button class="ctx-skip" onclick="ctxFinish()">Salta</button><button class="ctx-next" onclick="ctxNext()">${last?'Fatto':'Avanti'}</button></div>`;
-
-  const isMobile = window.innerWidth < 600; // sotto questa soglia: sempre al centro, niente calcoli
-  if(el && !isMobile){
+  if(el){
     const r=el.getBoundingClientRect(), pad=6;
     hole.style.display='block';
     hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
     hole.style.width=(r.width+pad*2)+'px'; hole.style.height=(r.height+pad*2)+'px';
-
-    const spaceBelow = window.innerHeight-navGuard-(r.bottom+14)-bh;
-    const spaceAbove = (r.top-14-bh)-margin;
-    let top;
-    if(spaceBelow>=0) top=r.bottom+14;
-    else if(spaceAbove>=0) top=r.top-14-bh;
-    else top=Math.max(margin,(window.innerHeight-navGuard-bh)/2);
-
+    bub.style.transform='none';
+    const bh=220;
+    bub.style.top=((r.bottom+14+bh<window.innerHeight)?(r.bottom+14):Math.max(14,r.top-14-bh))+'px';
     let left=r.left; if(left+280>window.innerWidth-12) left=window.innerWidth-292; if(left<12) left=12;
-    bub.style.top=top+'px'; bub.style.left=left+'px';} 
-  else {
+    bub.style.left=left+'px';
+  } else {
     hole.style.display='none';
     bub.style.top='40%'; bub.style.left='50%'; bub.style.transform='translate(-50%,-50%)';
   }
+  const last=_ctx.idx===_ctx.steps.length-1;
+  bub.innerHTML=`<h4><i class="fa-solid fa-circle-info"></i> ${step.title}</h4><p>${step.text}</p>
+    <div class="ctx-dots">${_ctx.steps.map((_,i)=>`<span class="${i===_ctx.idx?'on':''}"></span>`).join('')}</div>
+    <div class="ctx-acts"><button class="ctx-skip" onclick="ctxFinish()">Salta</button><button class="ctx-next" onclick="ctxNext()">${last?'Fatto':'Avanti'}</button></div>`;
 }
 function ctxNext(){
   if(!_ctx) return;
@@ -785,6 +778,32 @@ function svgBars(items, opts={}){
     });
     return `<div class="chart-box"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${body}</svg></div>`;
 }
+/* radar/spider chart — assi = axes (array label), datasets = [{label,color,values(0-100)}] */
+function svgRadar(axes, datasets, opts={}){
+    if(!axes.length) return '<div class="empty-chart">Nessun asse disponibile</div>';
+    const w=opts.w||420, h=opts.h||420, cx=w/2, cy=h/2, R=Math.min(w,h)/2-48, n=axes.length, rings=4;
+    const angle=i=> -Math.PI/2 + i*2*Math.PI/n;
+    const pt=(i,frac)=>{ const a=angle(i), r=R*frac; return [cx+r*Math.cos(a), cy+r*Math.sin(a)]; };
+    let grid='';
+    for(let ring=1;ring<=rings;ring++){
+        const poly=axes.map((_,i)=>pt(i,ring/rings).join(',')).join(' ');
+        grid+=`<polygon points="${poly}" fill="none" stroke="var(--line-soft)" stroke-width="1"/>`;
+    }
+    let axisLines='', labels='';
+    axes.forEach((label,i)=>{
+        const [x,y]=pt(i,1);
+        axisLines+=`<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="1"/>`;
+        const [lx,ly]=pt(i,1.16);
+        labels+=`<text class="chart-axis" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${label}</text>`;
+    });
+    const shapes=(datasets||[]).map(ds=>{
+        const vals=ds.values.map(v=>Math.max(0,Math.min(100,v||0)));
+        const poly=vals.map((v,i)=>pt(i,v/100).join(',')).join(' ');
+        const dots=vals.map((v,i)=>{ const [x,y]=pt(i,v/100); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4" fill="${ds.color}"/>`; }).join('');
+        return `<polygon points="${poly}" fill="${ds.color}" fill-opacity=".18" stroke="${ds.color}" stroke-width="2.2"/>${dots}`;
+    }).join('');
+    return `<div class="chart-box"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${grid}${axisLines}${shapes}${labels}</svg></div>`;
+}
 
 /* ---------- TOAST / MODAL / CONFIRM ---------- */
 function toast(msg,type='success'){
@@ -811,7 +830,10 @@ function openModal(html,wide){
     m.innerHTML=html;
     document.getElementById('modal-overlay').classList.add('show');
 }
-function closeModal(){ document.getElementById('modal-overlay').classList.remove('show'); }
+function closeModal(){
+    document.getElementById('modal-overlay').classList.remove('show');
+    if(typeof PHYS!=='undefined' && PHYS){ if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL); PHYS=null; }
+}
 
 /* =========================================================
    LAYOUT — costruzione delle sezioni dentro <main>
@@ -843,7 +865,10 @@ function buildLayout(){
             <p class="hint">Tocca il numero di maglia in tabella per assegnare i gradi: Standard ➔ Capitano 👑 ➔ Vice 🥈.</p>
         </div>
         <div class="card">
-            <h3><i class="fa-solid fa-users"></i> Rosa <span id="roster-count" style="color:var(--muted);font-weight:600;font-size:.85rem"></span></h3>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1rem">
+                <h3 style="margin:0"><i class="fa-solid fa-users"></i> Rosa <span id="roster-count" style="color:var(--muted);font-weight:600;font-size:.85rem"></span></h3>
+                <button class="btn btn-ghost btn-sm" onclick="openRadarCompare()"><i class="fa-solid fa-chart-area"></i> Confronta (Radar)</button>
+            </div>
             <div class="table-wrap"><table>
                 <thead><tr><th>Maglia</th><th style="text-align:left">Giocatore</th><th>Ruolo</th><th>Stato</th><th>Media</th><th>Forma</th><th>Pres.</th><th>Azioni</th></tr></thead>
                 <tbody id="roster-body"></tbody></table></div>
@@ -982,6 +1007,34 @@ function buildLayout(){
             </div>
         </div>
     </section>
+
+    <!-- TEST FISICI -->
+    <section id="test-fisici" class="section">
+        <div class="page-head"><div><div class="eyebrow">Preparazione</div><h2>Test Fisici</h2>
+            <p class="sub">Misura sprint, tempo di reazione e salto verticale da un video con telecamera ferma su cavalletto — calibrazione manuale, nessuna intelligenza artificiale.</p></div></div>
+        <div class="phys-grid">
+            <div class="card">
+                <h3><i class="fa-solid fa-person-running"></i> Sprint &amp; Reazione</h3>
+                <p class="hint" style="margin-bottom:.8rem">Tempo di reazione al via e velocità media su una distanza nota, da un video con 3 marcatori (via, partenza, arrivo).</p>
+                <div class="fg"><label>Giocatore</label><select id="phys-sprint-player"></select></div>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('sprint')"><i class="fa-solid fa-stopwatch"></i> Nuovo test Sprint</button>
+            </div>
+            <div class="card">
+                <h3><i class="fa-solid fa-arrow-up-long"></i> Salto Verticale</h3>
+                <p class="hint" style="margin-bottom:.8rem">Altezza del salto dalla differenza fra stacco e massima elevazione, con calibrazione pixel→metri.</p>
+                <div class="fg"><label>Giocatore</label><select id="phys-jump-player"></select></div>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('jump')"><i class="fa-solid fa-ruler-vertical"></i> Nuovo test Salto</button>
+                <p class="hint" style="margin-top:8px" title="Versione base a marcatori manuali. In arrivo (V2) tracking automatico su dispositivi più potenti."><i class="fa-solid fa-circle-info"></i> Versione base a marcatori manuali. In arrivo (V2) tracking automatico.</p>
+            </div>
+        </div>
+        <div class="card">
+            <h3><i class="fa-solid fa-clock-rotate-left"></i> Storico test</h3>
+            <div class="fg" style="max-width:320px"><label>Giocatore</label><select id="phys-hist-player" onchange="renderPhysHistory()"></select></div>
+            <div id="phys-hist" style="margin-top:1rem"></div>
+        </div>
+        <p class="hint">Precisione dipende da stabilità della telecamera, qualità del video e precisione dei marcatori inseriti manualmente. Per misurazioni ufficiali/agonistiche usa strumentazione certificata.</p>
+    </section>
+
     <section id="tattica" class="section">
         <div class="page-head"><div><div class="eyebrow">Spogliatoio</div><h2>Lavagnetta Tattica</h2>
             <p class="sub">Disponi la rotazione trascinando i gettoni e disegna schemi, traiettorie e vettori direttamente sul campo.</p></div></div>
@@ -1067,12 +1120,306 @@ function buildLayout(){
 }
 
 /* =========================================================
+   TEST FISICI V1 (Prompt8, Moduli A+B) — calibrazione manuale
+   pixel→metri + marcatori su frame, nessuna pose detection/AI.
+   Il video non viene MAI salvato (solo un object URL per la
+   sessione corrente): si registra solo il risultato calcolato.
+   NOTA implementativa: lo stepping frame-by-frame usa currentTime
+   ± 1/fps (fps inseribile dall'utente, default 30) invece di
+   requestVideoFrameCallback — più uniforme fra i browser; i tempi
+   salvati vengono comunque letti da video.currentTime al momento
+   del tap, quindi la precisione del risultato non dipende dagli fps.
+   ========================================================= */
+let PHYS=null; // stato del wizard di test in corso
+function physCSS(){
+    if(document.getElementById('phys-css')) return;
+    const st=document.createElement('style'); st.id='phys-css';
+    st.textContent=`
+    .phys-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem;}
+    @media(max-width:720px){.phys-grid{grid-template-columns:1fr;}}
+    .phys-video-wrap{position:relative;width:100%;background:#000;border-radius:12px;overflow:hidden;}
+    .phys-video-wrap video{width:100%;display:block;max-height:60vh;}
+    .phys-video-wrap canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;}
+    .phys-controls{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;}
+    .phys-note{background:rgba(240,70,60,.1);border:1px solid rgba(240,70,60,.3);border-radius:10px;padding:.7rem .9rem;font-size:.82rem;color:var(--text);display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;}
+    .phys-note i{color:var(--flame);margin-top:2px;}
+    `;
+    document.head.appendChild(st);
+}
+function physDisclaimerHTML(){
+    return `<p class="hint" style="margin-top:14px;font-style:italic">Precisione dipende da stabilità della telecamera, qualità del video e precisione dei marcatori inseriti manualmente. Per misurazioni ufficiali/agonistiche usa strumentazione certificata.</p>`;
+}
+function physCameraNoteHTML(){
+    return `<div class="phys-note"><i class="fa-solid fa-triangle-exclamation"></i> La telecamera deve restare ferma per tutta la ripresa dopo la calibrazione. Se la sposti, ricalibra.</div>`;
+}
+/* ---- rendering sezione + storico ---- */
+function renderPhysicalTests(){
+    physCSS();
+    const opts = DB.players.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+    ['phys-sprint-player','phys-jump-player','phys-hist-player'].forEach(id=>{
+        const el=document.getElementById(id); if(!el) return;
+        const prev=el.value;
+        el.innerHTML = DB.players.length ? opts : '<option value="">Nessun giocatore in rosa</option>';
+        if(prev && DB.players.some(p=>String(p.id)===prev)) el.value=prev;
+    });
+    renderPhysHistory();
+}
+function physPlayerTests(pid){
+    return { sprint:(DB.physicalTests.sprint||[]).filter(t=>t.playerId===pid), jump:(DB.physicalTests.jump||[]).filter(t=>t.playerId===pid) };
+}
+function renderPhysHistory(){
+    const sel=document.getElementById('phys-hist-player'), box=document.getElementById('phys-hist');
+    if(!sel||!box) return;
+    const pid=parseInt(sel.value);
+    if(!pid){ box.innerHTML='<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i>Aggiungi un giocatore in rosa per registrare test.</div>'; return; }
+    const {sprint,jump}=physPlayerTests(pid);
+    const rowsS=sprint.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
+        `<tr><td>${fmtDate(t.date)}</td><td class="num">${t.tempoReazione.toFixed(3)}s</td><td class="num">${t.tempoSprint.toFixed(3)}s</td><td class="num">${t.distanza}m</td><td class="num">${t.velocitaMedia.toFixed(2)} m/s</td><td class="num">${(t.velocitaMedia*3.6).toFixed(1)} km/h</td></tr>`).join('');
+    const rowsJ=jump.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
+        `<tr><td>${fmtDate(t.date)}</td><td class="num">${t.altezzaSalto} cm</td><td>${t.puntoRiferimentoUsato}</td></tr>`).join('');
+    box.innerHTML=`
+        <h4 style="font-size:.8rem;margin-bottom:6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Sprint &amp; Reazione</h4>
+        ${sprint.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Reazione</th><th>Sprint</th><th>Distanza</th><th>Vel. media</th><th>Km/h</th></tr></thead><tbody>${rowsS}</tbody></table></div>`:'<p class="hint">Nessun test sprint registrato.</p>'}
+        <h4 style="font-size:.8rem;margin:14px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Salto Verticale</h4>
+        ${jump.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Altezza</th><th>Riferimento</th></tr></thead><tbody>${rowsJ}</tbody></table></div>`:'<p class="hint">Nessun test salto registrato.</p>'}`;
+}
+/* ---- video + canvas overlay condivisi fra tutti gli step ---- */
+function physVideoBlock(){
+    return `<div class="phys-video-wrap"><video id="phys-video" playsinline preload="auto"></video><canvas id="phys-canvas"></canvas></div>
+    <div class="phys-controls">
+        <button type="button" class="btn btn-ghost btn-icon" onclick="physStep(-1)" title="Indietro 1 frame"><i class="fa-solid fa-backward-step"></i></button>
+        <button type="button" class="btn btn-ghost btn-icon" id="phys-playbtn" onclick="physTogglePlay()" title="Play/Pausa"><i class="fa-solid fa-play"></i></button>
+        <button type="button" class="btn btn-ghost btn-icon" onclick="physStep(1)" title="Avanti 1 frame"><i class="fa-solid fa-forward-step"></i></button>
+        <input id="phys-seek" type="range" min="0" max="1000" value="0" step="1" oninput="physSeekFromRange(this.value)" style="flex:1;min-width:120px">
+        <span id="phys-time" class="num" style="min-width:66px;text-align:right;font-size:.8rem;color:var(--muted)">0.000s</span>
+    </div>
+    <div class="fg" style="max-width:170px;margin-top:8px"><label>FPS video (per lo step)</label><input id="phys-fps" type="number" min="1" max="240" value="${PHYS.fps}" onchange="PHYS.fps=parseFloat(this.value)||30"></div>`;
+}
+function physRedraw(){
+    const cv=document.getElementById('phys-canvas'); if(!cv) return;
+    const ctx=cv.getContext('2d'); ctx.clearRect(0,0,cv.width,cv.height);
+    if(PHYS && PHYS.overlayDraw) PHYS.overlayDraw(ctx,cv);
+}
+function physDot(ctx,cv,x,y,color){ ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,Math.max(4,cv.width*0.008),0,Math.PI*2); ctx.fill(); }
+function physUpdateTimeUI(){
+    const v=document.getElementById('phys-video'); if(!v||!PHYS) return;
+    const t=document.getElementById('phys-time'); if(t) t.textContent=v.currentTime.toFixed(3)+'s';
+    const seek=document.getElementById('phys-seek'); if(seek && document.activeElement!==seek) seek.value=Math.round(v.currentTime*1000);
+    PHYS.lastTime=v.currentTime;
+}
+function physSeekFromRange(ms){ const v=document.getElementById('phys-video'); if(!v) return; v.pause(); v.currentTime=ms/1000; }
+function physStep(dir){ const v=document.getElementById('phys-video'); if(!v||!PHYS) return; v.pause(); const dt=1/(PHYS.fps||30); v.currentTime=Math.max(0,Math.min(v.duration||0, v.currentTime+dir*dt)); }
+function physTogglePlay(){ const v=document.getElementById('phys-video'); if(!v) return; if(v.paused) v.play(); else v.pause(); }
+function physInitVideo(onReady, opts){
+    opts=opts||{};
+    const v=document.getElementById('phys-video'), cv=document.getElementById('phys-canvas'), seek=document.getElementById('phys-seek');
+    v.src=PHYS.videoURL;
+    v.addEventListener('loadedmetadata',()=>{
+        cv.width=v.videoWidth; cv.height=v.videoHeight;
+        if(seek) seek.max=Math.round((v.duration||0)*1000);
+        if(PHYS.lastTime) v.currentTime=Math.min(PHYS.lastTime, v.duration||0);
+        physRedraw(); physUpdateTimeUI();
+        if(onReady) onReady();
+    }, {once:true});
+    v.addEventListener('seeked',physRedraw);
+    v.addEventListener('timeupdate',physUpdateTimeUI);
+    v.addEventListener('play',()=>{ const b=document.getElementById('phys-playbtn'); if(b) b.innerHTML='<i class="fa-solid fa-pause"></i>'; });
+    v.addEventListener('pause',()=>{ const b=document.getElementById('phys-playbtn'); if(b) b.innerHTML='<i class="fa-solid fa-play"></i>'; });
+    cv.onclick = opts.onCanvasClick ? (e)=>{
+        const r=cv.getBoundingClientRect();
+        const x=(e.clientX-r.left)*(cv.width/r.width), y=(e.clientY-r.top)*(cv.height/r.height);
+        opts.onCanvasClick(x,y);
+    } : null;
+}
+/* ---- avvio test ---- */
+function openPhysTest(type){
+    const sel=document.getElementById('phys-'+type+'-player');
+    const pid=parseInt(sel&&sel.value);
+    if(!pid){ toast('Scegli un giocatore prima di avviare il test','info'); return; }
+    PHYS={type, playerId:pid, fps:30, calib:{pts:[],pxPerMeter:null}, markers:{}, videoURL:null, overlayDraw:null, lastTime:0};
+    physStepUpload();
+}
+function physStepUpload(){
+    const label = PHYS.type==='sprint' ? 'Sprint &amp; Reazione' : 'Salto Verticale';
+    const p=playerById(PHYS.playerId);
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-video" style="color:var(--brand)"></i> Test Fisici · ${label}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Giocatore: <b>${p?p.name:'—'}</b></p>
+        ${physCameraNoteHTML()}
+        <div class="fg"><label>Carica il video del test</label><input type="file" accept="video/*" onchange="physPickVideo(this)"></div>
+        <p class="hint" style="margin-top:8px">Da smartphone puoi anche registrarlo al volo scegliendo la fotocamera dal selettore file.</p>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+}
+function physPickVideo(input){
+    const f=input.files&&input.files[0]; if(!f) return;
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS.videoURL=URL.createObjectURL(f);
+    PHYS.calib={pts:[],pxPerMeter:null};
+    physStepCalibrate();
+}
+/* ---- calibrazione (comune ai due moduli) ---- */
+function physStepCalibrate(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-ruler-combined" style="color:var(--brand)"></i> Calibrazione</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        ${physCameraNoteHTML()}
+        <p class="hint" style="margin-bottom:10px">Scorri al frame in cui vedi un riferimento noto e fermo (rete, muro con nastro, linea di campo), poi tocca i suoi due estremi sul video.</p>
+        ${physVideoBlock()}
+        <div id="phys-calib-form" style="margin-top:12px;display:none">
+            <div class="fg"><label>Distanza reale fra i due punti (metri)</label><input id="phys-calib-dist" type="number" min="0.01" step="0.01" placeholder="Es. 1.00"></div>
+            <button type="button" class="btn btn-accent" style="width:100%;margin-top:8px" onclick="physCalibCompute()"><i class="fa-solid fa-check"></i> Calcola calibrazione</button>
+        </div>
+        <div id="phys-calib-result" style="margin-top:12px"></div>
+      </div>`, true);
+    PHYS.calib.pts=[];
+    PHYS.overlayDraw=(ctx,cv)=>{
+        const pts=PHYS.calib.pts;
+        pts.forEach(pt=>physDot(ctx,cv,pt.x,pt.y,'#22C55E'));
+        if(pts.length===2){ ctx.strokeStyle='#22C55E'; ctx.lineWidth=Math.max(2,cv.width*0.004); ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y); ctx.lineTo(pts[1].x,pts[1].y); ctx.stroke(); }
+    };
+    physInitVideo(null, {onCanvasClick:physCalibClick});
+}
+function physCalibClick(x,y){
+    if(PHYS.calib.pts.length>=2) PHYS.calib.pts=[];
+    PHYS.calib.pts.push({x,y});
+    physRedraw();
+    const form=document.getElementById('phys-calib-form');
+    if(form) form.style.display = PHYS.calib.pts.length===2 ? 'block' : 'none';
+}
+function physCalibCompute(){
+    const pts=PHYS.calib.pts;
+    if(pts.length<2){ toast('Tocca i due punti di riferimento sul video','info'); return; }
+    const dist=parseFloat(document.getElementById('phys-calib-dist').value);
+    if(!dist||dist<=0){ toast('Inserisci la distanza reale in metri','info'); return; }
+    const distPx=Math.hypot(pts[1].x-pts[0].x, pts[1].y-pts[0].y);
+    const pxPerMeter=distPx/dist;
+    document.getElementById('phys-calib-result').innerHTML=`
+        <div class="phys-note" style="border-color:var(--brand);background:rgba(34,197,94,.1)">
+            <i class="fa-solid fa-check" style="color:var(--brand)"></i>
+            <div><b>${pxPerMeter.toFixed(1)} px/metro</b> — torna giusto?
+                <div style="display:flex;gap:8px;margin-top:8px">
+                    <button type="button" class="btn btn-accent btn-sm" onclick="physCalibAccept(${pxPerMeter})"><i class="fa-solid fa-check"></i> Sì, continua</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="physCalibRetry()"><i class="fa-solid fa-rotate-left"></i> Ricalibra</button>
+                </div>
+            </div>
+        </div>`;
+}
+function physCalibRetry(){
+    PHYS.calib.pts=[];
+    const form=document.getElementById('phys-calib-form'); if(form) form.style.display='none';
+    const res=document.getElementById('phys-calib-result'); if(res) res.innerHTML='';
+    physRedraw();
+}
+function physCalibAccept(pxPerMeter){
+    PHYS.calib.pxPerMeter=pxPerMeter;
+    if(PHYS.type==='sprint') physStepMarkersSprint(0); else physStepJumpRef();
+}
+/* ---- Modulo A: Sprint + Reazione (3 marcatori) ---- */
+const PHYS_SPRINT_STEPS=[
+    {key:'viola', label:'Via', color:'#8B5CF6', desc:'Scorri il video fino al frame in cui parte il segnale di via (fischio/voce), poi premi "Segna qui".'},
+    {key:'verde', label:'Start movimento', color:'#22C55E', desc:'Scorri fino al frame in cui il giocatore inizia davvero a muoversi, poi premi "Segna qui".'},
+    {key:'rosso', label:'Arrivo', color:'#EF4444', desc:'Scorri fino al frame in cui il giocatore raggiunge la linea di arrivo, tocca il punto sul video e poi premi "Segna qui".'}
+];
+function physStepMarkersSprint(idx){
+    const step=PHYS_SPRINT_STEPS[idx];
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-flag-checkered" style="color:${step.color}"></i> Marcatore ${idx+1}/3 — ${step.label}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">${step.desc}</p>
+        ${physVideoBlock()}
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:12px" id="phys-mark-btn" onclick="physMarkSprint(${idx})" ${step.key==='rosso'?'disabled':''}><i class="fa-solid fa-map-pin"></i> Segna qui</button>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+    PHYS._pendingPoint=null;
+    const needsTap = step.key==='rosso';
+    PHYS.overlayDraw = needsTap ? (ctx,cv)=>{ if(PHYS._pendingPoint) physDot(ctx,cv,PHYS._pendingPoint.x,PHYS._pendingPoint.y,step.color); } : null;
+    physInitVideo(null, needsTap ? {onCanvasClick:(x,y)=>{ PHYS._pendingPoint={x,y}; physRedraw(); const b=document.getElementById('phys-mark-btn'); if(b) b.disabled=false; }} : {});
+}
+function physMarkSprint(idx){
+    const v=document.getElementById('phys-video'), step=PHYS_SPRINT_STEPS[idx];
+    PHYS.markers[step.key]=v.currentTime;
+    if(step.key==='rosso') PHYS.markers.arrivoPx=PHYS._pendingPoint;
+    if(idx<2) physStepMarkersSprint(idx+1); else physStepSprintDistance();
+}
+function physStepSprintDistance(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-ruler-horizontal" style="color:var(--brand)"></i> Distanza sprint</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Distanza nota dello sprint (es. 20 metri) — indipendente dalla calibrazione video: la distanza reale la conosce già l'allenatore.</p>
+        <div class="fg"><label>Distanza (metri)</label><input id="phys-sprint-dist" type="number" min="0.1" step="0.1" placeholder="Es. 20"></div>
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physSaveSprint()"><i class="fa-solid fa-floppy-disk"></i> Calcola e salva</button>
+      </div>`, true);
+}
+function physSaveSprint(){
+    const distanza=parseFloat(document.getElementById('phys-sprint-dist').value);
+    if(!distanza||distanza<=0){ toast('Inserisci la distanza in metri','info'); return; }
+    const m=PHYS.markers;
+    const tempoReazione=+(m.verde-m.viola).toFixed(3);
+    const tempoSprint=+(m.rosso-m.verde).toFixed(3);
+    if(tempoSprint<=0){ toast('Il marcatore Arrivo deve venire dopo Start movimento','danger'); return; }
+    const velocitaMedia=+(distanza/tempoSprint).toFixed(2);
+    const accelerazioneMedia=+(velocitaMedia/tempoSprint).toFixed(2);
+    DB.physicalTests.sprint.push({id:uid(), playerId:PHYS.playerId, date:today().toISOString().slice(0,10),
+        tempoReazione, tempoSprint, distanza, velocitaMedia, accelerazioneMedia});
+    save();
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS=null; closeModal(); toast('Test sprint salvato'); renderPhysHistory();
+}
+/* ---- Modulo B: Salto Verticale (calibrazione + 2 marcatori) ---- */
+function physStepJumpRef(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crosshairs" style="color:var(--brand)"></i> Punto di riferimento</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Scegli il punto del corpo che userai per marcare stacco e massima elevazione: userai sempre lo stesso punto su entrambi i frame.</p>
+        <div class="fg"><label>Punto di riferimento</label><select id="phys-jump-refpt"><option>Bacino</option><option>Mano</option><option>Testa</option><option>Altro</option></select></div>
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physJumpRefConfirm()"><i class="fa-solid fa-arrow-right"></i> Continua</button>
+      </div>`, true);
+}
+function physJumpRefConfirm(){ PHYS.refPoint=document.getElementById('phys-jump-refpt').value; physStepMarkersJump(0); }
+const PHYS_JUMP_STEPS=[
+    {key:'stacco', label:'Stacco da terra', desc:'Scorri fino al frame di stacco da terra e tocca il punto di riferimento sul corpo del giocatore.'},
+    {key:'massimo', label:'Massima elevazione', desc:'Scorri fino al frame di massima elevazione e tocca lo stesso punto di riferimento.'}
+];
+function physStepMarkersJump(idx){
+    const step=PHYS_JUMP_STEPS[idx];
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-arrow-up" style="color:var(--brand)"></i> Marcatore ${idx+1}/2 — ${step.label}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">${step.desc} Punto di riferimento: <b>${PHYS.refPoint}</b>.</p>
+        ${physVideoBlock()}
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:12px" id="phys-mark-btn" onclick="physMarkJump(${idx})" disabled><i class="fa-solid fa-map-pin"></i> Conferma marcatore</button>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+    PHYS._pendingPoint=null;
+    PHYS.overlayDraw=(ctx,cv)=>{ if(PHYS._pendingPoint) physDot(ctx,cv,PHYS._pendingPoint.x,PHYS._pendingPoint.y,'#22C55E'); };
+    physInitVideo(null, {onCanvasClick:(x,y)=>{ PHYS._pendingPoint={x,y}; physRedraw(); const b=document.getElementById('phys-mark-btn'); if(b) b.disabled=false; }});
+}
+function physMarkJump(idx){
+    const step=PHYS_JUMP_STEPS[idx];
+    PHYS.markers[step.key]=PHYS._pendingPoint;
+    if(idx===0) physStepMarkersJump(1); else physSaveJump();
+}
+function physSaveJump(){
+    const {stacco,massimo}=PHYS.markers;
+    const pxDelta=stacco.y-massimo.y; // massima elevazione = y minore (più in alto sullo schermo)
+    if(pxDelta<=0){ toast('Il punto di massima elevazione deve essere più in alto dello stacco','danger'); return; }
+    const altezzaSalto=+((pxDelta/PHYS.calib.pxPerMeter)*100).toFixed(1); // cm
+    DB.physicalTests.jump.push({id:uid(), playerId:PHYS.playerId, date:today().toISOString().slice(0,10),
+        altezzaSalto, puntoRiferimentoUsato:PHYS.refPoint});
+    save();
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS=null; closeModal(); toast('Test salto salvato'); renderPhysHistory();
+}
+
+/* =========================================================
    NAVIGAZIONE
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
     scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>pwaMarkSettings(!!(swReg&&swReg.waiting)),
-    formazione:renderFormazione
+    formazione:renderFormazione, 'test-fisici':renderPhysicalTests
 };
 function go(sec){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -1304,6 +1651,8 @@ function openPlayer(id){
         <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
             <button class="btn btn-accent btn-sm" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi</button>
             <button class="btn btn-ghost btn-sm" onclick="openPlayerCard(${id})"><i class="fa-solid fa-id-badge"></i> Card giocatore</button>
+            <button class="btn btn-ghost btn-sm" onclick="openRadarCompare(${id})"><i class="fa-solid fa-chart-area"></i> Confronta (Radar)</button>
+            <button class="btn btn-ghost btn-sm" onclick="exportGrowthCard(${id})"><i class="fa-solid fa-file-pdf"></i> Esporta Scheda Crescita</button>
             <button class="btn btn-ghost btn-sm" onclick="openImportMental()"><i class="fa-solid fa-brain"></i> Importa statistiche mentali</button>
             <button class="btn btn-ghost btn-sm" onclick="openImportWellness()"><i class="fa-solid fa-heart-pulse"></i> Importa check-in benessere</button>
         </div>
@@ -1370,6 +1719,118 @@ function renderWellnessBlock(p, statCell){
             <div style="margin-top:.8rem">${zonesHtml}</div>
         </div>
         ${histRows?`<div style="margin-top:.8rem"><b style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Aggiornamenti precedenti</b>${histRows}</div>`:''}`;
+}
+
+/* =========================================================
+   RADAR COMPARATIVO (Modulo A, blocco Prompt7)
+   Confronto libero fra 2 giocatori qualsiasi (nessun vincolo di ruolo)
+   oppure giocatore vs media squadra. Riusa i valori già calcolati da
+   radarAttributes()/radarTeamAverage() — nessuna nuova logica statistica.
+   ========================================================= */
+function radarDatasetFor(sel){
+    if(sel==='team') return {label:'Media Squadra', values: radarTeamAverage().map(a=>a.rating)};
+    const id=parseInt(sel), p=playerById(id);
+    return {label:p?p.name:'—', values: p? radarAttributes(id).map(a=>a.rating) : radarDefs(curSport()).map(()=>0)};
+}
+function renderRadarCompare(){
+    const selA=document.getElementById('radar-a'), selB=document.getElementById('radar-b');
+    if(!selA||!selB) return;
+    const dsA=radarDatasetFor(selA.value), dsB=radarDatasetFor(selB.value);
+    dsA.color='var(--brand)'; dsB.color='var(--gold)';
+    const axes=radarDefs(curSport()).map(d=>d[0]);
+    const chart=svgRadar(axes,[dsA,dsB]);
+    const legend=`<div style="display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-top:.6rem">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700"><i style="width:12px;height:12px;border-radius:3px;display:inline-block;background:${dsA.color}"></i>${dsA.label}</span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700"><i style="width:12px;height:12px;border-radius:3px;display:inline-block;background:${dsB.color}"></i>${dsB.label}</span>
+    </div>`;
+    document.getElementById('radar-chart-wrap').innerHTML=chart+legend;
+}
+function openRadarCompare(presetA){
+    const players=DB.players;
+    if(players.length<2){ toast('Servono almeno 2 giocatori in rosa per un confronto','info'); return; }
+    presetA = players.some(p=>p.id===presetA) ? presetA : players[0].id;
+    const defaultB = (players.find(p=>p.id!==presetA)||players[0]).id;
+    const optsA=players.map(p=>`<option value="${p.id}" ${presetA===p.id?'selected':''}>${p.name}</option>`).join('');
+    const optsB='<option value="team">Media Squadra</option>'+players.map(p=>`<option value="${p.id}" ${defaultB===p.id?'selected':''}>${p.name}</option>`).join('');
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-chart-area" style="color:var(--brand)"></i> Confronto Radar</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Confronta due giocatori qualsiasi (o un giocatore con la media squadra) sugli stessi attributi — utile anche per valutare cambi di ruolo.</p>
+        <div class="form-row">
+            <div class="fg"><label>Giocatore A</label><select id="radar-a" onchange="renderRadarCompare()">${optsA}</select></div>
+            <div class="fg"><label>Giocatore B</label><select id="radar-b" onchange="renderRadarCompare()">${optsB}</select></div>
+        </div>
+        <div id="radar-chart-wrap" style="margin-top:1rem"></div>
+      </div>`, true);
+    renderRadarCompare();
+}
+
+/* =========================================================
+   PDF "SCHEDA CRESCITA" (Modulo B, blocco Prompt7)
+   Solo lettura/visualizzazione di dati già calcolati altrove
+   (season stats, presenze, tier, voti). Nessuna modifica ai motori
+   voto/scout esistenti. jsPDF caricato on-demand (stesso schema di
+   loadXLSX/loadImgly), non serve al primo avvio offline.
+   ========================================================= */
+let _jsPDFCtor=null;
+async function loadJsPDF(){ if(_jsPDFCtor) return _jsPDFCtor; const m=await import('https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm'); _jsPDFCtor=m.jsPDF||m.default; return _jsPDFCtor; }
+async function exportGrowthCard(id){
+    const p=playerById(id); if(!p) return;
+    toast('Generazione PDF in corso…','info');
+    try{
+        const JsPDF=await loadJsPDF();
+        const doc=new JsPDF({unit:'mm',format:'a4'});
+        const s=getSeasonStats(id), att=playerAttendance(id), tier=playerTier(id), f=playerForm(id);
+        const voti=getPlayerVoti(id);
+        const oneMonthAgo=new Date(); oneMonthAgo.setDate(oneMonthAgo.getDate()-30);
+        const votiMese=voti.filter(v=>new Date(v.date)>=oneMonthAgo);
+        const mediaMese = votiMese.length? (votiMese.reduce((a,b)=>a+b.voto,0)/votiMese.length) : null;
+        let trendMese='—';
+        if(votiMese.length>=2){
+            const half=Math.ceil(votiMese.length/2), secondHalf=votiMese.slice(half);
+            const primaMeta=votiMese.slice(0,half).reduce((a,b)=>a+b.voto,0)/half;
+            const secondaMeta=secondHalf.length? secondHalf.reduce((a,b)=>a+b.voto,0)/secondHalf.length : primaMeta;
+            const d=secondaMeta-primaMeta;
+            trendMese = d>0.25? 'In crescita' : d<-0.25? 'In calo' : 'Stabile';
+        }
+        const M=20; let y=M;
+        doc.setFont('helvetica','bold'); doc.setFontSize(20); doc.setTextColor(20,30,50);
+        doc.text('Scheda Crescita', M, y); y+=6;
+        doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(90,100,120);
+        doc.text(`${DB.teamName||'Squadra'} · ${fmtDateLong(today().toISOString().slice(0,10))}`, M, y); y+=12;
+        const section=(title)=>{ doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(20,30,50); doc.text(title, M, y); y+=2;
+            doc.setDrawColor(220,225,235); doc.line(M,y,190,y); y+=7; doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(40,48,64); };
+        const row=(label,value)=>{ doc.setFont('helvetica','bold'); doc.text(label+':', M, y); doc.setFont('helvetica','normal'); doc.text(String(value), M+58, y); y+=7; };
+        section('Dati giocatore');
+        row('Nome', p.name);
+        row('Numero maglia', p.number||'—');
+        row('Ruolo', p.role||'—');
+        row('Altezza', p.height? p.height+' cm':'—');
+        y+=4;
+        section('Stato di forma attuale');
+        row('Livello', TIER_LABEL[tier]||tier);
+        row('Media voto stagione', s.avgVoto!=null? s.avgVoto.toFixed(1):'—');
+        row('Andamento recente', f.txt.replace(/^[↑↓→]\s*/,''));
+        y+=4;
+        section('Presenze');
+        row('Presenza allenamenti', att!=null? att+'%':'—');
+        row('Partite disputate', s.matches||0);
+        y+=4;
+        section('Evoluzione nel tempo');
+        doc.text(`Livello attuale: ${TIER_LABEL[tier]||tier}.`, M, y); y+=6;
+        doc.setTextColor(140,148,164); doc.setFontSize(9.5);
+        doc.text("Storico dell'evoluzione disponibile da futuri aggiornamenti.", M, y); y+=10;
+        doc.setTextColor(40,48,64); doc.setFontSize(11);
+        section('Voti scout ultimo mese');
+        row('Numero valutazioni', votiMese.length);
+        row('Media voto', mediaMese!=null? mediaMese.toFixed(1):'—');
+        row('Andamento', trendMese);
+        doc.save(`Scheda-Crescita-${(p.name||'giocatore').replace(/\s+/g,'_')}.pdf`);
+        toast('PDF generato');
+    }catch(err){
+        console.error(err);
+        toast('Impossibile generare il PDF — serve una connessione internet al primo utilizzo','danger');
+    }
 }
 
 /* =========================================================
@@ -3295,7 +3756,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v53';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v55';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4391,6 +4852,30 @@ function playerAttributes(id, sport){
     if(p.mentalStats.percezione!=null) attrs.push({label:'Percezione',short:'PERC',rating:p.mentalStats.percezione,est:false});
   }
   return attrs;
+}
+/* ---- Radar comparativo (Modulo A, blocco Prompt7): stesso set di assi per TUTTI i ruoli,
+   nessuno switch portiere/movimento come nella card — un ruolo "debole" su un asse è
+   informazione valida e va mostrata, non nascosta. Riusa playerCatRatings/cphOverall,
+   nessuna nuova logica di calcolo. */
+function radarDefs(sport){ sport=sport||curSport(); return ATTR_MAP[sport]||ATTR_MAP.pallavolo; }
+function radarAttributes(id){
+  const cats=playerCatRatings(id);
+  const ovr=cphOverall(getSeasonStats(id).avgVoto)||60;
+  return radarDefs(curSport()).map(([label,short,src])=>{
+    const vals=src.map(c=>cats[c]).filter(v=>v!=null);
+    const rating = vals.length? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length*10) : ovr;
+    return {label,short,rating:Math.max(1,Math.min(100,rating))};
+  });
+}
+function radarTeamAverage(){
+  const defs=radarDefs(curSport());
+  const players=activePlayers();
+  if(!players.length) return defs.map(([label])=>({label,rating:0}));
+  const allAttrs=players.map(p=>radarAttributes(p.id));
+  return defs.map((d,i)=>{
+    const vals=allAttrs.map(a=>a[i].rating);
+    return {label:d[0], rating:Math.round(vals.reduce((a,b)=>a+b,0)/vals.length)};
+  });
 }
 function renderCardAttrs(id, sport, el, width){
   if(!el||!el.show) return '';
