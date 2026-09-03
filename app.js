@@ -430,6 +430,10 @@ if(!DB.substitutions) DB.substitutions = {};
 if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
 if(!DB.physicalTests.height) DB.physicalTests.height = [];
 if(!DB.nextId) DB.nextId = Date.now();
+if(!DB.nextPin) DB.nextPin = 1;
+if(!DB.settings) DB.settings = {};
+if(!DB.settings.sync) DB.settings.sync = {teamId:null, teamCode:null, hasEverSynced:false, license:null};
+(DB.players||[]).forEach(p=>{ if(!p.pin) p.pin=String(DB.nextPin++); }); // backfill PIN per i giocatori creati prima del sync online
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
 
@@ -1209,6 +1213,9 @@ function buildLayout(){
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
             <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
+        <div class="card"><h3><i class="fa-solid fa-cloud"></i> Sincronizza online</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Codice squadra e PIN dei giocatori sincronizzati: il giocatore li usa nella sua app per accedere senza file da inviare. Sincronizza un giocatore dalla sua scheda (Condividi → Sincronizza online).</p>
+            <div id="sync-settings-card"></div></div>
         <div class="card"><h3><i class="fa-solid fa-brain"></i> Statistiche mentali</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Mental Gym → "Invia al mister") per aggiornare i suoi valori Riflessi/Percezione sulla card.</p>
             <button class="btn btn-ghost" onclick="openImportMental()"><i class="fa-solid fa-file-import"></i> Importa statistiche mentali</button></div>
@@ -1612,7 +1619,7 @@ function physSaveHeight(){
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{ pwaMarkSettings(!!(swReg&&swReg.waiting)); renderBackupStatus(); },
+    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{ pwaMarkSettings(!!(swReg&&swReg.waiting)); renderBackupStatus(); renderSyncSettings(); },
     formazione:renderFormazione, 'test-fisici':renderPhysicalTests
 };
 function go(sec){
@@ -1839,7 +1846,8 @@ function addPlayer(e){
     if(DB.players.some(p=>p.number===number)) return toast(`La maglia ${number} è già assegnata`,'warning');
     DB.players.push({id:uid(),name:document.getElementById('p-name').value.trim(),number,
         role:document.getElementById('p-role').value,hand:document.getElementById('p-hand').value,
-        height:parseInt(document.getElementById('p-height').value)||0,status:'active',isCaptain:false,isViceCaptain:false});
+        height:parseInt(document.getElementById('p-height').value)||0,status:'active',isCaptain:false,isViceCaptain:false,
+        pin:String(DB.nextPin++)});
     save();e.target.reset();renderRoster();toast('Atleta inserito');
 }
 function removePlayer(id){
@@ -4338,6 +4346,12 @@ async function sharePlayer(id){
         <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Oppure codice da copiare</label>
         <textarea id="share-code" readonly style="width:100%;height:90px;margin-top:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace">${code}</textarea>
         <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="copyShare()"><i class="fa-solid fa-copy"></i> Copia codice</button>
+        <div style="border-top:1px solid var(--line,rgba(255,255,255,.12));margin-top:14px;padding-top:14px">
+            <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Oppure sincronizza online</label>
+            <p class="hint" style="margin:4px 0 8px">Il giocatore accede da solo dalla sua app con il codice squadra e il suo PIN — nessun file da inviare.</p>
+            <button class="btn btn-ghost" style="width:100%" id="sync-online-btn" onclick="syncPlayerOnline(${id})"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza online</button>
+            <div id="sync-online-status" style="margin-top:8px;font-size:.82rem;color:var(--muted)"></div>
+        </div>
         ${DEMO_BUILD?`
         <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice di esempio, ma serve l'app Player per riceverlo.</p>`:''}
       </div>`);
@@ -4352,6 +4366,126 @@ async function downloadPlayerPkg(id){
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
     a.href=url; a.download=`profilo-${slug(p.name)}.vtm.json`; a.click(); URL.revokeObjectURL(url);
     toast('File profilo scaricato');
+}
+
+/* =========================================================
+   SYNC ONLINE (Supabase) — la logica sta qui, il trasporto in supabase.js.
+   Terzo canale accanto a file/codice: crea/aggiorna la squadra online al
+   primo utilizzo, assegna un PIN sequenziale a ogni giocatore in addPlayer(),
+   e fa il upsert del pacchetto su player_packages.
+   ========================================================= */
+function genTeamCode(){
+    const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // niente 0/O/1/I, meno ambiguo da leggere/digitare
+    const arr=new Uint32Array(8);
+    (window.crypto||window.msCrypto).getRandomValues(arr);
+    return Array.from(arr,n=>alphabet[n%alphabet.length]).join('');
+}
+async function ensureTeamOnline(){
+    const sync=DB.settings.sync;
+    if(!sync.teamCode) sync.teamCode=genTeamCode();
+    const team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
+    if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
+    sync.teamId=team.id; sync.teamCode=team.team_code; save();
+    return sync;
+}
+async function syncPlayerOnline(id){
+    const statusEl=document.getElementById('sync-online-status');
+    if(typeof AiRIMSync==='undefined'){ if(statusEl) statusEl.textContent='Modulo sync non disponibile: ricarica la pagina e riprova.'; return; }
+    const p=playerById(id); if(!p) return;
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione in corso…';
+    try{
+        const sync=await ensureTeamOnline();
+        const photo=await cIdbGet('p'+id);
+        const pkg=buildPlayerPackage(id,photo);
+        await AiRIMSync.upsertPlayerPackage(sync.teamId, id, p.name, p.pin, pkg);
+        sync.hasEverSynced=true; save();
+        if(statusEl) statusEl.innerHTML=`<span style="color:var(--brand)"><i class="fa-solid fa-circle-check"></i> Sincronizzato.</span> Codice squadra <b>${sync.teamCode}</b> · PIN di ${(p.name||'').split(' ')[0]}: <b>${p.pin}</b>`;
+        toast('Profilo sincronizzato online');
+        renderSyncSettings();
+        checkLicenseOnline(true);
+    }catch(e){
+        if(statusEl) statusEl.textContent='Sync non riuscita: verifica la connessione e riprova.';
+        toast('Sincronizzazione fallita','danger');
+    }
+}
+async function syncAllPlayersOnline(){
+    const btn=document.getElementById('sync-all-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; }
+    let ok=0, fail=0;
+    try{
+        const sync=await ensureTeamOnline();
+        for(const p of DB.players){
+            try{
+                const photo=await cIdbGet('p'+p.id);
+                const pkg=buildPlayerPackage(p.id,photo);
+                await AiRIMSync.upsertPlayerPackage(sync.teamId, p.id, p.name, p.pin, pkg);
+                ok++;
+            }catch(e){ fail++; }
+        }
+        sync.hasEverSynced=true; save();
+        toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
+        checkLicenseOnline(true);
+    }catch(e){
+        toast('Sincronizzazione fallita: verifica la connessione','danger');
+    }
+    renderSyncSettings();
+}
+/* ---------- vista "PIN squadra" + stato licenza in Impostazioni ---------- */
+function renderSyncSettings(){
+    const box=document.getElementById('sync-settings-card'); if(!box) return;
+    const sync=DB.settings.sync;
+    const pinRows=DB.players.length? DB.players.map(p=>
+        `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft)"><span>#${p.number} ${p.name}</span><b style="font-family:'Outfit',sans-serif">${p.pin}</b></div>`
+    ).join('') : '<p class="hint">Nessun giocatore in rosa.</p>';
+    const codeBlock = sync.teamCode
+        ? `<div class="pill" style="background:rgba(34,197,94,.14);color:var(--brand);display:inline-flex;align-items:center;gap:6px;padding:7px 12px;font-family:'Outfit',sans-serif;font-weight:800;letter-spacing:1px">${sync.teamCode}</div>
+           <span class="hint" style="margin-left:8px">codice squadra — il giocatore lo inserisce insieme al suo PIN</span>`
+        : `<p class="hint">Il codice squadra viene generato al primo "Sincronizza online" da una scheda giocatore.</p>`;
+    const licBlock = sync.hasEverSynced ? renderLicenseBadge() : '';
+    box.innerHTML = `${codeBlock}
+        <div style="margin-top:14px">${pinRows}</div>
+        <button class="btn btn-ghost btn-sm" id="sync-all-btn" style="margin-top:12px" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
+        ${licBlock}`;
+}
+function renderLicenseBadge(){
+    const lic=DB.settings.sync.license;
+    if(!lic) return `<p class="hint" style="margin-top:12px">Licenza non ancora verificata.</p>`;
+    const pro=isLicensePro();
+    const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleDateString('it-IT'):'—';
+    return `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${pro?'rgba(34,197,94,.1)':'rgba(240,70,60,.1)'};border:1px solid ${pro?'rgba(34,197,94,.3)':'rgba(240,70,60,.3)'}">
+        <b style="color:${pro?'var(--brand)':'var(--flame)'}"><i class="fa-solid ${pro?'fa-circle-check':'fa-triangle-exclamation'}"></i> Licenza: ${pro?'attiva':'scaduta/non attiva'}</b>
+        <div class="hint" style="margin-top:2px">Ultimo controllo: ${when}</div>
+    </div>`;
+}
+/* ---------- controllo licenza: giornaliero, solo se la squadra ha già sincronizzato online almeno una volta ---------- */
+const LICENSE_CHECK_INTERVAL_MS = 24*3600*1000;
+const LICENSE_OFFLINE_GRACE_DAYS = 5;
+async function checkLicenseOnline(force){
+    const sync=DB.settings.sync;
+    if(!sync.hasEverSynced || !sync.teamId) return; // chi non usa il sync resta gestito dal flag locale come oggi
+    if(typeof AiRIMSync==='undefined') return;
+    const now=Date.now();
+    if(!force && sync.license && sync.license.checkedAt && (now-sync.license.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
+    try{
+        const res=await AiRIMSync.getLicenseStatus(sync.teamId, sync.clubId||null);
+        sync.license={status:res?res.status:'unknown', expiresAt:res?res.expires_at:null, checkedAt:now, lastSuccessAt:now};
+        save();
+    }catch(e){
+        if(sync.license) sync.license.checkedAt=now; // riprova al prossimo check giornaliero, stato noto resta quello vecchio
+        save();
+    }
+    renderSyncSettings();
+}
+/* Stato Pro/limitata calcolato ma non ancora agganciato a nessun blocco funzionalità:
+   l'UI commerciale/paywall è fuori scope in questo blocco (vedi Prompt15). Nessuna
+   scrittura automatica su licenses: qui si legge soltanto. */
+function isLicensePro(){
+    const sync=DB.settings.sync;
+    if(!sync.hasEverSynced) return true; // mai sincronizzato: nessuna restrizione, comportamento locale attuale
+    const lic=sync.license;
+    if(!lic) return true; // non ancora verificata: non blocchiamo preventivamente
+    const now=Date.now();
+    if(lic.lastSuccessAt && (now-lic.lastSuccessAt) > LICENSE_OFFLINE_GRACE_DAYS*86400000) return false; // tolleranza offline scaduta
+    return lic.status==='active' && (!lic.expiresAt || new Date(lic.expiresAt).getTime()>now);
 }
 
 /* ---------- sync inverso: importa il codice "statistiche mentali" inviato dal giocatore (Mental Gym) ---------- */
@@ -4928,6 +5062,7 @@ checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
+setTimeout(()=>checkLicenseOnline(false), 2500);   /* check giornaliero (auto-throttlato), non ad ogni azione */
 
 /* =========================================================
    FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)

@@ -2,11 +2,12 @@
    Aggiornamento controllato: il nuovo SW resta in attesa finché l'utente
    non conferma (banner o pulsante in Impostazioni). skipWaiting solo su richiesta.
    Bump CACHE_VERSION ad ogni rilascio. I dati utente (localStorage) non vengono mai toccati. */
-const CACHE_VERSION = 'volleyteam-v57.';
+const CACHE_VERSION = 'volleyteam-v58.';
 const APP_SHELL = [
   './',
   './index.html',
   './app.js',
+  './supabase.js',
   './soundkit.js',
   './manifest.json',
   './icons/logo-badge.png',
