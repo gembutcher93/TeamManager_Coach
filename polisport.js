@@ -154,8 +154,8 @@
   }
 
   /* ---- NAV IN BASSO (solo mobile; su desktop resta la sidebar) ---- */
-  const NAV_ORDER = ['dashboard', 'roster', 'calendario', 'allenamenti', 'scout', 'rotazioni', 'presenze', 'tattica', 'backup'];
-  const NAV_SHORT = { dashboard: 'Dash', roster: 'Roster', calendario: 'Calend.', allenamenti: 'Allen.', scout: 'Scout', rotazioni: 'Rotaz.', presenze: 'Presenze', tattica: 'Lavagn.', backup: 'Backup' };
+  const NAV_ORDER = ['dashboard', 'roster', 'calendario', 'scout', 'formazione', 'presenze', 'allenamenti', 'test-fisici', 'tattica', 'backup'];
+  const NAV_SHORT = { dashboard: 'Dash', roster: 'Roster', calendario: 'Calend.', allenamenti: 'Allen.', scout: 'Scout', formazione: 'Formaz.', 'test-fisici': 'Test Fis.', presenze: 'Presenze', tattica: 'Lavagn.', backup: 'Impostaz.' };
   function bnActive(sec) {
     document.querySelectorAll('#ps-bottomnav button').forEach(b => b.classList.toggle('active', b.dataset.sec === sec));
     const on = document.querySelector('#ps-bottomnav button.active');

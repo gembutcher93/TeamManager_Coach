@@ -280,13 +280,13 @@ function weightsExplainerHTML(){
 const ADMIN_PASS='coach173';   /* password admin di default — cambiabile qui */
 let WADRAFT=null;              /* copia di lavoro dei pesi durante l'editing */
 function openWeightsAdmin(){
-  const tries=prompt('Password admin per regolare il motore voto:');
-  if(tries===null) return;
-  if(tries!==ADMIN_PASS){ toast('Password errata','info'); return; }
-  WADRAFT=JSON.parse(JSON.stringify(getVolleyWeights()));
-  WEIGHTS_OVERRIDE=WADRAFT;
-  weightsCSS();
-  renderWeightsEditor();
+  promptModal({title:'Accesso admin', text:'Password admin per regolare il motore voto:', type:'password', okText:'Entra', onOk:(tries)=>{
+    if(tries!==ADMIN_PASS){ toast('Password errata','info'); return; }
+    WADRAFT=JSON.parse(JSON.stringify(getVolleyWeights()));
+    WEIGHTS_OVERRIDE=WADRAFT;
+    weightsCSS();
+    renderWeightsEditor();
+  }});
 }
 function closeWeightsAdmin(){ WEIGHTS_OVERRIDE=null; WADRAFT=null; closeModal(); }
 function renderWeightsEditor(){
@@ -704,6 +704,59 @@ function getSeasonStats(pId){
     acc.cells = SCOUT[sport].season(acc);
     return acc;
 }
+/* ---------- multi-ruolo (Task 2): voto medio per un giocatore nello SPECIFICO ruolo giocato ----------
+   Ogni riga di scout salvata da qui in avanti porta con sè il ruolo giocato in quella gara (r.role).
+   Le righe storiche senza quel campo restano attribuite al ruolo attuale del giocatore — comportamento
+   identico a prima per chi non ha mai cambiato ruolo, quindi non retroattivo per chi lo fa in futuro. */
+function playerHasRole(p,role){ return !!p && (p.role===role || (p.secondaryRoles||[]).includes(role)); }
+function votoInRole(pId,role){
+    const p=playerById(pId), out=[];
+    DB.scoutHistory.forEach(m=>{
+        const r=m.rows.find(x=>x.pId===pId);
+        if(!r) return;
+        const playedRole=r.role || (p?p.role:null);
+        if(playedRole===role) out.push(rowVoto(r,m.sport));
+    });
+    return out.length? out.reduce((a,b)=>a+b,0)/out.length : null;
+}
+/* players: array di {p,v} (v = media stagionale sul ruolo primario, come già calcolata dal chiamante).
+   Ritorna i candidati per `role` — titolari di quel ruolo + multi-ruolo che lo hanno tra i secondari —
+   ordinati per voto medio ottenuto proprio in quel ruolo. */
+function byRoleCandidates(players,role){
+    return players.filter(x=>playerHasRole(x.p,role))
+        .map(x=> x.p.role===role ? x : {p:x.p, v:votoInRole(x.p.id,role)})
+        .sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+}
+/* Assegna una lista di ruoli/zone (roleList: un ruolo per slot, duplicati ammessi per i ruoli con più
+   titolari, null per gli slot già occupati manualmente) ai candidati migliori disponibili — inclusi i
+   multi-ruolo. Ad ogni passo sceglie, tra gli slot ancora vuoti, la coppia (slot, miglior candidato per
+   quello slot) col voto più alto; a parità preferisce il ruolo primario del giocatore. Così un
+   multi-ruolo copre un altro ruolo solo se aiuta davvero la formazione, senza "rubare" per puro caso
+   d'ordine il proprio ruolo primario quando nessun altro lo copre meglio. preUsed (opzionale) marca
+   giocatori già assegnati altrove (es. sostituzioni manuali) come non disponibili. */
+function assignRoleSlots(players,roleList,preUsed){
+    const used=preUsed?new Set(preUsed):new Set();
+    const out=new Array(roleList.length).fill(null);
+    const queueCache={};
+    const queueFor=role=>{ if(!queueCache[role]) queueCache[role]=byRoleCandidates(players,role); return queueCache[role]; };
+    const remaining=new Set(); roleList.forEach((r,i)=>{ if(r!=null) remaining.add(i); });
+    while(remaining.size){
+        let bestI=null,bestCand=null,bestScore=-Infinity,bestPrimary=false;
+        remaining.forEach(i=>{
+            const role=roleList[i];
+            const cand=queueFor(role).find(c=>!used.has(c.p.id));
+            if(!cand) return;
+            const score=cand.v==null?-1:cand.v;
+            const primary=cand.p.role===role;
+            if(bestI===null || score>bestScore || (score===bestScore && primary && !bestPrimary)){
+                bestScore=score; bestI=i; bestCand=cand; bestPrimary=primary;
+            }
+        });
+        if(bestI===null) break;
+        out[bestI]=bestCand; used.add(bestCand.p.id); remaining.delete(bestI);
+    }
+    return {picks:out, used};
+}
 function playerForm(pId){ // confronto media ultime 2 vs precedenti
     const v=getPlayerVoti(pId).map(x=>x.voto);
     if(v.length<2) return {dir:'flat',txt:'—'};
@@ -835,6 +888,35 @@ function closeModal(){
     document.getElementById('modal-overlay').classList.remove('show');
     if(typeof PHYS!=='undefined' && PHYS){ if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL); PHYS=null; }
 }
+/* ---------- modale custom al posto di window.prompt() ---------- */
+let _promptCb=null;
+function promptModal(opts){
+    opts=opts||{};
+    _promptCb=typeof opts.onOk==='function'?opts.onOk:null;
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-keyboard" style="color:var(--brand)"></i> ${opts.title||'Inserisci un valore'}</h3>
+        <button class="modal-close" onclick="promptModalCancel()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        ${opts.text?`<p class="hint" style="margin-bottom:10px">${opts.text}</p>`:''}
+        <input id="prompt-modal-input" type="${opts.type||'text'}" placeholder="${opts.placeholder||''}" value="${opts.value||''}"
+          style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16))">
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost" style="flex:1" onclick="promptModalCancel()">${opts.cancelText||'Annulla'}</button>
+          <button class="btn btn-accent" style="flex:1" onclick="promptModalOk()">${opts.okText||'Conferma'}</button>
+        </div>
+      </div>`);
+    setTimeout(()=>{
+        const i=document.getElementById('prompt-modal-input');
+        if(i){ i.focus(); i.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); promptModalOk(); } }; }
+    },50);
+}
+function promptModalOk(){
+    const inp=document.getElementById('prompt-modal-input');
+    const v=inp?inp.value:'';
+    const cb=_promptCb; _promptCb=null;
+    closeModal();
+    if(cb) cb(v);
+}
+function promptModalCancel(){ _promptCb=null; closeModal(); }
 
 /* =========================================================
    LAYOUT — costruzione delle sezioni dentro <main>
@@ -869,6 +951,10 @@ function buildLayout(){
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1rem">
                 <h3 style="margin:0"><i class="fa-solid fa-users"></i> Rosa <span id="roster-count" style="color:var(--muted);font-weight:600;font-size:.85rem"></span></h3>
                 <button class="btn btn-ghost btn-sm" onclick="openRadarCompare()"><i class="fa-solid fa-chart-area"></i> Confronta (Radar)</button>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+                <div class="fg" style="flex:1;min-width:180px;margin:0"><input id="roster-search" placeholder="Cerca per nome…" oninput="setRosterSearch(this.value)"></div>
+                <div id="roster-role-filter" style="display:flex;gap:6px;flex-wrap:wrap"></div>
             </div>
             <div class="table-wrap"><table>
                 <thead><tr><th>Maglia</th><th style="text-align:left">Giocatore</th><th>Ruolo</th><th>Stato</th><th>Media</th><th>Forma</th><th>Pres.</th><th>Azioni</th></tr></thead>
@@ -948,7 +1034,10 @@ function buildLayout(){
     <section id="formazione" class="section">
         <div class="page-head"><div><div class="eyebrow">Meritocrazia</div><h2>Formazione consigliata</h2>
             <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div>
-            <button class="ctx-help-btn" onclick="ctxStart('formazione')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-ghost btn-sm" onclick="exportFormationModal()"><i class="fa-solid fa-image"></i> Esporta formazione</button>
+                <button class="ctx-help-btn" onclick="ctxStart('formazione')" title="Guida rapida"><i class="fa-solid fa-question"></i></button>
+            </div></div>
         <div id="formazione-content"></div>
     </section>
 
@@ -1077,6 +1166,7 @@ function buildLayout(){
             <button class="ctx-help-btn" onclick="ctxStart('backup')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card" id="ctx-backup-export"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON. Salva i dati, non le foto: quelle restano sul dispositivo.</p>
+            <div id="backup-status" style="margin-bottom:1rem"></div>
             <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button></div>
         ${DEMO_BUILD?'':`<div class="card" id="ctx-backup-import"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
@@ -1485,7 +1575,7 @@ function physSaveHeight(){
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>pwaMarkSettings(!!(swReg&&swReg.waiting)),
+    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{ pwaMarkSettings(!!(swReg&&swReg.waiting)); renderBackupStatus(); },
     formazione:renderFormazione, 'test-fisici':renderPhysicalTests
 };
 function go(sec){
@@ -1632,12 +1722,37 @@ function applyTeamLogo(){ const bl=document.getElementById('brand-logo'); if(bl)
    ROSTER
    ========================================================= */
 const STATUS_META={active:{c:'var(--ok)',t:'Disponibile'},injured:{c:'var(--bad)',t:'Infortunato'},suspended:{c:'var(--warn)',t:'Squalificato'}};
+/* ---------- Task 1: ricerca/filtro rapido roster (solo visivo, non tocca DB.players) ---------- */
+let ROSTER_FILTER={q:'',role:''};
+function setRosterSearch(v){ ROSTER_FILTER.q=v; renderRoster(); }
+function setRosterRoleFilter(r){ ROSTER_FILTER.role = ROSTER_FILTER.role===r? '' : r; renderRoster(); }
+function rosterFilterCSS(){
+    if(document.getElementById('roster-filter-css')) return;
+    const st=document.createElement('style'); st.id='roster-filter-css';
+    st.textContent=`.rf-chip{border:1px solid var(--line,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:9px;padding:6px 12px;font-weight:700;font-family:'Outfit',sans-serif;font-size:.78rem;cursor:pointer;}
+    .rf-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}`;
+    document.head.appendChild(st);
+}
+function renderRosterRoleChips(){
+    const box=document.getElementById('roster-role-filter'); if(!box) return;
+    const roles=[...new Set(DB.players.map(p=>p.role))];
+    if(!roles.length){ box.innerHTML=''; return; }
+    box.innerHTML=`<button type="button" class="rf-chip${!ROSTER_FILTER.role?' on':''}" onclick="setRosterRoleFilter('')">Tutti</button>`+
+        roles.map(r=>`<button type="button" class="rf-chip${ROSTER_FILTER.role===r?' on':''}" onclick="setRosterRoleFilter('${r}')">${r}</button>`).join('');
+}
 function renderRoster(){
+    rosterFilterCSS();
     const body=document.getElementById('roster-body');
-    document.getElementById('roster-count').textContent=`(${DB.players.length} in rosa)`;
+    renderRosterRoleChips();
+    const q=(ROSTER_FILTER.q||'').trim().toLowerCase();
+    const roleF=ROSTER_FILTER.role;
+    const list=DB.players.filter(p=>(!roleF||p.role===roleF)&&(!q||p.name.toLowerCase().includes(q)));
+    document.getElementById('roster-count').textContent = list.length===DB.players.length
+        ? `(${DB.players.length} in rosa)` : `(${list.length} su ${DB.players.length})`;
     if(!DB.players.length){body.innerHTML=`<tr class="empty-row"><td colspan="8">Nessun atleta. Aggiungi il primo giocatore qui sopra.</td></tr>`;return;}
+    if(!list.length){body.innerHTML=`<tr class="empty-row"><td colspan="8">Nessun giocatore corrisponde alla ricerca/filtro.</td></tr>`;return;}
     body.innerHTML='';
-    DB.players.forEach(p=>{
+    list.forEach(p=>{
         const s=getSeasonStats(p.id), f=playerForm(p.id), att=playerAttendance(p.id);
         let lead='', jcls='';
         if(p.isCaptain){lead='<span class="lead-tag c">👑 C</span>';jcls='captain';}
@@ -1655,6 +1770,7 @@ function renderRoster(){
             <td><span class="delta ${f.dir}" style="font-size:.78rem;font-weight:700">${f.txt}</span></td>
             <td class="num">${att!==null?att+'%':'—'}</td>
             <td><div class="row-actions no-open"><button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();openPlayer(${p.id})" title="Scheda"><i class="fa-solid fa-eye"></i></button>
+                <button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();editPlayer(${p.id})" title="Modifica dati anagrafici"><i class="fa-solid fa-pen"></i></button>
                 <button class="btn btn-accent btn-icon" onclick="event.stopPropagation();sharePlayer(${p.id})" title="Condividi codice col giocatore"><i class="fa-solid fa-share-nodes"></i></button>
                 <button class="btn btn-danger btn-icon" onclick="event.stopPropagation();removePlayer(${p.id})" title="Rimuovi"><i class="fa-solid fa-trash-can"></i></button></div></td>`;
         body.appendChild(tr);
@@ -1675,6 +1791,68 @@ function removePlayer(id){
     confirmAction(`Rimuovere ${p.name} dalla rosa? Lo storico statistiche resterà nei tabellini.`,()=>{
         DB.players=DB.players.filter(x=>x.id!==id);save();renderRoster();toast('Atleta rimosso','info');
     });
+}
+/* ---------- ruoli validi per lo sport della squadra (usati in editing/multi-ruolo) ---------- */
+function sportRoles(){
+    try{
+        if(window.POLISPORT && POLISPORT.SPORTS){
+            const sp=curSport();
+            return (POLISPORT.SPORTS[sp]||POLISPORT.SPORTS.pallavolo).roles;
+        }
+    }catch(e){}
+    return ['Palleggiatore','Schiacciatore','Centrale','Opposto','Libero'];
+}
+/* ---------- Task 1/2: editing anagrafica giocatore esistente + ruoli secondari ---------- */
+function editPlayerSecondaryHtml(role,checked){
+    return sportRoles().filter(r=>r!==role).map(r=>
+        `<label class="ep-sec-chk"><input type="checkbox" value="${r}" ${checked.includes(r)?'checked':''}> ${r}</label>`
+    ).join('');
+}
+function editPlayer(id){
+    const p=playerById(id); if(!p) return;
+    const roles=sportRoles();
+    const secondary=p.secondaryRoles||[];
+    closeModal();
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-pen" style="color:var(--brand)"></i> Modifica giocatore</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <div class="fg"><label>Nome e cognome</label><input id="ep-name" value="${p.name}"></div>
+        <div class="form-row">
+            <div class="fg" style="min-width:90px;max-width:110px"><label>N° maglia</label><input id="ep-number" type="number" min="1" max="99" value="${p.number}"></div>
+            <div class="fg"><label>Ruolo principale</label><select id="ep-role" onchange="epSyncSecondary()">
+                ${roles.map(r=>`<option value="${r}" ${p.role===r?'selected':''}>${r}</option>`).join('')}</select></div>
+            <div class="fg" style="min-width:80px;max-width:100px"><label>Mano</label>
+                <select id="ep-hand"><option ${(!p.hand||p.hand==='Dx')?'selected':''}>Dx</option><option ${p.hand==='Sx'?'selected':''}>Sx</option></select></div>
+            <div class="fg" style="min-width:90px;max-width:110px"><label>Altezza cm</label><input id="ep-height" type="number" min="120" max="230" value="${p.height||''}"></div>
+        </div>
+        <div class="fg"><label>Ruoli secondari <span class="hint" style="font-weight:400">(opzionale — usati dalla Formazione consigliata)</span></label>
+            <div id="ep-secondary" style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:4px">${editPlayerSecondaryHtml(p.role,secondary)}</div>
+        </div>
+        <button class="btn btn-accent" style="width:100%;margin-top:16px" onclick="savePlayerEdit(${id})"><i class="fa-solid fa-floppy-disk"></i> Salva modifiche</button>
+        <p class="hint" style="margin-top:8px">Storico, statistiche, scout e presenze restano collegati a questo giocatore: non vengono toccati.</p>
+      </div>`, true);
+}
+function epSyncSecondary(){
+    const role=document.getElementById('ep-role').value;
+    const box=document.getElementById('ep-secondary');
+    const checked=Array.from(box.querySelectorAll('input:checked')).map(x=>x.value);
+    box.innerHTML=editPlayerSecondaryHtml(role,checked);
+}
+function savePlayerEdit(id){
+    const p=playerById(id); if(!p) return;
+    const name=(document.getElementById('ep-name').value||'').trim();
+    const number=parseInt(document.getElementById('ep-number').value);
+    const role=document.getElementById('ep-role').value;
+    if(!name) return toast('Inserisci nome e cognome','warning');
+    if(!number) return toast('Inserisci il numero di maglia','warning');
+    if(!role) return toast('Scegli il ruolo','warning');
+    if(DB.players.some(x=>x.id!==id && x.number===number)) return toast(`La maglia ${number} è già assegnata`,'warning');
+    const secondaryRoles=Array.from(document.querySelectorAll('#ep-secondary input:checked')).map(x=>x.value).filter(r=>r!==role);
+    p.name=name; p.number=number; p.role=role;
+    p.hand=document.getElementById('ep-hand').value;
+    p.height=parseInt(document.getElementById('ep-height').value)||0;
+    p.secondaryRoles=secondaryRoles;
+    save(); renderRoster(); closeModal(); openPlayer(id); toast('Dati giocatore aggiornati');
 }
 function cycleLeadership(id){
     const p=playerById(id);if(!p)return;
@@ -1713,9 +1891,10 @@ function openPlayer(id){
         <div class="player-head">
             <div class="player-avatar" id="cph-av" onclick="pickPhotoCoach(${id})"><div class="cph-im" id="cph-im-${id}">${COACH_PHOTOS[id]?`<img src="${COACH_PHOTOS[id]}">`:p.number}</div><div class="cph-cam"><i class="fa-solid fa-camera"></i></div></div>
             <div class="meta"><h4>${p.name} ${p.isCaptain?'👑':p.isViceCaptain?'🥈':''}</h4>
-                <p>${p.role} · ${p.hand||'Dx'} · ${p.height?p.height+' cm':'altezza n.d.'} · <span class="delta ${f.dir}" style="font-weight:700">${f.txt}</span></p></div>
+                <p>${p.role}${(p.secondaryRoles&&p.secondaryRoles.length)?` <span style="color:var(--muted)">(anche ${p.secondaryRoles.join(', ')})</span>`:''} · ${p.hand||'Dx'} · ${p.height?p.height+' cm':'altezza n.d.'} · <span class="delta ${f.dir}" style="font-weight:700">${f.txt}</span></p></div>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" onclick="editPlayer(${id})"><i class="fa-solid fa-pen"></i> Modifica</button>
             <button class="btn btn-accent btn-sm" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi</button>
             <button class="btn btn-ghost btn-sm" onclick="openPlayerCard(${id})"><i class="fa-solid fa-id-badge"></i> Card giocatore</button>
             <button class="btn btn-ghost btn-sm" onclick="openRadarCompare(${id})"><i class="fa-solid fa-chart-area"></i> Confronta (Radar)</button>
@@ -2666,7 +2845,7 @@ function saveScout(){
     const rows=[];
     document.querySelectorAll('#scout-body tr[data-pid]').forEach(tr=>{
         const pId=parseInt(tr.dataset.pid);const s=readRow(pId);
-        rows.push({pId,...s,voto:+computeVoto(s,null,(playerById(pId)||{}).role).toFixed(1)});
+        rows.push({pId,role:(playerById(pId)||{}).role,...s,voto:+computeVoto(s,null,(playerById(pId)||{}).role).toFixed(1)});
     });
     DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==id);
     DB.scoutHistory.push({matchId:id,date:match.date,opponent:match.notes,sport:curSport(),rows});
@@ -2857,7 +3036,7 @@ function saveScoutTap(){
   activePlayers().forEach(p=>{
     const s=tapDeriveRow(p.id);
     const ov=TAP.override[p.id];
-    const row={pId:p.id, ...s, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'pallavolo').toFixed(1)};
+    const row={pId:p.id, role:p.role, ...s, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'pallavolo').toFixed(1)};
     if(typeof ov==='number') row.votoOverride=ov;
     rows.push(row);
   });
@@ -3114,7 +3293,7 @@ function saveScoutTapBasket(){
     const s=bTapDeriveRow(p.id);
     const ov=BTAP.override[p.id];
     const min=bTapMinValue(p.id);
-    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'basket').toFixed(1)};
+    const row={pId:p.id, role:p.role, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'basket').toFixed(1)};
     if(typeof ov==='number') row.votoOverride=ov;
     rows.push(row);
   });
@@ -3348,7 +3527,7 @@ function saveScoutTapCalcio(){
     const s=cTapDeriveRow(p.id);
     const ov=CTAP.override[p.id];
     const min=cTapMinValue(p.id);
-    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'calcio').toFixed(1)};
+    const row={pId:p.id, role:p.role, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'calcio').toFixed(1)};
     if(typeof ov==='number') row.votoOverride=ov;
     rows.push(row);
   });
@@ -3757,12 +3936,41 @@ function resetTokens(){
 /* =========================================================
    BACKUP
    ========================================================= */
+/* ---------- stato backup (Task 3): traccia data ultimo backup e conteggio ---------- */
+const BACKUP_LOG_KEY='vt_backup_log';
+const BACKUP_WARN_DAYS=7;
+function getBackupLog(){
+    try{ return JSON.parse(localStorage.getItem(BACKUP_LOG_KEY))||{last:null,count:0}; }catch(e){ return {last:null,count:0}; }
+}
+function logBackupDone(){
+    const log=getBackupLog();
+    log.last=new Date().toISOString();
+    log.count=(log.count||0)+1;
+    try{ localStorage.setItem(BACKUP_LOG_KEY, JSON.stringify(log)); }catch(e){}
+}
+function renderBackupStatus(){
+    const box=document.getElementById('backup-status'); if(!box) return;
+    const log=getBackupLog();
+    if(!log.last){
+        box.innerHTML=`<div class="pill" style="background:rgba(240,70,60,.16);color:var(--flame);display:inline-flex;align-items:center;gap:6px;padding:7px 12px">
+            <i class="fa-solid fa-triangle-exclamation"></i> Nessun backup ancora effettuato</div>`;
+        return;
+    }
+    const days=Math.floor((Date.now()-new Date(log.last))/86400000);
+    const late=days>=BACKUP_WARN_DAYS;
+    const col=late?'var(--flame)':'var(--brand)', bg=late?'rgba(240,70,60,.16)':'rgba(34,197,94,.14)';
+    const when=days===0?'oggi':days===1?'ieri':`${days} giorni fa`;
+    box.innerHTML=`<div class="pill" style="background:${bg};color:${col};display:inline-flex;align-items:center;gap:6px;padding:7px 12px">
+            <i class="fa-solid ${late?'fa-triangle-exclamation':'fa-circle-check'}"></i> Ultimo backup: ${when} (${fmtDateLong(log.last.slice(0,10))})</div>
+        <div style="color:var(--muted);font-size:.82rem;margin-top:6px">${log.count} backup effettuat${log.count===1?'o':'i'} in totale.${late?` Sono passati ${days} giorni: fanne uno nuovo.`:''}</div>`;
+}
 function exportData(){
     const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob);const a=document.createElement('a');
     const d=new Date().toISOString().slice(0,10);
     const teamSlug=(DB.teamName||'TEAM').trim().replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-')||'TEAM';
     a.href=url;a.download=`${teamSlug}-Airim-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
+    logBackupDone(); renderBackupStatus();
     toast('Backup scaricato');
 }
 function importData(e){
@@ -3932,22 +4140,18 @@ function computeLineupCalcio(){
 function computeLineupPallavolo(){
   const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const roleList=VOLLEY_ZONES.map(([z])=>roleMap[z][0]);
+  const {picks}=assignRoleSlots(players,roleList);
   const out=[];
-  VOLLEY_ZONES.forEach(([z,x,y])=>{
-    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
-    if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y));
-  });
+  VOLLEY_ZONES.forEach(([z,x,y],i)=>{ const pick=picks[i]; if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y)); });
   return out;
 }
 function computeLineupBasket(){
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const roles=Object.keys(BASKET_POS);
+  const {picks}=assignRoleSlots(players,roles);
   const out=[];
-  Object.keys(BASKET_POS).forEach(role=>{
-    const pick=byRole(role)[0]; if(!pick) return;
-    const [x,y]=BASKET_POS[role]; out.push(lineupSlot(role,pick.p,pick.v,x,y));
-  });
+  roles.forEach((role,i)=>{ const pick=picks[i]; if(!pick) return; const [x,y]=BASKET_POS[role]; out.push(lineupSlot(role,pick.p,pick.v,x,y)); });
   return out;
 }
 function computeLineup(sport){
@@ -3956,6 +4160,68 @@ function computeLineup(sport){
   if(sport==='pallavolo') return computeLineupPallavolo();
   if(sport==='basket') return computeLineupBasket();
   return [];
+}
+/* ---------- export rapido formazione titolare come immagine (condivisione WhatsApp) ---------- */
+function exportFormationModal(){
+  const matches=DB.events.filter(e=>e.type==='Partita').sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const t=today();
+  const next=matches.find(e=>new Date(e.date)>=t);
+  const opts=matches.map(e=>`<option value="${e.id}" ${next&&e.id===next.id?'selected':''}>${fmtDateLong(e.date)} · ${e.notes}</option>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-image" style="color:var(--brand)"></i> Esporta formazione</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <div class="fg"><label>Partita</label><select id="ef-match">${opts||'<option value="">Nessuna partita in calendario</option>'}</select></div>
+      <p class="hint" style="margin-top:6px">Genera un'immagine con la formazione attuale — pronta per essere condivisa nel gruppo prima della gara.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:12px" onclick="downloadFormationImage()"><i class="fa-solid fa-download"></i> Genera e scarica immagine</button>
+    </div>`);
+}
+function roundRectPath(c,x,y,w,h,r){
+  c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+function drawFormationCanvas(sport,slots,match){
+  const W=900,H=1300, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const c=cv.getContext('2d');
+  c.fillStyle='#0A1020'; c.fillRect(0,0,W,H);
+  c.fillStyle='#F3F7FC'; c.font='800 40px Arial,sans-serif'; c.textAlign='center';
+  c.fillText(DB.teamName||'TEAM', W/2, 62);
+  c.font='600 24px Arial,sans-serif'; c.fillStyle='#8395B4';
+  c.fillText(match?`${fmtDateLong(match.date)} · vs ${match.notes}`:'Formazione consigliata', W/2, 98);
+  const fieldTop=140, fieldH=H-fieldTop-56, fieldW=W-80, fieldX=40;
+  const grad=c.createLinearGradient(0,fieldTop,0,fieldTop+fieldH);
+  if(sport==='calcio'){ grad.addColorStop(0,'#1f7a43'); grad.addColorStop(1,'#176135'); }
+  else if(sport==='basket'){ grad.addColorStop(0,'#b5763b'); grad.addColorStop(1,'#95602c'); }
+  else { grad.addColorStop(0,'#0e2a4d'); grad.addColorStop(1,'#0a1f3a'); }
+  c.fillStyle=grad; roundRectPath(c,fieldX,fieldTop,fieldW,fieldH,18); c.fill();
+  c.strokeStyle='rgba(255,255,255,.5)'; c.lineWidth=2; c.strokeRect(fieldX+8,fieldTop+8,fieldW-16,fieldH-16);
+  if(sport==='pallavolo'){ c.beginPath(); c.moveTo(fieldX+8,fieldTop+fieldH/2); c.lineTo(fieldX+fieldW-8,fieldTop+fieldH/2); c.stroke(); }
+  else { c.beginPath(); c.arc(fieldX+fieldW/2,fieldTop+fieldH/2,fieldW*0.13,0,2*Math.PI); c.stroke();
+    c.beginPath(); c.moveTo(fieldX+8,fieldTop+fieldH/2); c.lineTo(fieldX+fieldW-8,fieldTop+fieldH/2); c.stroke(); }
+  slots.forEach(s=>{
+    const x=fieldX+s.x*fieldW, y=fieldTop+s.y*fieldH;
+    c.beginPath(); c.arc(x,y,34,0,2*Math.PI); c.fillStyle='#22C55E'; c.fill();
+    c.lineWidth=3; c.strokeStyle='#fff'; c.stroke();
+    c.fillStyle='#04140A'; c.textAlign='center'; c.textBaseline='middle';
+    c.font='800 26px Arial,sans-serif'; c.fillText(String(s.number||''), x, y-6);
+    c.font='700 13px Arial,sans-serif'; c.fillText((s.playerName||'').split(' ').slice(-1)[0], x, y+16);
+  });
+  c.fillStyle='#8395B4'; c.font='500 18px Arial,sans-serif'; c.textAlign='center';
+  c.fillText('Generato con AIrim TeamManager', W/2, H-18);
+  return cv;
+}
+function downloadFormationImage(){
+  const sel=document.getElementById('ef-match');
+  const matchId=sel?parseInt(sel.value):null;
+  const match=matchId?DB.events.find(e=>e.id===matchId):null;
+  const sport=curSport();
+  let slots; try{ slots=computeLineup(sport); }catch(e){ slots=[]; }
+  if(!slots||!slots.length){ toast('Nessun giocatore disponibile per la formazione','warning'); return; }
+  const cv=drawFormationCanvas(sport,slots,match);
+  const teamSlug=(DB.teamName||'TEAM').trim().replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-')||'TEAM';
+  const a=document.createElement('a');
+  a.href=cv.toDataURL('image/png');
+  a.download=`${teamSlug}-formazione${match?'-'+match.date:''}.png`;
+  document.body.appendChild(a); a.click(); a.remove();
+  closeModal(); toast('Immagine formazione scaricata');
 }
 function showLineupOverall(){ return !(DB.settings&&DB.settings.showLineupOverall===false); }
 function setShowLineupOverall(v){ DB.settings=DB.settings||{}; DB.settings.showLineupOverall=!!v; save(); toast(v?'Overall visibile ai giocatori':'Overall nascosto ai giocatori','info'); }
@@ -5017,7 +5283,13 @@ function createTeam(){
 }
 function switchTeam(id){
   const p=getProfiles().find(x=>x.id===id); if(!p) return;
-  if(p.pin){ const e=prompt('PIN per '+p.name); if(e===null) return; if((e||'').trim()!==p.pin){ toast('PIN errato','info'); return; } }
+  if(p.pin){
+    promptModal({title:'Squadra protetta', text:'PIN per '+p.name, type:'password', okText:'Entra', onOk:(e)=>{
+      if((e||'').trim()!==p.pin){ toast('PIN errato','info'); return; }
+      localStorage.setItem(ACTIVE_KEY,id); location.reload();
+    }});
+    return;
+  }
   localStorage.setItem(ACTIVE_KEY,id); location.reload();
 }
 function openCardStudio(){
@@ -5173,13 +5445,13 @@ function getLineupCalcio(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.s
 function soccerLineup(){
   const L=getLineupCalcio(), mod=SOCCER_MODULES[L.module]||SOCCER_MODULES['4-3-3'];
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  const used=new Set(); Object.values(L.subs).forEach(pid=>{ if(pid!=null) used.add(pid); });
-  const pools={};
+  const preUsed=new Set(); Object.values(L.subs).forEach(pid=>{ if(pid!=null) preUsed.add(pid); });
+  const roleList=mod.map((s,i)=> L.subs[i]!=null ? null : s[0]);
+  const {picks,used}=assignRoleSlots(players,roleList,preUsed);
   const slots=mod.map((s,i)=>{
     const role=s[0]; let player=null;
     if(L.subs[i]!=null){ const f=players.find(z=>z.p.id===L.subs[i]); player=f?f.p:null; }
-    else { pools[role]=pools[role]||byRole(role).filter(z=>!used.has(z.p.id)); const pick=pools[role].shift(); if(pick){ used.add(pick.p.id); player=pick.p; } }
+    else { const pick=picks[i]; if(pick) player=pick.p; }
     const pos=L.pos[i]||[s[1],s[2]];
     return {i,role,x:pos[0],y:pos[1],player};
   });
@@ -5305,19 +5577,17 @@ function injectFmzCSS(){
 function pickLineupPallavolo(){
   const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  return VOLLEY_ZONES.map(([z,x,y])=>{
-    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
-    return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
-  });
+  const roleList=VOLLEY_ZONES.map(([z])=>roleMap[z][0]);
+  const {picks}=assignRoleSlots(players,roleList);
+  return VOLLEY_ZONES.map(([z,x,y],i)=>{ const role=roleMap[z][0]; const pick=picks[i];
+    return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null}; });
 }
 function pickLineupBasket(){
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  return Object.keys(BASKET_POS).map(role=>{
-    const pick=byRole(role)[0]; const [x,y]=BASKET_POS[role];
-    return {zone:role,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
-  });
+  const roles=Object.keys(BASKET_POS);
+  const {picks}=assignRoleSlots(players,roles);
+  return roles.map((role,i)=>{ const pick=picks[i]; const [x,y]=BASKET_POS[role];
+    return {zone:role,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null}; });
 }
 /* Riquadro basket inscritto nel viewBox 100x150 con le stesse proporzioni reali (28x15)
    usate da courtRect() nella Lavagnetta Tattica, cosi' il campo non appare piu' storpiato.
