@@ -34,6 +34,46 @@
     return (data && data[0]) || null; // {id, team_code}
   }
 
+  /* ---- Task 4: login coach (Supabase Auth) — una squadra sola per account,
+     niente piu' righe orfane duplicate da reinstall/backup scollegati ---- */
+  async function signUp(email, password) {
+    const sb = await getClient();
+    const { data, error } = await sb.auth.signUp({ email, password });
+    if (error) throw error;
+    // Se "Confirm email" e' attivo sul progetto Supabase, qui data.session e'
+    // null finche' l'utente non conferma via link mail: il chiamante deve
+    // saperlo per NON proseguire come se fosse gia' loggato (vedi Task 3/4:
+    // altrimenti si ricade silenziosamente sul flusso anonimo pre-auth).
+    return { user: data && data.user, session: data && data.session };
+  }
+  async function signIn(email, password) {
+    const sb = await getClient();
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data && data.user;
+  }
+  async function signOut() {
+    const sb = await getClient();
+    const { error } = await sb.auth.signOut();
+    if (error) throw error;
+  }
+  async function getSession() {
+    const sb = await getClient();
+    const { data, error } = await sb.auth.getSession();
+    if (error) throw error;
+    return (data && data.session) || null;
+  }
+
+  /* ---- teams: squadra dell'utente autenticato (crea/reclama/aggiorna) ---- */
+  async function upsertMyTeam(teamName, sport, claimTeamCode) {
+    const sb = await getClient();
+    const { data, error } = await sb.rpc('upsert_my_team', {
+      p_team_name: teamName || null, p_sport: sport || null, p_claim_team_code: claimTeamCode || null
+    });
+    if (error) throw error;
+    return (data && data[0]) || null; // {id, team_code}
+  }
+
   /* ---- player_packages: scrittura (coach) ---- */
   async function upsertPlayerPackage(teamId, playerId, playerName, pin, pkg) {
     const sb = await getClient();
@@ -77,5 +117,6 @@
     return (data && data[0]) || null; // {status, expires_at}
   }
 
-  window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus };
+  window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus,
+    signUp, signIn, signOut, getSession, upsertMyTeam };
 })();

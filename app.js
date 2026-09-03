@@ -430,10 +430,25 @@ if(!DB.substitutions) DB.substitutions = {};
 if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
 if(!DB.physicalTests.height) DB.physicalTests.height = [];
 if(!DB.nextId) DB.nextId = Date.now();
-if(!DB.nextPin) DB.nextPin = 1;
 if(!DB.settings) DB.settings = {};
-if(!DB.settings.sync) DB.settings.sync = {teamId:null, teamCode:null, hasEverSynced:false, license:null};
-(DB.players||[]).forEach(p=>{ if(!p.pin) p.pin=String(DB.nextPin++); }); // backfill PIN per i giocatori creati prima del sync online
+ensureSyncSettings();
+/* Task 1 (Prompt16): PIN casuale invece che sequenziale — un PIN progressivo
+   (1, 2, 3…) e' banale da indovinare per un compagno di squadra che vuole
+   sbirciare la scheda di un altro. 4 cifre casuali, ricontrollate contro i
+   PIN gia' in uso nella rosa per evitare collisioni. */
+function genPlayerPin(){
+    const used=new Set((DB.players||[]).map(p=>p.pin));
+    const arr=new Uint32Array(1);
+    let pin;
+    do{ (window.crypto||window.msCrypto).getRandomValues(arr); pin=String(1000+(arr[0]%9000)); }while(used.has(pin));
+    return pin;
+}
+(DB.players||[]).forEach(p=>{ if(!p.pin) p.pin=genPlayerPin(); }); // backfill PIN per i giocatori creati prima del sync online
+function ensureSyncSettings(){
+    // separata da funzione (non solo top-level) cosi' puo' essere richiamata anche
+    // dopo importData(), che sostituisce l'intero oggetto DB (Task 3/bugfix collegato)
+    if(!DB.settings.sync) DB.settings.sync = {teamId:null, teamCode:null, hasEverSynced:false, license:null};
+}
 function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function uid(){ return DB.nextId++; }
 
@@ -1847,7 +1862,7 @@ function addPlayer(e){
     DB.players.push({id:uid(),name:document.getElementById('p-name').value.trim(),number,
         role:document.getElementById('p-role').value,hand:document.getElementById('p-hand').value,
         height:parseInt(document.getElementById('p-height').value)||0,status:'active',isCaptain:false,isViceCaptain:false,
-        pin:String(DB.nextPin++)});
+        pin:genPlayerPin()});
     save();e.target.reset();renderRoster();toast('Atleta inserito');
 }
 function removePlayer(id){
@@ -4049,7 +4064,13 @@ function importData(e){
             const data=JSON.parse(reader.result);
             if(!data.players||!data.events) throw new Error('formato');
             confirmAction('Importare questo backup? I dati attuali verranno sovrascritti.',()=>{
-                DB=data;if(!DB.nextId)DB.nextId=Date.now();save();renderTeamName();go('dashboard');toast('Backup importato con successo');
+                DB=data;if(!DB.nextId)DB.nextId=Date.now();if(!DB.settings)DB.settings={};ensureSyncSettings();
+                /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
+                   account coach — se il coach e' loggato su questo device, ricollega la
+                   squadra importata al SUO account (owner_user_id) invece di lasciare che
+                   il prossimo "Sincronizza online" ne crei una nuova (squadra duplicata). */
+                save();renderTeamName();go('dashboard');toast('Backup importato con successo');
+                relinkTeamAfterImport();
             });
         }catch(err){toast('File non valido o danneggiato','danger');}
         e.target.value='';
@@ -4099,7 +4120,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v55';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v59';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4371,8 +4392,11 @@ async function downloadPlayerPkg(id){
 /* =========================================================
    SYNC ONLINE (Supabase) — la logica sta qui, il trasporto in supabase.js.
    Terzo canale accanto a file/codice: crea/aggiorna la squadra online al
-   primo utilizzo, assegna un PIN sequenziale a ogni giocatore in addPlayer(),
+   primo utilizzo, assegna un PIN casuale a ogni giocatore in addPlayer(),
    e fa il upsert del pacchetto su player_packages.
+   Task 4 (Prompt16): se il coach e' loggato (Supabase Auth), la squadra
+   e' sempre quella legata al suo account (owner_user_id) — niente piu'
+   team_code random che si perde a ogni reinstall/backup scollegato.
    ========================================================= */
 function genTeamCode(){
     const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // niente 0/O/1/I, meno ambiguo da leggere/digitare
@@ -4380,18 +4404,101 @@ function genTeamCode(){
     (window.crypto||window.msCrypto).getRandomValues(arr);
     return Array.from(arr,n=>alphabet[n%alphabet.length]).join('');
 }
+let COACH_EMAIL=null; // cache locale della sessione Supabase Auth, popolata al boot e dopo login/logout
+async function refreshCoachSession(){
+    if(typeof AiRIMSync==='undefined') return null;
+    try{
+        const session=await AiRIMSync.getSession();
+        COACH_EMAIL=(session&&session.user&&session.user.email)||null;
+        return session;
+    }catch(e){ COACH_EMAIL=null; return null; }
+}
 async function ensureTeamOnline(){
     const sync=DB.settings.sync;
-    if(!sync.teamCode) sync.teamCode=genTeamCode();
-    const team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
+    const session=await refreshCoachSession();
+    let team;
+    if(session){
+        // Task 3/4: coach loggato -> sempre la SUA squadra (crea, reclama quella locale
+        // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
+        team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
+    }else{
+        if(!sync.teamCode) sync.teamCode=genTeamCode();
+        team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
+    }
     if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
     sync.teamId=team.id; sync.teamCode=team.team_code; save();
     return sync;
+}
+/* ---------- Task 4: gate account coach al primo sync online ---------- */
+function requireCoachAccount(onReady,onCancel){
+    if(DB.settings.sync.hasEverSynced){ onReady(); return; } // sync gia' avviato in passato (anche senza account): non blocchiamo un flusso in corso
+    refreshCoachSession().then(session=>{
+        if(session) onReady(); else openCoachAccountModal(onReady,onCancel);
+    });
+}
+function openCoachAccountModal(onSuccess,onCancel){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-user-shield" style="color:var(--brand)"></i> Account coach</h3>
+        <button class="modal-close" onclick="coachAccountDismiss()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Crea o accedi al tuo account: ritroverai sempre la stessa squadra, anche da un altro telefono o dopo aver reinstallato l'app.</p>
+        <input id="acc-email" type="email" placeholder="Email" autocomplete="email" style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16))">
+        <input id="acc-pass" type="password" placeholder="Password" autocomplete="current-password" style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16));margin-top:8px">
+        <div id="acc-status" class="hint" style="margin-top:8px"></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost" style="flex:1" onclick="coachAccountSubmit('signIn')">Accedi</button>
+          <button class="btn btn-accent" style="flex:1" onclick="coachAccountSubmit('signUp')">Crea account</button>
+        </div>
+      </div>`);
+    _coachAccountOnSuccess=typeof onSuccess==='function'?onSuccess:null;
+    _coachAccountOnCancel=typeof onCancel==='function'?onCancel:null;
+}
+let _coachAccountOnSuccess=null, _coachAccountOnCancel=null;
+function coachAccountDismiss(){
+    const cancel=_coachAccountOnCancel; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+    closeModal();
+    if(cancel) cancel();
+}
+async function coachAccountSubmit(mode){
+    const email=(document.getElementById('acc-email').value||'').trim();
+    const pass=document.getElementById('acc-pass').value||'';
+    const statusEl=document.getElementById('acc-status');
+    if(!email||!pass){ if(statusEl) statusEl.textContent='Inserisci email e password.'; return; }
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
+    try{
+        if(mode==='signUp'){
+            const res=await AiRIMSync.signUp(email,pass);
+            if(!res.session){
+                // Progetto Supabase con "Confirm email" ancora attivo (default): l'utente
+                // e' stato creato ma senza sessione attiva. NON procedere con la sync in
+                // sospeso: cadrebbe silenziosamente sul vecchio flusso anonimo (Task 3/4
+                // vanificato) invece di restare bloccata finche' non fa "Accedi" dopo aver
+                // confermato la mail.
+                if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-envelope-circle-check"></i> Account creato: controlla la mail e conferma il link, poi torna qui e premi "Accedi".';
+                return;
+            }
+        }else{
+            await AiRIMSync.signIn(email,pass);
+        }
+        await refreshCoachSession();
+        const cb=_coachAccountOnSuccess; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+        closeModal(); toast(mode==='signUp'?'Account creato':'Accesso effettuato'); renderSyncSettings();
+        if(cb) cb();
+        else if(DB.settings.sync.teamCode){ try{ await ensureTeamOnline(); checkLicenseOnline(true); }catch(e){} } // reclama subito la squadra locale gia' sincronizzata
+    }catch(e){
+        if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
+    }
+}
+async function coachSignOut(){
+    confirmAction('Uscire dall\'account coach su questo dispositivo? La squadra resta sincronizzata online.',async()=>{
+        try{ await AiRIMSync.signOut(); }catch(e){}
+        COACH_EMAIL=null; toast('Disconnesso','info'); renderSyncSettings();
+    });
 }
 async function syncPlayerOnline(id){
     const statusEl=document.getElementById('sync-online-status');
     if(typeof AiRIMSync==='undefined'){ if(statusEl) statusEl.textContent='Modulo sync non disponibile: ricarica la pagina e riprova.'; return; }
     const p=playerById(id); if(!p) return;
+    requireCoachAccount(async()=>{
     if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione in corso…';
     try{
         const sync=await ensureTeamOnline();
@@ -4407,8 +4514,10 @@ async function syncPlayerOnline(id){
         if(statusEl) statusEl.textContent='Sync non riuscita: verifica la connessione e riprova.';
         toast('Sincronizzazione fallita','danger');
     }
+    });
 }
 async function syncAllPlayersOnline(){
+    requireCoachAccount(async()=>{
     const btn=document.getElementById('sync-all-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; }
     let ok=0, fail=0;
     try{
@@ -4428,6 +4537,18 @@ async function syncAllPlayersOnline(){
         toast('Sincronizzazione fallita: verifica la connessione','danger');
     }
     renderSyncSettings();
+    });
+}
+/* ---------- Task 3: dopo import backup, se il coach e' gia' loggato su questo
+   device ricollega subito la squadra importata al suo account (claim del
+   team_code portato dal backup) invece di aspettare il prossimo sync manuale,
+   cosi' non resta mai una finestra in cui un secondo "Sincronizza online"
+   potrebbe generarne una nuova. ---------- */
+async function relinkTeamAfterImport(){
+    if(typeof AiRIMSync==='undefined') return;
+    const session=await refreshCoachSession();
+    if(!session || !DB.settings.sync.hasEverSynced) return;
+    try{ await ensureTeamOnline(); checkLicenseOnline(true); }catch(e){}
 }
 /* ---------- vista "PIN squadra" + stato licenza in Impostazioni ---------- */
 function renderSyncSettings(){
@@ -4440,20 +4561,27 @@ function renderSyncSettings(){
         ? `<div class="pill" style="background:rgba(34,197,94,.14);color:var(--brand);display:inline-flex;align-items:center;gap:6px;padding:7px 12px;font-family:'Outfit',sans-serif;font-weight:800;letter-spacing:1px">${sync.teamCode}</div>
            <span class="hint" style="margin-left:8px">codice squadra — il giocatore lo inserisce insieme al suo PIN</span>`
         : `<p class="hint">Il codice squadra viene generato al primo "Sincronizza online" da una scheda giocatore.</p>`;
+    const accBlock = COACH_EMAIL
+        ? `<div class="hint" style="margin-top:10px"><i class="fa-solid fa-user-shield"></i> Account: <b>${COACH_EMAIL}</b> <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="coachSignOut()">Esci</button></div>`
+        : `<div class="hint" style="margin-top:10px">Nessun account collegato. <button class="btn btn-ghost btn-sm" onclick="openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Accedi / crea account</button></div>`;
     const licBlock = sync.hasEverSynced ? renderLicenseBadge() : '';
     box.innerHTML = `${codeBlock}
         <div style="margin-top:14px">${pinRows}</div>
         <button class="btn btn-ghost btn-sm" id="sync-all-btn" style="margin-top:12px" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
+        ${accBlock}
         ${licBlock}`;
 }
 function renderLicenseBadge(){
     const lic=DB.settings.sync.license;
-    if(!lic) return `<p class="hint" style="margin-top:12px">Licenza non ancora verificata.</p>`;
+    const recheckBtn=`<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla ora</button>`;
+    if(!lic) return `<p class="hint" style="margin-top:12px">Licenza non ancora verificata.</p>${recheckBtn}`;
     const pro=isLicensePro();
     const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleDateString('it-IT'):'—';
+    const label = lic.status==='active' ? 'attiva' : (lic.status==='unknown' ? 'nessuna licenza associata' : 'scaduta/non attiva');
     return `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${pro?'rgba(34,197,94,.1)':'rgba(240,70,60,.1)'};border:1px solid ${pro?'rgba(34,197,94,.3)':'rgba(240,70,60,.3)'}">
-        <b style="color:${pro?'var(--brand)':'var(--flame)'}"><i class="fa-solid ${pro?'fa-circle-check':'fa-triangle-exclamation'}"></i> Licenza: ${pro?'attiva':'scaduta/non attiva'}</b>
+        <b style="color:${pro?'var(--brand)':'var(--flame)'}"><i class="fa-solid ${pro?'fa-circle-check':'fa-triangle-exclamation'}"></i> Licenza: ${label}</b>
         <div class="hint" style="margin-top:2px">Ultimo controllo: ${when}</div>
+        ${recheckBtn}
     </div>`;
 }
 /* ---------- controllo licenza: giornaliero, solo se la squadra ha già sincronizzato online almeno una volta ---------- */
@@ -5062,6 +5190,7 @@ checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
+setTimeout(()=>refreshCoachSession().then(renderSyncSettings), 2000);   /* Task 4: sa gia' se il coach e' loggato prima che apra Impostazioni */
 setTimeout(()=>checkLicenseOnline(false), 2500);   /* check giornaliero (auto-throttlato), non ad ogni azione */
 
 /* =========================================================
