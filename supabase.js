@@ -117,6 +117,20 @@
     return (data && data[0]) || null; // {status, expires_at}
   }
 
+  /* ---- Task 2/3 (Prompt17): log clickwrap privacy policy — solo per utenti
+     autenticati, una riga per ogni accettazione (mai sovrascritta) ---- */
+  async function recordPolicyAcceptance(policyVersion, policyHash) {
+    const sb = await getClient();
+    const { error } = await sb.rpc('record_policy_acceptance', { p_policy_version: policyVersion, p_policy_hash: policyHash });
+    if (error) throw error;
+  }
+  async function getMyPolicyAcceptance() {
+    const sb = await getClient();
+    const { data, error } = await sb.rpc('get_my_policy_acceptance');
+    if (error) throw error;
+    return (data && data[0]) || null; // {policy_version, policy_hash, accepted_at}
+  }
+
   window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus,
-    signUp, signIn, signOut, getSession, upsertMyTeam };
+    signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance };
 })();

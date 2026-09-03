@@ -4120,7 +4120,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v59';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v60';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4429,11 +4429,128 @@ async function ensureTeamOnline(){
     sync.teamId=team.id; sync.teamCode=team.team_code; save();
     return sync;
 }
+/* =========================================================
+   PRIVACY POLICY — clickwrap con log di accettazione (Prompt17).
+   Testo verbatim di privacy_policy_airim.md: NON alterare senza bumpare
+   POLICY_VERSION (Task 4 — un bump forza una nuova accettazione esplicita
+   ad ogni coach al prossimo accesso/sync online).
+   ========================================================= */
+const POLICY_VERSION = 'v1.0 — 2026-09-03';
+const POLICY_TEXT = `PRIVACY POLICY E TERMINI DI SERVIZIO — AIrim Team Manager
+
+Accettando questa informativa (spunta "Accetto" in fase di registrazione), la Società Sportiva conferma di aver letto e compreso i termini sottostanti e stipula con lo Sviluppatore un accordo relativo al trattamento dei dati inseriti nell'applicazione.
+
+1. Definizione dei Ruoli nel Trattamento dei Dati
+
+- Titolare del Trattamento (Data Controller): la Società Sportiva / ASD che utilizza l'applicazione e vi inserisce i dati dei propri atleti e tesserati. La Società Sportiva è responsabile della liceità del trattamento, della veridicità dei dati inseriti e della preventiva raccolta dei consensi (inclusi quelli genitoriali per i minori, vedi punto 2).
+- Responsabile del Trattamento (Data Processor): l'Amministratore/Sviluppatore dell'applicazione, che fornisce l'infrastruttura software in modalità SaaS e il relativo database per la gestione tecnica dell'applicazione, operando sulla base delle istruzioni della Società Sportiva.
+
+Ai sensi dell'art. 28 del Regolamento (UE) 2016/679 (GDPR), il presente documento costituisce l'accordo di nomina a Responsabile del Trattamento tra la Società Sportiva (Titolare) e lo Sviluppatore (Responsabile).
+
+2. Trattamento Dati di Minori e Consenso Genitoriale
+
+L'inserimento nell'applicazione di dati relativi a soggetti minorenni è effettuato sotto la responsabilità della Società Sportiva, in qualità di Titolare del Trattamento. La Società Sportiva dichiara di aver raccolto, prima dell'inserimento dei dati, il consenso informato dei genitori o tutori legali dei minori tesserati, tramite il modulo fornito in calce a questo documento o modulo equivalente.
+
+3. Dati Raccolti (principio di minimizzazione)
+
+L'applicazione raccoglie e memorizza i seguenti dati, strettamente necessari alla gestione dell'attività sportiva:
+
+- Nome e cognome del tesserato
+- Ruolo di gioco, numero di maglia, altezza indicativa
+- Statistiche di gara (gol, presenze, convocazioni, minuti giocati, valutazioni tecniche)
+- Fotografia del tesserato, se caricata volontariamente dalla Società o dal tesserato/genitore per la personalizzazione della scheda giocatore (facoltativa, non richiesta per l'uso base dell'applicazione)
+
+L'applicazione non richiede e non tratta dati sanitari, certificati medici, codici fiscali, documenti d'identità o dati di geolocalizzazione.
+
+4. Sicurezza, Conservazione e Limitazione di Responsabilità
+
+I dati sono conservati su infrastrutture Cloud di terze parti (Supabase, basata su infrastruttura AWS), con accesso protetto da autenticazione. I dati raccolti non vengono venduti, ceduti o comunicati a terzi per finalità commerciali o di marketing.
+
+In conformità all'art. 82 del GDPR, il Responsabile del Trattamento risponde dei danni derivanti dal trattamento solo qualora non abbia rispettato gli obblighi specificamente rivolti ai responsabili del trattamento dal Regolamento, oppure abbia agito in modo difforme o contrario alle istruzioni legittime impartite dal Titolare. Lo Sviluppatore non potrà essere ritenuto responsabile per intrusioni informatiche, vulnerabilità o violazioni dei dati (Data Breach) derivanti da falle di sicurezza dell'infrastruttura Cloud di terze parti o da eventi che esulano dal proprio ragionevole controllo tecnico. In caso di Data Breach relativo ai server terzi, lo Sviluppatore si impegna a notificare tempestivamente l'evento alla Società Sportiva interessata, nei termini di legge.
+
+5. Cancellazione e Rettifica dei Dati
+
+La Società Sportiva si impegna a modificare o cancellare tempestivamente i dati di un tesserato su richiesta dell'interessato o del genitore/tutore del minore. Lo Sviluppatore garantisce la cancellazione dei dati dai propri database in caso di cessazione dell'account da parte della Società Sportiva, salvo diversi obblighi di conservazione previsti dalla legge.
+
+---
+
+MODULO PER LE FAMIGLIE
+Testo da copiare nel modulo di iscrizione della Società Sportiva
+
+Il/la sottoscritto/a, genitore/tutore legale dell'atleta ____________________,
+autorizza l'Associazione Sportiva [Nome Squadra] al trattamento dei dati
+personali del/della minore (nome, cognome, ruolo, altezza indicativa,
+statistiche di gara ed eventuale fotografia) tramite l'applicazione
+gestionale "AIrim Team Manager", che conserva i dati su infrastruttura
+cloud Supabase, al solo fine di organizzare l'attività sportiva,
+gli allenamenti, le convocazioni e la valutazione tecnica dell'atleta.
+
+Data: ____________        Firma: ____________________`;
+async function sha256Hex(text){
+    const buf=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function policyScrollHtml(){
+    return `<div id="policy-text-box" style="max-height:260px;overflow-y:auto;padding:12px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));border:1px solid var(--line,rgba(255,255,255,.16));font-size:.85rem;line-height:1.55;white-space:pre-wrap"></div>`;
+}
+function mountPolicyText(){
+    // testContent (non innerHTML): garantisce che il testo mostrato sia byte-per-byte
+    // lo stesso che viene hashato in coachAccountFinishSignup/coachAcceptPolicyGate.
+    const box=document.getElementById('policy-text-box'); if(box) box.textContent=POLICY_TEXT;
+}
+function openPolicyViewer(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-shield" style="color:var(--brand)"></i> Privacy Policy e Termini</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">${policyScrollHtml()}</div>`, true);
+    mountPolicyText();
+}
+let COACH_POLICY=null; // {policy_version, policy_hash, accepted_at} cache per la vista Impostazioni (Task 3)
+/* Task 4: gate versione — se l'utente loggato non ha ancora accettato POLICY_VERSION
+   corrente (mai, o una versione precedente), mostra di nuovo il clickwrap prima di
+   proseguire. Usata sia nel gate di sync online sia proattivamente al boot. */
+function ensurePolicyAccepted(onDone){
+    AiRIMSync.getMyPolicyAcceptance().then(acc=>{
+        COACH_POLICY=acc; renderSyncSettings();
+        if(acc && acc.policy_version===POLICY_VERSION){ onDone(); return; }
+        openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-shield" style="color:var(--brand)"></i> ${acc?'Termini aggiornati':'Privacy Policy e Termini'}</h3>
+            <button class="modal-close" onclick="_policyGateOnDone=null;closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+          <div class="modal-body">
+            <p class="hint" style="margin-bottom:10px">${acc?'La Privacy Policy e i Termini di Servizio sono stati aggiornati: leggili e accettali di nuovo per continuare a sincronizzare online.':'Prima di sincronizzare online, leggi e accetta la Privacy Policy e i Termini di Servizio.'}</p>
+            ${policyScrollHtml()}
+            <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:.85rem;cursor:pointer">
+              <input type="checkbox" id="policy-accept-chk" onchange="document.getElementById('policy-signup-btn').disabled=!this.checked" style="margin-top:3px">
+              <span>Ho letto e accetto i Termini di Servizio e la Privacy Policy</span>
+            </label>
+            <div id="acc-status" class="hint" style="margin-top:8px"></div>
+            <button class="btn btn-accent" style="width:100%;margin-top:14px" id="policy-signup-btn" disabled onclick="coachAcceptPolicyGate()">Accetto e continuo</button>
+          </div>`);
+        mountPolicyText();
+        _policyGateOnDone=onDone;
+    }).catch(()=>{ onDone(); }); // check non riuscito (offline): non blocchiamo, si ritenta al prossimo giro
+}
+let _policyGateOnDone=null;
+async function coachAcceptPolicyGate(){
+    const statusEl=document.getElementById('acc-status');
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
+    try{
+        const hash=await sha256Hex(POLICY_TEXT);
+        await AiRIMSync.recordPolicyAcceptance(POLICY_VERSION, hash);
+        COACH_POLICY={policy_version:POLICY_VERSION, policy_hash:hash, accepted_at:new Date().toISOString()};
+        const done=_policyGateOnDone; _policyGateOnDone=null;
+        closeModal(); renderSyncSettings();
+        if(done) done();
+    }catch(e){
+        if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
+    }
+}
 /* ---------- Task 4: gate account coach al primo sync online ---------- */
 function requireCoachAccount(onReady,onCancel){
-    if(DB.settings.sync.hasEverSynced){ onReady(); return; } // sync gia' avviato in passato (anche senza account): non blocchiamo un flusso in corso
+    if(DB.settings.sync.hasEverSynced){
+        refreshCoachSession().then(session=>{ if(session) ensurePolicyAccepted(onReady); else onReady(); });
+        return;
+    } // sync gia' avviato in passato (anche senza account): non blocchiamo un flusso in corso, salvo l'eventuale gate versione policy se nel frattempo si e' loggato
     refreshCoachSession().then(session=>{
-        if(session) onReady(); else openCoachAccountModal(onReady,onCancel);
+        if(session) ensurePolicyAccepted(onReady); else openCoachAccountModal(onReady,onCancel);
     });
 }
 function openCoachAccountModal(onSuccess,onCancel){
@@ -4446,44 +4563,98 @@ function openCoachAccountModal(onSuccess,onCancel){
         <div id="acc-status" class="hint" style="margin-top:8px"></div>
         <div style="display:flex;gap:8px;margin-top:14px">
           <button class="btn btn-ghost" style="flex:1" onclick="coachAccountSubmit('signIn')">Accedi</button>
-          <button class="btn btn-accent" style="flex:1" onclick="coachAccountSubmit('signUp')">Crea account</button>
+          <button class="btn btn-accent" style="flex:1" onclick="coachAccountGoToPolicy()">Crea account</button>
         </div>
       </div>`);
     _coachAccountOnSuccess=typeof onSuccess==='function'?onSuccess:null;
     _coachAccountOnCancel=typeof onCancel==='function'?onCancel:null;
 }
-let _coachAccountOnSuccess=null, _coachAccountOnCancel=null;
+let _coachAccountOnSuccess=null, _coachAccountOnCancel=null, _pendingSignup=null;
 function coachAccountDismiss(){
-    const cancel=_coachAccountOnCancel; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+    const cancel=_coachAccountOnCancel; _coachAccountOnSuccess=null; _coachAccountOnCancel=null; _pendingSignup=null;
     closeModal();
     if(cancel) cancel();
 }
+/* Task 1 (Prompt17): step intermedio obbligatorio della registrazione — email e
+   password sono gia' state inserite ma il signup vero e proprio (coachAccountFinishSignup)
+   parte solo dopo aver spuntato la checkbox di accettazione qui sotto. */
+function coachAccountGoToPolicy(){
+    const email=(document.getElementById('acc-email').value||'').trim();
+    const pass=document.getElementById('acc-pass').value||'';
+    const statusEl=document.getElementById('acc-status');
+    if(!email||!pass){ if(statusEl) statusEl.textContent='Inserisci email e password.'; return; }
+    _pendingSignup={email,pass};
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-shield" style="color:var(--brand)"></i> Privacy Policy e Termini</h3>
+        <button class="modal-close" onclick="coachAccountDismiss()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        ${policyScrollHtml()}
+        <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:.85rem;cursor:pointer">
+          <input type="checkbox" id="policy-accept-chk" onchange="document.getElementById('policy-signup-btn').disabled=!this.checked" style="margin-top:3px">
+          <span>Ho letto e accetto i Termini di Servizio e la Privacy Policy</span>
+        </label>
+        <div id="acc-status" class="hint" style="margin-top:8px"></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost" style="flex:1" onclick="coachAccountBack()">Indietro</button>
+          <button class="btn btn-accent" style="flex:1" id="policy-signup-btn" disabled onclick="coachAccountFinishSignup()">Registrati</button>
+        </div>
+      </div>`);
+    mountPolicyText();
+}
+function coachAccountBack(){
+    const pending=_pendingSignup;
+    openCoachAccountModal(_coachAccountOnSuccess,_coachAccountOnCancel);
+    if(pending){
+        const e=document.getElementById('acc-email'), p=document.getElementById('acc-pass');
+        if(e) e.value=pending.email; if(p) p.value=pending.pass;
+    }
+}
+async function coachAccountFinishSignup(){
+    const pending=_pendingSignup||{}; const email=pending.email, pass=pending.pass;
+    const statusEl=document.getElementById('acc-status');
+    if(!email||!pass) return;
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
+    try{
+        const res=await AiRIMSync.signUp(email,pass);
+        if(!res.session){
+            // Progetto Supabase con "Confirm email" ancora attivo (default): l'utente
+            // e' stato creato ma senza sessione attiva. NON procedere con la sync in
+            // sospeso ne' con la registrazione dell'accettazione (serve auth.uid(), che
+            // richiede una sessione vera): altrimenti si ricadrebbe silenziosamente sul
+            // vecchio flusso anonimo (Task 3/4 vanificato). L'accettazione verra'
+            // registrata al primo "Accedi" riuscito, tramite il gate versione qui sopra.
+            if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-envelope-circle-check"></i> Account creato: controlla la mail e conferma il link, poi torna qui e premi "Accedi".';
+            return;
+        }
+        await refreshCoachSession();
+        const hash=await sha256Hex(POLICY_TEXT);
+        await AiRIMSync.recordPolicyAcceptance(POLICY_VERSION, hash);
+        COACH_POLICY={policy_version:POLICY_VERSION, policy_hash:hash, accepted_at:new Date().toISOString()};
+        _pendingSignup=null;
+        const cb=_coachAccountOnSuccess; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+        closeModal(); toast('Account creato'); renderSyncSettings();
+        if(cb) cb();
+        else if(DB.settings.sync.teamCode){ try{ await ensureTeamOnline(); checkLicenseOnline(true); }catch(e){} } // reclama subito la squadra locale gia' sincronizzata
+    }catch(e){
+        if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
+    }
+}
 async function coachAccountSubmit(mode){
+    // usato solo per 'signIn': il signup passa da coachAccountGoToPolicy (clickwrap prima del signup vero)
     const email=(document.getElementById('acc-email').value||'').trim();
     const pass=document.getElementById('acc-pass').value||'';
     const statusEl=document.getElementById('acc-status');
     if(!email||!pass){ if(statusEl) statusEl.textContent='Inserisci email e password.'; return; }
     if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
     try{
-        if(mode==='signUp'){
-            const res=await AiRIMSync.signUp(email,pass);
-            if(!res.session){
-                // Progetto Supabase con "Confirm email" ancora attivo (default): l'utente
-                // e' stato creato ma senza sessione attiva. NON procedere con la sync in
-                // sospeso: cadrebbe silenziosamente sul vecchio flusso anonimo (Task 3/4
-                // vanificato) invece di restare bloccata finche' non fa "Accedi" dopo aver
-                // confermato la mail.
-                if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-envelope-circle-check"></i> Account creato: controlla la mail e conferma il link, poi torna qui e premi "Accedi".';
-                return;
-            }
-        }else{
-            await AiRIMSync.signIn(email,pass);
-        }
+        await AiRIMSync.signIn(email,pass);
         await refreshCoachSession();
-        const cb=_coachAccountOnSuccess; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
-        closeModal(); toast(mode==='signUp'?'Account creato':'Accesso effettuato'); renderSyncSettings();
-        if(cb) cb();
-        else if(DB.settings.sync.teamCode){ try{ await ensureTeamOnline(); checkLicenseOnline(true); }catch(e){} } // reclama subito la squadra locale gia' sincronizzata
+        const cb=_coachAccountOnSuccess, cancel=_coachAccountOnCancel; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+        toast('Accesso effettuato');
+        ensurePolicyAccepted(()=>{
+            closeModal(); renderSyncSettings();
+            if(cb) cb();
+            else if(DB.settings.sync.teamCode){ ensureTeamOnline().then(()=>checkLicenseOnline(true)).catch(()=>{}); }
+        });
     }catch(e){
         if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
     }
@@ -4491,7 +4662,7 @@ async function coachAccountSubmit(mode){
 async function coachSignOut(){
     confirmAction('Uscire dall\'account coach su questo dispositivo? La squadra resta sincronizzata online.',async()=>{
         try{ await AiRIMSync.signOut(); }catch(e){}
-        COACH_EMAIL=null; toast('Disconnesso','info'); renderSyncSettings();
+        COACH_EMAIL=null; COACH_POLICY=null; toast('Disconnesso','info'); renderSyncSettings();
     });
 }
 async function syncPlayerOnline(id){
@@ -4564,11 +4735,16 @@ function renderSyncSettings(){
     const accBlock = COACH_EMAIL
         ? `<div class="hint" style="margin-top:10px"><i class="fa-solid fa-user-shield"></i> Account: <b>${COACH_EMAIL}</b> <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="coachSignOut()">Esci</button></div>`
         : `<div class="hint" style="margin-top:10px">Nessun account collegato. <button class="btn btn-ghost btn-sm" onclick="openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Accedi / crea account</button></div>`;
+    /* ---------- Task 3 (Prompt17): vista "Termini accettati" ---------- */
+    const termsBlock = COACH_EMAIL
+        ? `<div class="hint" style="margin-top:6px"><i class="fa-solid fa-file-shield"></i> Termini: ${COACH_POLICY? `accettati (${COACH_POLICY.policy_version}) il ${new Date(COACH_POLICY.accepted_at).toLocaleDateString('it-IT')}` : 'in verifica…'} <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="openPolicyViewer()">Rileggi</button></div>`
+        : `<div class="hint" style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="openPolicyViewer()"><i class="fa-solid fa-file-shield"></i> Leggi Privacy Policy e Termini</button></div>`;
     const licBlock = sync.hasEverSynced ? renderLicenseBadge() : '';
     box.innerHTML = `${codeBlock}
         <div style="margin-top:14px">${pinRows}</div>
         <button class="btn btn-ghost btn-sm" id="sync-all-btn" style="margin-top:12px" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
         ${accBlock}
+        ${termsBlock}
         ${licBlock}`;
 }
 function renderLicenseBadge(){
@@ -5190,7 +5366,7 @@ checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
-setTimeout(()=>refreshCoachSession().then(renderSyncSettings), 2000);   /* Task 4: sa gia' se il coach e' loggato prima che apra Impostazioni */
+setTimeout(()=>refreshCoachSession().then(session=>{ renderSyncSettings(); if(session) ensurePolicyAccepted(()=>{}); }), 2000);   /* Task 4 (Prompt16/17): sa gia' se il coach e' loggato prima che apra Impostazioni, e propone subito il re-consenso se la policy e' cambiata dall'ultimo accesso */
 setTimeout(()=>checkLicenseOnline(false), 2500);   /* check giornaliero (auto-throttlato), non ad ogni azione */
 
 /* =========================================================
