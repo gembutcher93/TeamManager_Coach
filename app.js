@@ -440,9 +440,14 @@ const ONB_STEPS = [
   {icon:'fa-shield-halved',title:'Crea la tua squadra',body:'Dai un nome alla squadra e scegli lo sport — pallavolo, calcio o basket — da Impostazioni. Si cambia quando vuoi.'},
   {icon:'fa-users',title:'Aggiungi i giocatori',body:'Vai su Roster &amp; Ruoli e costruisci la rosa: nome, numero, ruolo. Da lì assegni anche capitano e vice capitano.'},
   {icon:'fa-calendar-days',title:'Pianifica gli allenamenti',body:'In Calendario crei sedute singole o serie ricorrenti, e assegni gli esercizi da far votare.'},
+  {icon:'fa-dumbbell',title:'Alleni e voti la seduta',body:"In Allenamenti &amp; Voti costruisci la seduta con gli esercizi — anche dalla Libreria già pronta — e dai un voto a ogni giocatore: la media confluisce nella sua scheda."},
   {icon:'fa-clipboard-list',title:'In partita usa lo Scout',body:'Durante la gara registra i fondamentali in Scout Gara: il voto di ogni giocatore nasce automaticamente da lì.'},
+  {icon:'fa-people-group',title:'La Formazione si sceglie da sola',body:"In Formazione l'app propone i titolari in base alla media voto — per ogni ruolo gioca chi rende di più — e puoi comunque sistemare posizioni e cambi a mano."},
   {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'},
+  {icon:'fa-chalkboard',title:'Spiega gli schemi in spogliatoio',body:'La Lavagnetta Tattica parte già dalla formazione consigliata: trascina i gettoni e disegna schemi e traiettorie sul campo.'},
+  {icon:'fa-stopwatch',title:'Misura sprint e salto da un video',body:'In Test Fisici calcoli tempo di reazione, velocità e salto verticale da un video con la telecamera ferma — calibrazione manuale, nessuna intelligenza artificiale.'},
   {icon:'fa-share-nodes',title:'Condividi con il Player',body:"Da Roster apri un giocatore e tocca Condividi: gli mandi file o codice con card, statistiche e formazione consigliata. Aggiorna e reinvia dopo ogni partita o allenamento. Il giocatore può a sua volta rimandarti le sue statistiche mentali (Mental Gym) da reimportare."},
+  {icon:'fa-wand-magic-sparkles',title:"C'è altro da scoprire",body:"Dentro la scheda di ogni giocatore trovi anche il radar comparativo e l'export PDF \"Scheda Crescita\"; in Impostazioni ci sono l'Officina Card e il motore voto avanzato (protetto da password)."},
   {icon:'fa-database',title:"L'app funziona offline",body:"Tutti i dati restano sul tuo dispositivo, non in un cloud. Fai backup regolari da Impostazioni per non perderli se cambi telefono o disinstalli l'app."}
 ];
 const ONB_DEMO_STEPS = [
@@ -510,11 +515,12 @@ function onbFinish(){
 }
 
 /* =========================================================
-   TOUR CONTESTUALE (Modulo S) — overlay leggero con 2-3 punti,
-   mostrato alla PRIMA visita di Scout Gara, Formazione consigliata,
-   Calendario e Impostazioni/Backup (traccia con localStorage
+   TOUR CONTESTUALE (Modulo S, esteso in Modulo V) — overlay leggero
+   con 2-3 punti, mostrato alla PRIMA visita di Scout Gara, Formazione
+   consigliata, Calendario, Impostazioni/Backup, Presenze, Allenamenti,
+   Lavagnetta Tattica e Test Fisici (traccia con localStorage
    tut_seen_<schermata>). Non si ripresenta da solo dopo la prima
-   volta: si riapre a mano col bottone "?" su ciascuna delle 4
+   volta: si riapre a mano col bottone "?" su ciascuna di queste
    schermate. I passi il cui elemento non è presente/visibile (es.
    "Importa" nascosto in demo, "Modulo/rotazione" per il basket che
    non ce l'ha) vengono saltati senza errori.
@@ -539,6 +545,25 @@ const CTX_TOURS = {
     {sel:'#ctx-backup-export', title:'Backup dei dati', text:"Scarica qui un file con tutti i dati: rosa, calendario, statistiche, presenze. Fallo regolarmente — l'app è offline, i dati vivono solo su questo dispositivo."},
     {sel:'#ctx-backup-import', title:'Ripristina o trasferisci', text:'Carica un backup per ripristinare i dati o spostarli su un altro dispositivo.'},
     {sel:'#ctx-backup-guide', title:'Rivedi la guida', text:'Puoi riaprire il tutorial introduttivo in qualsiasi momento da qui.'}
+  ],
+  presenze: [
+    {sel:'#att-select', title:'Scegli la seduta', text:"Seleziona l'allenamento per cui vuoi fare l'appello."},
+    {sel:'#att-panel', title:"Segna chi c'è", text:'Tocca Presente, Assente o Giust. per ogni giocatore: la percentuale della seduta si aggiorna da sola.'},
+    {sel:'#att-season', title:'Costanza stagionale', text:'Qui vedi chi è più presente in stagione, giocatore per giocatore.'}
+  ],
+  allenamenti: [
+    {sel:'#tr-select', title:'Scegli la seduta', text:"Seleziona l'allenamento a cui vuoi assegnare esercizi e voti."},
+    {sel:'#ex-lib-btn', title:'Libreria esercizi', text:'Pesca un esercizio già pronto per categoria, oppure creane uno tuo: resta salvato per le prossime volte.'},
+    {sel:'#grade-card', title:'Voti per giocatore', text:'Da 1 a 10, lascia vuoto chi non hai valutato: la media confluisce nella scheda atleta.'}
+  ],
+  tattica: [
+    {sel:'#court-area', title:'Trascina i gettoni', text:'Parti già dalla formazione consigliata: sposta i giocatori per spiegare una rotazione o un cambio.'},
+    {sel:'#tact-tools', title:'Disegna schemi', text:'Scegli colore e spessore, poi disegna frecce e traiettorie direttamente sul campo.'},
+    {sel:'#tact-reset', title:'Ricomincia quando vuoi', text:'Cancella il disegno o riporta i gettoni alla formazione consigliata in un tocco.'}
+  ],
+  'test-fisici': [
+    {sel:'#phys-grid', title:'Tre test da un video', text:'Sprint, altezza raggiunta ed elevazione del salto: carica un video con la telecamera ferma e inserisci i marcatori a mano.'},
+    {sel:'#phys-hist-player', title:'Storico per giocatore', text:"Scegli un atleta per vedere l'andamento dei suoi test nel tempo."}
   ]
 };
 let _ctx=null;
@@ -578,7 +603,7 @@ function ctxStart(key){
   ctxCSS();
   _ctx={key,steps,idx:0};
   if(!document.getElementById('ctx-block')){
-    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-block'}));
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-block',onclick:ctxFinish}));
     document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-hole'}));
     document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-bubble'}));
   }
@@ -591,6 +616,8 @@ function ctxRender(){
   const hole=document.getElementById('ctx-hole'), bub=document.getElementById('ctx-bubble');
   if(!hole||!bub) return;
   if(el){
+    const r0=el.getBoundingClientRect();
+    if(r0.top<0||r0.bottom>window.innerHeight) el.scrollIntoView({block:'center'});
     const r=el.getBoundingClientRect(), pad=6;
     hole.style.display='block';
     hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
@@ -950,8 +977,12 @@ function buildLayout(){
         <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1rem">
                 <h3 style="margin:0"><i class="fa-solid fa-users"></i> Rosa <span id="roster-count" style="color:var(--muted);font-weight:600;font-size:.85rem"></span></h3>
-                <button class="btn btn-ghost btn-sm" onclick="openRadarCompare()"><i class="fa-solid fa-chart-area"></i> Confronta (Radar)</button>
             </div>
+            <button class="radar-cta" style="margin-bottom:1rem" onclick="openRadarCompare()">
+                <span class="radar-cta-ic"><i class="fa-solid fa-chart-area"></i></span>
+                <span class="radar-cta-txt"><b>Radar comparativo</b><span>Metti a confronto due giocatori su tutte le statistiche</span></span>
+                <span class="radar-cta-arrow"><i class="fa-solid fa-chevron-right"></i></span>
+            </button>
             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
                 <div class="fg" style="flex:1;min-width:180px;margin:0"><input id="roster-search" placeholder="Cerca per nome…" oninput="setRosterSearch(this.value)"></div>
                 <div id="roster-role-filter" style="display:flex;gap:6px;flex-wrap:wrap"></div>
@@ -1044,7 +1075,8 @@ function buildLayout(){
     <!-- PRESENZE -->
     <section id="presenze" class="section">
         <div class="page-head"><div><div class="eyebrow">Gestione gruppo</div><h2>Presenze Allenamenti</h2>
-            <p class="sub">Segna chi c'è ad ogni seduta. Tieni d'occhio la costanza del gruppo e dei singoli.</p></div></div>
+            <p class="sub">Segna chi c'è ad ogni seduta. Tieni d'occhio la costanza del gruppo e dei singoli.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('presenze')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <div class="fg" style="max-width:420px"><label>Seduta di allenamento</label>
                 <select id="att-select" onchange="renderAttendance()"><option value="">Scegli una seduta…</option></select></div>
@@ -1064,7 +1096,8 @@ function buildLayout(){
     <!-- ALLENAMENTI -->
     <section id="allenamenti" class="section">
         <div class="page-head"><div><div class="eyebrow">Programmazione</div><h2>Allenamenti &amp; Voti</h2>
-            <p class="sub">Costruisci la seduta con gli esercizi e assegna un voto a ogni giocatore. Le medie confluiscono nelle schede atleta e nell'app del giocatore.</p></div></div>
+            <p class="sub">Costruisci la seduta con gli esercizi e assegna un voto a ogni giocatore. Le medie confluiscono nelle schede atleta e nell'app del giocatore.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('allenamenti')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <div class="form-row">
                 <div class="fg" style="max-width:420px"><label>Seduta di allenamento</label>
@@ -1077,7 +1110,7 @@ function buildLayout(){
             <div class="card">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                     <h3 style="margin:0"><i class="fa-solid fa-list-check"></i> Esercizi della seduta</h3>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" onclick="openFieldEditor()"><i class="fa-solid fa-pen-ruler"></i> Disegna esercizio</button><button type="button" class="btn btn-ghost" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" onclick="openFieldEditor()"><i class="fa-solid fa-pen-ruler"></i> Disegna esercizio</button><button type="button" class="btn btn-ghost" id="ex-lib-btn" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button></div>
                 </div>
                 <form onsubmit="addExercise(event)"><div class="form-row" style="margin-top:.8rem">
                     <div class="fg"><label>Nome esercizio</label><input id="ex-name" placeholder="Es. Ricezione in bagher zona 5" required></div>
@@ -1101,8 +1134,9 @@ function buildLayout(){
     <!-- TEST FISICI -->
     <section id="test-fisici" class="section">
         <div class="page-head"><div><div class="eyebrow">Preparazione</div><h2>Test Fisici</h2>
-            <p class="sub">Misura sprint, tempo di reazione e salto verticale da un video con telecamera ferma su cavalletto — calibrazione manuale, nessuna intelligenza artificiale.</p></div></div>
-        <div class="phys-grid">
+            <p class="sub">Misura sprint, tempo di reazione e salto verticale da un video con telecamera ferma su cavalletto — calibrazione manuale, nessuna intelligenza artificiale.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('test-fisici')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+        <div class="phys-grid" id="phys-grid">
             <div class="card">
                 <h3><i class="fa-solid fa-person-running"></i> Sprint &amp; Reazione</h3>
                 <p class="hint" style="margin-bottom:.8rem">Tempo di reazione al via e velocità media su una distanza nota, da un video con 3 marcatori (via, partenza, arrivo).</p>
@@ -1134,11 +1168,12 @@ function buildLayout(){
 
     <section id="tattica" class="section">
         <div class="page-head"><div><div class="eyebrow">Spogliatoio</div><h2>Lavagnetta Tattica</h2>
-            <p class="sub">Disponi la rotazione trascinando i gettoni e disegna schemi, traiettorie e vettori direttamente sul campo.</p></div></div>
+            <p class="sub">Disponi la rotazione trascinando i gettoni e disegna schemi, traiettorie e vettori direttamente sul campo.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('tattica')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="tactical-wrap">
             <div id="court-area"><canvas id="courtCanvas"></canvas></div>
             <div>
-                <div class="card" style="margin-bottom:1rem">
+                <div class="card" style="margin-bottom:1rem" id="tact-tools">
                     <h3 style="margin-bottom:.6rem"><i class="fa-solid fa-pen"></i> Strumenti</h3>
                     <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Colore</label>
                     <div class="color-picker">
@@ -1151,8 +1186,10 @@ function buildLayout(){
                     <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;display:block;margin-top:14px">Spessore</label>
                     <input id="brush" type="range" min="1" max="10" value="3" style="width:100%;margin-top:6px;accent-color:var(--brand)">
                 </div>
-                <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
-                <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
+                <div id="tact-reset">
+                    <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
+                    <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
+                </div>
                 <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Si parte dalla formazione consigliata; usa la panchina per spiegare un cambio senza toccarla.</p>
                 <div id="bench-area" style="margin-top:14px;display:none"></div>
             </div>
@@ -1733,6 +1770,25 @@ function rosterFilterCSS(){
     .rf-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}`;
     document.head.appendChild(st);
 }
+/* ---------- entry point grande per il Radar comparativo (stesso pattern di un tile "Mental Gym" in un profilo) ---------- */
+function radarCtaCSS(){
+    if(document.getElementById('radar-cta-css')) return;
+    const st=document.createElement('style'); st.id='radar-cta-css';
+    st.textContent=`
+    .radar-cta{display:flex;align-items:center;gap:14px;width:100%;text-align:left;border:none;cursor:pointer;
+        background:linear-gradient(135deg,#7C3AED,#A855F7);color:#fff;border-radius:16px;padding:16px 18px;
+        box-shadow:0 8px 20px -8px rgba(124,58,237,.55);transition:.15s;font-family:inherit;}
+    .radar-cta:hover{transform:translateY(-2px);box-shadow:0 12px 26px -6px rgba(124,58,237,.7);}
+    .radar-cta:active{transform:translateY(0);}
+    .radar-cta-ic{flex:0 0 auto;width:46px;height:46px;border-radius:12px;background:rgba(255,255,255,.2);
+        display:flex;align-items:center;justify-content:center;font-size:1.25rem;}
+    .radar-cta-txt{flex:1;min-width:0;}
+    .radar-cta-txt b{display:block;font-family:'Outfit',sans-serif;font-size:1.02rem;font-weight:800;}
+    .radar-cta-txt span{display:block;font-size:.8rem;opacity:.88;margin-top:2px;font-weight:500;}
+    .radar-cta-arrow{flex:0 0 auto;opacity:.8;font-size:.9rem;}
+    `;
+    document.head.appendChild(st);
+}
 function renderRosterRoleChips(){
     const box=document.getElementById('roster-role-filter'); if(!box) return;
     const roles=[...new Set(DB.players.map(p=>p.role))];
@@ -1741,7 +1797,7 @@ function renderRosterRoleChips(){
         roles.map(r=>`<button type="button" class="rf-chip${ROSTER_FILTER.role===r?' on':''}" onclick="setRosterRoleFilter('${r}')">${r}</button>`).join('');
 }
 function renderRoster(){
-    rosterFilterCSS();
+    rosterFilterCSS(); radarCtaCSS();
     const body=document.getElementById('roster-body');
     renderRosterRoleChips();
     const q=(ROSTER_FILTER.q||'').trim().toLowerCase();
@@ -1883,7 +1939,7 @@ function openPlayer(id){
                 <div style="flex:1"><div class="bar-track" style="height:8px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>
                 <div class="num" style="font-weight:800;font-family:'Outfit';width:34px;text-align:right;color:${v>=6?'var(--brand)':'var(--flame)'}">${v.toFixed(1)}</div></div>`;
         }).join('') : '';
-    coachMediaCSS();
+    coachMediaCSS(); radarCtaCSS();
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-id-card" style="color:var(--brand)"></i> Scheda atleta</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
@@ -1893,11 +1949,15 @@ function openPlayer(id){
             <div class="meta"><h4>${p.name} ${p.isCaptain?'👑':p.isViceCaptain?'🥈':''}</h4>
                 <p>${p.role}${(p.secondaryRoles&&p.secondaryRoles.length)?` <span style="color:var(--muted)">(anche ${p.secondaryRoles.join(', ')})</span>`:''} · ${p.hand||'Dx'} · ${p.height?p.height+' cm':'altezza n.d.'} · <span class="delta ${f.dir}" style="font-weight:700">${f.txt}</span></p></div>
         </div>
+        <button class="radar-cta" style="margin-bottom:1rem" onclick="openRadarCompare(${id})">
+            <span class="radar-cta-ic"><i class="fa-solid fa-chart-area"></i></span>
+            <span class="radar-cta-txt"><b>Radar comparativo</b><span>Confronta ${(p.name||'').split(' ')[0]} con un altro giocatore su tutte le statistiche</span></span>
+            <span class="radar-cta-arrow"><i class="fa-solid fa-chevron-right"></i></span>
+        </button>
         <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
             <button class="btn btn-ghost btn-sm" onclick="editPlayer(${id})"><i class="fa-solid fa-pen"></i> Modifica</button>
             <button class="btn btn-accent btn-sm" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi</button>
             <button class="btn btn-ghost btn-sm" onclick="openPlayerCard(${id})"><i class="fa-solid fa-id-badge"></i> Card giocatore</button>
-            <button class="btn btn-ghost btn-sm" onclick="openRadarCompare(${id})"><i class="fa-solid fa-chart-area"></i> Confronta (Radar)</button>
             <button class="btn btn-ghost btn-sm" onclick="exportGrowthCard(${id})"><i class="fa-solid fa-file-pdf"></i> Esporta Scheda Crescita</button>
             <button class="btn btn-ghost btn-sm" onclick="openImportMental()"><i class="fa-solid fa-brain"></i> Importa statistiche mentali</button>
             <button class="btn btn-ghost btn-sm" onclick="openImportWellness()"><i class="fa-solid fa-heart-pulse"></i> Importa check-in benessere</button>
@@ -4622,7 +4682,7 @@ function exLibCSS(){
   .exlib-cats{display:flex;flex-wrap:wrap;gap:6px;}
   .exlib-chip{border:1px solid var(--border,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:20px;padding:5px 11px;font-size:.78rem;font-weight:600;cursor:pointer;}
   .exlib-chip.on{border-color:var(--c,var(--brand));color:#fff;background:color-mix(in srgb,var(--c,var(--brand)) 22%,transparent);}
-  .exlib-list{overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;}
+  .exlib-list{overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;flex:1 1 auto;min-height:160px;}
   .exlib-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:11px;background:var(--surface-2,rgba(255,255,255,.03));}
   .exlib-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
   .exlib-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
