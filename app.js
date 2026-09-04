@@ -425,13 +425,24 @@ function loadDB(){
 }
 const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra salvato per questo profilo
 let DB = loadDB();
-if(!DB.trainings) DB.trainings = {};
-if(!DB.substitutions) DB.substitutions = {};
-if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
-if(!DB.physicalTests.height) DB.physicalTests.height = [];
-if(!DB.nextId) DB.nextId = Date.now();
-if(!DB.settings) DB.settings = {};
-ensureSyncSettings();
+/* Prompt19/Task1: guardie di migrazione per i campi aggiunti dopo la creazione di
+   emptyDB() — un DB salvato PRIMA che un campo esistesse ne resta privo per sempre,
+   a meno di richiamare questa funzione ad ogni caricamento (qui) E dopo un import
+   backup (in importData(), che sostituisce l'intero oggetto DB). Il bug delle
+   "rotazioni scomparse" era esattamente questo: DB.rotationStats mancante su un DB
+   precedente all'introduzione del campo mandava rotData() in TypeError, lasciando
+   #scout-rot vuoto senza errore visibile per l'utente. */
+function ensureDBDefaults(){
+    if(!DB.trainings) DB.trainings = {};
+    if(!DB.substitutions) DB.substitutions = {};
+    if(!DB.rotationStats) DB.rotationStats = {};
+    if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
+    if(!DB.physicalTests.height) DB.physicalTests.height = [];
+    if(!DB.nextId) DB.nextId = Date.now();
+    if(!DB.settings) DB.settings = {};
+    ensureSyncSettings();
+}
+ensureDBDefaults();
 /* Task 1 (Prompt16): PIN casuale invece che sequenziale — un PIN progressivo
    (1, 2, 3…) e' banale da indovinare per un compagno di squadra che vuole
    sbirciare la scheda di un altro. 4 cifre casuali, ricontrollate contro i
@@ -449,7 +460,22 @@ function ensureSyncSettings(){
     // dopo importData(), che sostituisce l'intero oggetto DB (Task 3/bugfix collegato)
     if(!DB.settings.sync) DB.settings.sync = {teamId:null, teamCode:null, hasEverSynced:false, license:null};
 }
-function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
+/* Task Prompt18: ultima rete di sicurezza del paywall — save() e' l'UNICO punto
+   che scrive davvero su localStorage (ogni altra funzione dell'app passa sempre
+   da qui), quindi bloccarlo qui garantisce che nessuna modifica sopravviva a un
+   reload mentre la licenza non e' attiva, anche per azioni non esplicitamente
+   protette da guardWrite(). saveSystem() e' il bypass riservato al bookkeeping
+   del controllo licenza stesso (altrimenti lo stato non potrebbe mai aggiornarsi). */
+function _persistDB(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
+function saveSystem(){ _persistDB(); }
+function save(){
+    if(!canWriteDB()){
+        const now=Date.now();
+        if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now; toast('Licenza non attiva: le modifiche non vengono salvate.','danger'); }
+        return;
+    }
+    _persistDB();
+}
 function uid(){ return DB.nextId++; }
 
 /* =========================================================
@@ -717,8 +743,58 @@ function checkDemoLock(){
 }
 function checkOnboardingAndDemo(){
   updateDemoBadge();
+  checkLicenseLock();
   if(DEMO_BUILD && demoExpired()){ checkDemoLock(); return; }
   if(FRESH_INSTALL && !localStorage.getItem('vt_tutorial_done')) openOnboarding(false);
+}
+/* =========================================================
+   PAYWALL REALE (Prompt18) — Caso 1: blocco totale a schermo intero (riusa lo
+   stile .dexp-card gia' definito sopra per la scadenza demo). Caso 2: banner
+   persistente ma non invasivo, il resto dell'app resta visitabile in sola
+   lettura (l'enforcement vero e proprio e' in save()/guardWrite(), qui c'e'
+   solo la UI che informa/blocca la navigazione). Chiamata da go() ad ogni
+   cambio schermata e da checkLicenseOnline() dopo ogni verifica, cosi' lo
+   sblocco e' immediato appena la licenza torna attiva su Supabase. */
+function licReadonlyBannerCSS(){
+  if(document.getElementById('lic-ro-css')) return;
+  const st=document.createElement('style'); st.id='lic-ro-css';
+  st.textContent=`
+  #lic-ro-banner{position:fixed;left:0;right:0;bottom:0;z-index:9990;padding:9px 14px;
+    background:rgba(240,70,60,.16);border-top:1px solid rgba(240,70,60,.4);backdrop-filter:blur(6px);
+    color:var(--text,#F3F7FC);font-size:.8rem;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;text-align:center}
+  #lic-ro-banner b{color:var(--flame,#F0463C)}
+  `;
+  document.head.appendChild(st);
+}
+function checkLicenseLock(){
+  const lvl=licenseAccessLevel();
+  const lockEl=document.getElementById('lic-lock-overlay');
+  const bannerEl=document.getElementById('lic-ro-banner');
+  if(lvl!=='blocked' && lockEl) lockEl.remove();
+  if(lvl!=='readonly' && bannerEl) bannerEl.remove();
+  if(lvl==='blocked' && !lockEl){
+    dexpCSS();
+    const o=document.createElement('div'); o.id='lic-lock-overlay'; o.style.zIndex='99998';
+    o.className='';
+    o.style.cssText='position:fixed;inset:0;z-index:99998;display:flex;align-items:center;justify-content:center;padding:1.2rem;background:linear-gradient(170deg,#0A1020,#060A18);';
+    o.innerHTML=`<div class="dexp-card">
+      <div class="dexp-ic"><i class="fa-solid fa-lock"></i></div>
+      <h2>Nessuna licenza attiva</h2>
+      <p>Nessuna licenza attiva per questo account. Contatta <b>${CONTACT_INFO}</b> per attivare l'abbonamento.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="coachSignOut()"><i class="fa-solid fa-right-from-bracket"></i> Esci</button>
+    </div>`;
+    document.body.appendChild(o);
+  }
+  if(lvl==='readonly' && !bannerEl){
+    licReadonlyBannerCSS();
+    const b=document.createElement('div'); b.id='lic-ro-banner';
+    b.innerHTML=`<span><i class="fa-solid fa-triangle-exclamation"></i></span>
+      <b>Licenza scaduta</b><span>— modifica e sync disabilitati, i tuoi dati restano visibili.</span>
+      <span>Contatta ${CONTACT_INFO} per rinnovare.</span>
+      <button class="btn btn-ghost btn-sm" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
+    document.body.appendChild(b);
+  }
 }
 
 /* ---------- HELPERS DATI ---------- */
@@ -1646,7 +1722,7 @@ function go(sec){
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
     setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
-    updateDemoBadge(); checkDemoLock();
+    updateDemoBadge(); checkDemoLock(); checkLicenseLock();
     if(CTX_TOURS[sec]) setTimeout(()=>ctxAutoShow(sec), 200);
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
@@ -1856,6 +1932,7 @@ function renderRoster(){
 }
 function addPlayer(e){
     e.preventDefault();
+    if(!guardWrite()) return;
     // nessun limite di rosa: calcio/basket possono avere 20+ atleti
     const number=parseInt(document.getElementById('p-number').value);
     if(DB.players.some(p=>p.number===number)) return toast(`La maglia ${number} è già assegnata`,'warning');
@@ -1866,6 +1943,7 @@ function addPlayer(e){
     save();e.target.reset();renderRoster();toast('Atleta inserito');
 }
 function removePlayer(id){
+    if(!guardWrite()) return;
     const p=playerById(id);
     confirmAction(`Rimuovere ${p.name} dalla rosa? Lo storico statistiche resterà nei tabellini.`,()=>{
         DB.players=DB.players.filter(x=>x.id!==id);save();renderRoster();toast('Atleta rimosso','info');
@@ -1918,6 +1996,7 @@ function epSyncSecondary(){
     box.innerHTML=editPlayerSecondaryHtml(role,checked);
 }
 function savePlayerEdit(id){
+    if(!guardWrite()) return;
     const p=playerById(id); if(!p) return;
     const name=(document.getElementById('ep-name').value||'').trim();
     const number=parseInt(document.getElementById('ep-number').value);
@@ -2771,6 +2850,7 @@ function fieldEditorCSS(){
 }
 function addEvent(e){
     e.preventDefault();
+    if(!guardWrite()) return;
     const date=document.getElementById('e-date').value;
     DB.events.push({id:uid(),type:document.getElementById('e-type').value,date,
         notes:document.getElementById('e-notes').value.trim(),result:null});
@@ -2779,6 +2859,7 @@ function addEvent(e){
     renderCalendar();toast('Evento aggiunto');
 }
 function removeEvent(id){
+    if(!guardWrite()) return;
     confirmAction('Eliminare questo evento dal calendario?',()=>{DB.events=DB.events.filter(e=>e.id!==id);save();renderCalendar();toast('Evento rimosso','info');});
 }
 function editResult(id){
@@ -2923,6 +3004,7 @@ function readRow(id){
 }
 function calcRow(id){ document.getElementById('voto-'+id).textContent=computeVoto(readRow(id),null,(playerById(id)||{}).role).toFixed(1); }
 function saveScout(){
+    if(!guardWrite()) return;
     const id=parseInt(document.getElementById('scout-select').value);
     const match=DB.events.find(e=>e.id===id);
     const rows=[];
@@ -3113,6 +3195,7 @@ function tapUndo(){
   tapRenderPlayers(); tapRenderSel();
 }
 function saveScoutTap(){
+  if(!guardWrite()) return;
   if(!TAP) return;
   const match=DB.events.find(e=>e.id===TAP.matchId);
   const rows=[];
@@ -3369,6 +3452,7 @@ function bTapClearOverride(){
   bTapRenderPlayers(); bTapRenderSel();
 }
 function saveScoutTapBasket(){
+  if(!guardWrite()) return;
   if(!BTAP) return;
   const match=DB.events.find(e=>e.id===BTAP.matchId);
   const rows=[];
@@ -3603,6 +3687,7 @@ function cTapClearOverride(){
   cTapRenderPlayers(); cTapRenderSel();
 }
 function saveScoutTapCalcio(){
+  if(!guardWrite()) return;
   if(!CTAP) return;
   const match=DB.events.find(e=>e.id===CTAP.matchId);
   const rows=[];
@@ -4057,6 +4142,7 @@ function exportData(){
     toast('Backup scaricato');
 }
 function importData(e){
+    if(!guardWrite()){ e.target.value=''; return; }
     const file=e.target.files[0];if(!file)return;
     const reader=new FileReader();
     reader.onload=()=>{
@@ -4064,7 +4150,7 @@ function importData(e){
             const data=JSON.parse(reader.result);
             if(!data.players||!data.events) throw new Error('formato');
             confirmAction('Importare questo backup? I dati attuali verranno sovrascritti.',()=>{
-                DB=data;if(!DB.nextId)DB.nextId=Date.now();if(!DB.settings)DB.settings={};ensureSyncSettings();
+                DB=data;ensureDBDefaults();
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
                    squadra importata al SUO account (owner_user_id) invece di lasciare che
@@ -4120,7 +4206,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v60';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v62';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4666,6 +4752,7 @@ async function coachSignOut(){
     });
 }
 async function syncPlayerOnline(id){
+    if(!guardWrite()) return;
     const statusEl=document.getElementById('sync-online-status');
     if(typeof AiRIMSync==='undefined'){ if(statusEl) statusEl.textContent='Modulo sync non disponibile: ricarica la pagina e riprova.'; return; }
     const p=playerById(id); if(!p) return;
@@ -4688,6 +4775,7 @@ async function syncPlayerOnline(id){
     });
 }
 async function syncAllPlayersOnline(){
+    if(!guardWrite()) return;
     requireCoachAccount(async()=>{
     const btn=document.getElementById('sync-all-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; }
     let ok=0, fail=0;
@@ -4771,17 +4859,18 @@ async function checkLicenseOnline(force){
     if(!force && sync.license && sync.license.checkedAt && (now-sync.license.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
     try{
         const res=await AiRIMSync.getLicenseStatus(sync.teamId, sync.clubId||null);
-        sync.license={status:res?res.status:'unknown', expiresAt:res?res.expires_at:null, checkedAt:now, lastSuccessAt:now};
-        save();
+        sync.license={status:res?res.status:'unknown', expiresAt:res?res.expires_at:null,
+            activatedAt:res?res.activated_at:(sync.license&&sync.license.activatedAt)||null, checkedAt:now, lastSuccessAt:now};
+        saveSystem();
     }catch(e){
         if(sync.license) sync.license.checkedAt=now; // riprova al prossimo check giornaliero, stato noto resta quello vecchio
-        save();
+        saveSystem();
     }
     renderSyncSettings();
+    checkLicenseLock(); // Task Prompt18: sblocco/blocco immediato, senza reinstallare o ricaricare
 }
-/* Stato Pro/limitata calcolato ma non ancora agganciato a nessun blocco funzionalità:
-   l'UI commerciale/paywall è fuori scope in questo blocco (vedi Prompt15). Nessuna
-   scrittura automatica su licenses: qui si legge soltanto. */
+/* Stato Pro/limitata: invariato rispetto a prima (vedi Prompt15/16), nessuna
+   modifica alla logica di verifica/tolleranza offline. */
 function isLicensePro(){
     const sync=DB.settings.sync;
     if(!sync.hasEverSynced) return true; // mai sincronizzato: nessuna restrizione, comportamento locale attuale
@@ -4790,6 +4879,38 @@ function isLicensePro(){
     const now=Date.now();
     if(lic.lastSuccessAt && (now-lic.lastSuccessAt) > LICENSE_OFFLINE_GRACE_DAYS*86400000) return false; // tolleranza offline scaduta
     return lic.status==='active' && (!lic.expiresAt || new Date(lic.expiresAt).getTime()>now);
+}
+/* =========================================================
+   PAYWALL REALE (Prompt18) — enforcement sopra isLicensePro(), che resta
+   il solo giudice di "attiva/scaduta": qui si decide solo COSA succede quando
+   non e' attiva, distinguendo due casi via activatedAt (mai azzerato lato DB,
+   vedi trigger licenses_set_activated_at in supabase_schema.sql):
+   - mai stata attiva -> blocco totale (nessuna licenza mai acquistata)
+   - stata attiva in passato, ora scaduta -> sola lettura (dati mai a rischio)
+   ========================================================= */
+function hasEverHadActiveLicense(){
+    const sync=DB.settings.sync;
+    return !!(sync.license && sync.license.activatedAt);
+}
+function licenseAccessLevel(){
+    // 'full' | 'readonly' | 'blocked'
+    if(isLicensePro()) return 'full';
+    return hasEverHadActiveLicense() ? 'readonly' : 'blocked';
+}
+/* Unico punto di applicazione (Implementazione, Prompt18): il resto dell'app
+   non controlla mai isLicensePro()/licenseAccessLevel() sparso ovunque, passa
+   sempre da qui (schermata di blocco in go()) o da guardWrite()/save() per le
+   scritture — cosi' un solo posto da aggiornare se la logica cambia. */
+function canWriteDB(){ return licenseAccessLevel()==='full'; }
+let _writeBlockedToastAt=0;
+function guardWrite(){
+    const lvl=licenseAccessLevel();
+    if(lvl==='full') return true;
+    const now=Date.now();
+    if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
+        toast(lvl==='blocked' ? 'Nessuna licenza attiva: azione non disponibile.' : 'Licenza scaduta: modifica disabilitata.', 'danger');
+    }
+    return false;
 }
 
 /* ---------- sync inverso: importa il codice "statistiche mentali" inviato dal giocatore (Mental Gym) ---------- */
@@ -5689,8 +5810,22 @@ function playerAttributes(id, sport){
 /* ---- Radar comparativo (Modulo A, blocco Prompt7): stesso set di assi per TUTTI i ruoli,
    nessuno switch portiere/movimento come nella card — un ruolo "debole" su un asse è
    informazione valida e va mostrata, non nascosta. Riusa playerCatRatings/cphOverall,
-   nessuna nuova logica di calcolo. */
-function radarDefs(sport){ sport=sport||curSport(); return ATTR_MAP[sport]||ATTR_MAP.pallavolo; }
+   nessuna nuova logica di calcolo.
+   Task 2 (Prompt19): settimo asse "Palleggio" per il radar pallavolo — un palleggiatore
+   forte ha attacco/ricezione bassi per natura del ruolo e non aveva modo di mostrare la
+   sua qualità specifica. Nessuna statistica "assist" esiste nello Scout Gara pallavolo
+   (SCOUT.pallavolo.groups: Battuta/Ricezione/Attacco/Muro, niente regia — verificato),
+   ma "Palleggio" è già una categoria di allenamento tracciata da tempo (CATS.pallavolo,
+   con esercizi dedicati come "Alzata di seconda linea"/"Alzata in transizione veloce"):
+   stessa identica fonte dati (playerCatRatings) già usata dagli altri 6 assi, non un
+   numero inventato. Aggiunta solo qui (non in ATTR_MAP.pallavolo) per non toccare la
+   tier card, che condivide ATTR_MAP ma resta a 6 attributi come da "Cosa NON fare". */
+function radarDefs(sport){
+  sport=sport||curSport();
+  const base=ATTR_MAP[sport]||ATTR_MAP.pallavolo;
+  if(sport==='pallavolo') return base.concat([['Palleggio','PAL',['Palleggio']]]);
+  return base;
+}
 function radarAttributes(id){
   const cats=playerCatRatings(id);
   const ovr=cphOverall(getSeasonStats(id).avgVoto)||60;

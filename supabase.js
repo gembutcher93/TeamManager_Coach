@@ -114,7 +114,7 @@
     const sb = await getClient();
     const { data, error } = await sb.rpc('get_license_status', { p_team_id: teamId || null, p_club_id: clubId || null });
     if (error) throw error;
-    return (data && data[0]) || null; // {status, expires_at}
+    return (data && data[0]) || null; // {status, expires_at, activated_at}
   }
 
   /* ---- Task 2/3 (Prompt17): log clickwrap privacy policy — solo per utenti
