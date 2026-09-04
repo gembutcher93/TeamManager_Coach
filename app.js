@@ -847,36 +847,48 @@ function votoInRole(pId,role){
 function byRoleCandidates(players,role){
     return players.filter(x=>playerHasRole(x.p,role))
         .map(x=> x.p.role===role ? x : {p:x.p, v:votoInRole(x.p.id,role)})
-        .sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+        .sort((a,b)=>{
+            const av=a.v==null?-1:a.v, bv=b.v==null?-1:b.v;
+            if(bv!==av) return bv-av;
+            const ap=a.p.role===role?1:0, bp=b.p.role===role?1:0;
+            return bp-ap; // a parità di voto, preferisce il ruolo primario del giocatore
+        });
 }
 /* Assegna una lista di ruoli/zone (roleList: un ruolo per slot, duplicati ammessi per i ruoli con più
    titolari, null per gli slot già occupati manualmente) ai candidati migliori disponibili — inclusi i
-   multi-ruolo. Ad ogni passo sceglie, tra gli slot ancora vuoti, la coppia (slot, miglior candidato per
-   quello slot) col voto più alto; a parità preferisce il ruolo primario del giocatore. Così un
-   multi-ruolo copre un altro ruolo solo se aiuta davvero la formazione, senza "rubare" per puro caso
-   d'ordine il proprio ruolo primario quando nessun altro lo copre meglio. preUsed (opzionale) marca
-   giocatori già assegnati altrove (es. sostituzioni manuali) come non disponibili. */
+   multi-ruolo. Usa un matching bipartito con augmenting path (algoritmo di Kuhn): ogni slot prova i
+   propri candidati in ordine di voto e, se il migliore è già assegnato altrove, verifica se quel
+   giocatore può essere "spostato" su un altro slot che sa coprire altrettanto bene. Questo evita che un
+   ruolo raro coperto solo da multi-ruolo (es. Opposto coperto solo da un Centrale+Opposto e uno
+   Schiacciatore+Opposto) resti vuoto solo perché quei giocatori sono stati assegnati per primi al loro
+   ruolo primario — se esiste UNA formazione che copre tutti gli slot, questo algoritmo la trova.
+   preUsed (opzionale) marca giocatori già assegnati altrove (es. sostituzioni manuali) come non
+   disponibili fin dall'inizio. */
 function assignRoleSlots(players,roleList,preUsed){
     const used=preUsed?new Set(preUsed):new Set();
     const out=new Array(roleList.length).fill(null);
     const queueCache={};
-    const queueFor=role=>{ if(!queueCache[role]) queueCache[role]=byRoleCandidates(players,role); return queueCache[role]; };
-    const remaining=new Set(); roleList.forEach((r,i)=>{ if(r!=null) remaining.add(i); });
-    while(remaining.size){
-        let bestI=null,bestCand=null,bestScore=-Infinity,bestPrimary=false;
-        remaining.forEach(i=>{
-            const role=roleList[i];
-            const cand=queueFor(role).find(c=>!used.has(c.p.id));
-            if(!cand) return;
-            const score=cand.v==null?-1:cand.v;
-            const primary=cand.p.role===role;
-            if(bestI===null || score>bestScore || (score===bestScore && primary && !bestPrimary)){
-                bestScore=score; bestI=i; bestCand=cand; bestPrimary=primary;
+    const queueFor=role=>{ if(!queueCache[role]) queueCache[role]=byRoleCandidates(players,role).filter(c=>!used.has(c.p.id)); return queueCache[role]; };
+    const slotOfPlayer=new Map(); // playerId -> slot attualmente assegnato
+    const slots=[]; roleList.forEach((r,i)=>{ if(r!=null) slots.push(i); });
+    // ruoli più "scarsi" (meno candidati possibili) assegnati per primi: riduce i casi in cui serve spostare qualcuno
+    slots.sort((a,b)=>queueFor(roleList[a]).length-queueFor(roleList[b]).length);
+    function tryAssign(i,visited){
+        for(const cand of queueFor(roleList[i])){
+            const pid=cand.p.id;
+            if(visited.has(pid)) continue;
+            visited.add(pid);
+            const curSlot=slotOfPlayer.get(pid);
+            if(curSlot===undefined || tryAssign(curSlot,visited)){
+                slotOfPlayer.set(pid,i);
+                out[i]=cand;
+                return true;
             }
-        });
-        if(bestI===null) break;
-        out[bestI]=bestCand; used.add(bestCand.p.id); remaining.delete(bestI);
+        }
+        return false;
     }
+    slots.forEach(i=>tryAssign(i,new Set()));
+    slotOfPlayer.forEach((_,pid)=>used.add(pid));
     return {picks:out, used};
 }
 function playerForm(pId){ // confronto media ultime 2 vs precedenti
@@ -4308,21 +4320,27 @@ if('serviceWorker' in navigator){
    (il centrale che ruoterebbe dietro), come da regolamento pallavolo.
    Basket: nuovo — 5 posizioni base su mezzo campo (nessun motore per il basket esisteva in Formazione).
    ========================================================= */
-const VOLLEY_ZONES=[['P4',.2,.22],['P3',.5,.18],['P2',.8,.22],['P5',.2,.78],['P6',.5,.82],['P1',.8,.78]];
-/* Ordine di ruolo lungo il giro di rotazione P1→P2→P3→P4→P5→P6 quando il palleggiatore
-   parte da P1 (rotazione 1): Palleggiatore, Schiacciatore, Centrale, Opposto (sempre
-   opposto al palleggiatore, 3 zone dopo), Schiacciatore, Libero (sostituisce il centrale
-   che tornerebbe dietro). Per far partire il palleggiatore da un'altra zona (rotazione N)
-   basta scorrere questo stesso ciclo di quante zone lo separano da P1. */
-const VOLLEY_ROLE_CYCLE=[['Palleggiatore',0],['Schiacciatore',0],['Centrale',0],['Opposto',0],['Schiacciatore',1],['Libero',0]];
-function volleyZoneRoleMap(startRot){
-  const off=(((startRot||1)-1)%6+6)%6;
-  const zones=['P1','P2','P3','P4','P5','P6'], map={};
-  zones.forEach((z,i)=>{ map[z]=VOLLEY_ROLE_CYCLE[(i-off+6)%6]; });
-  return map;
+/* I 6 slot titolari di pallavolo sono SEMPRE i ruoli "di rete" (Palleggiatore, Opposto, 2 Centrali,
+   2 Schiacciatori): il Libero non è mai uno di questi 6 e non vi compete mai per un posto (vedi
+   VOLLEY_LIBERO_POS più sotto). Le etichette P1..P6 restano solo per la posizione visiva sul campo
+   (disposizione tipica della rotazione 1), non implementano una rotazione dinamica punto-per-punto
+   (fuori scope): qui si sceglie solo CHI gioca quel ruolo, per rendimento. */
+const VOLLEY_NET_SLOTS=[
+  ['Schiacciatore','P4',.2,.22],
+  ['Centrale','P3',.5,.18],
+  ['Opposto','P2',.8,.22],
+  ['Schiacciatore','P5',.2,.78],
+  ['Centrale','P6',.5,.82],
+  ['Palleggiatore','P1',.8,.78]
+];
+/* Il Libero è uno specialista che sostituisce sempre e solo il centrale in seconda linea: non è un
+   ruolo che "compete" con gli altri per uno dei 6 slot sopra. Va scelto (tra chi ha quel ruolo,
+   primario o secondario, e non è già usato nei 6 slot) e mostrato a parte, vicino al campo ma
+   distinto sia dal campo che dalla panchina — vedi renderCourtFormation. */
+const VOLLEY_LIBERO_POS=[.5,.5];
+function pickBestLibero(players,used){
+  return byRoleCandidates(players,'Libero').find(c=>!used.has(c.p.id))||null;
 }
-function getLineupPallavolo(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.pallavolo=DB.settings.lineup.pallavolo||{rotation:1}; if(!DB.settings.lineup.pallavolo.rotation) DB.settings.lineup.pallavolo.rotation=1; return DB.settings.lineup.pallavolo; }
-function setLineupRotation(r){ const L=getLineupPallavolo(); L.rotation=r; save(); renderFormazione(); }
 const BASKET_POS={Playmaker:[.5,.85],Guardia:[.82,.55],'Ala piccola':[.18,.55],'Ala grande':[.7,.25],Centro:[.5,.1]};
 function lineupSlot(zr,p,v,x,y){ return {ruolo_o_zona:zr,playerName:p.name,number:p.number,overall:cphOverall(v),tier:playerTier(p.id),x:+x.toFixed(3),y:+y.toFixed(3)}; }
 function computeLineupCalcio(){
@@ -4330,12 +4348,13 @@ function computeLineupCalcio(){
   return slots.filter(s=>s.player).map(s=>lineupSlot(s.role,s.player,getSeasonStats(s.player.id).avgVoto,s.x,s.y));
 }
 function computeLineupPallavolo(){
-  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const roleList=VOLLEY_ZONES.map(([z])=>roleMap[z][0]);
-  const {picks}=assignRoleSlots(players,roleList);
+  const roleList=VOLLEY_NET_SLOTS.map(s=>s[0]);
+  const {picks,used}=assignRoleSlots(players,roleList);
   const out=[];
-  VOLLEY_ZONES.forEach(([z,x,y],i)=>{ const pick=picks[i]; if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y)); });
+  VOLLEY_NET_SLOTS.forEach(([role,z,x,y],i)=>{ const pick=picks[i]; if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y)); });
+  const lib=pickBestLibero(players,used);
+  if(lib) out.push(lineupSlot('Libero',lib.p,lib.v,VOLLEY_LIBERO_POS[0],VOLLEY_LIBERO_POS[1]));
   return out;
 }
 function computeLineupBasket(){
@@ -6230,17 +6249,23 @@ function injectFmzCSS(){
   .voto-badge.hi{background:rgba(34,197,94,.18);color:#22C55E;} .voto-badge.md{background:rgba(245,179,1,.16);color:#f5b301;}
   .voto-badge.lo{background:rgba(240,70,60,.16);color:#F0463C;} .voto-badge.nd{background:var(--surface);color:var(--muted);}
   .fmz-bench .fmz-slot{border-bottom:1px solid var(--line);}
+  .libero-panel{margin-top:14px;padding:10px 14px;border:1px dashed var(--brand);border-radius:12px;background:color-mix(in srgb,var(--brand) 8%,transparent);}
+  .libero-tag{font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;font-weight:800;color:var(--brand);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
+  .libero-row{display:flex;align-items:center;gap:10px;font-weight:700;}
+  .libero-name{flex:1;}
   `;
   document.head.appendChild(st);
 }
 /* ---- Formazione PALLAVOLO/BASKET visuale: campo disegnato (stesso stile del campo calcio) ---- */
 function pickLineupPallavolo(){
-  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const roleList=VOLLEY_ZONES.map(([z])=>roleMap[z][0]);
-  const {picks}=assignRoleSlots(players,roleList);
-  return VOLLEY_ZONES.map(([z,x,y],i)=>{ const role=roleMap[z][0]; const pick=picks[i];
+  const roleList=VOLLEY_NET_SLOTS.map(s=>s[0]);
+  const {picks,used}=assignRoleSlots(players,roleList);
+  const rows=VOLLEY_NET_SLOTS.map(([role,z,x,y],i)=>{ const pick=picks[i];
     return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null}; });
+  const lib=pickBestLibero(players,used);
+  rows.push({zone:'LIB',role:'Libero',x:VOLLEY_LIBERO_POS[0],y:VOLLEY_LIBERO_POS[1],player:lib?lib.p:null,v:lib?lib.v:null});
+  return rows;
 }
 function pickLineupBasket(){
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
@@ -6276,7 +6301,9 @@ function courtZoneSVG(sport){
 }
 function renderCourtFormation(sport){
   injectFmzCSS(); soccerFieldCSS();
-  const rows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+  const allRows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+  const liberoRow = sport==='pallavolo' ? allRows.find(r=>r.role==='Libero') : null;
+  const rows = allRows.filter(r=>r.role!=='Libero');
   const showOv=showLineupOverall();
   const tokens=rows.map(r=>{
     const p=r.player;
@@ -6286,26 +6313,28 @@ function renderCourtFormation(sport){
     const leftPct = sport==='basket' ? (BASKET_VB.rx+r.x*BASKET_VB.rw) : (r.x*100);
     return `<div class="ftk${p?'':' empty'}" style="left:${leftPct.toFixed(1)}%;top:${(r.y*100).toFixed(1)}%" title="${r.role}">${inner}</div>`;
   }).join('');
-  const usedIds=new Set(rows.filter(r=>r.player).map(r=>r.player.id));
+  const usedIds=new Set(allRows.filter(r=>r.player).map(r=>r.player.id));
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const bench=players.filter(x=>!usedIds.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
-  const rotHeader = sport==='pallavolo' ? (()=>{
-    const rot=getLineupPallavolo().rotation;
-    const chips=[1,2,3,4,5,6].map(n=>`<button class="mod-chip${n===rot?' on':''}" onclick="setLineupRotation(${n})">P${n}</button>`).join('');
-    return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-        <h3 style="margin:0"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>
-        <div class="mod-chips">${chips}</div>
-      </div>
-      <p class="hint" style="margin:-4px 0 12px">Rotazione di partenza: da che zona parte il palleggiatore.</p>`;
-  })() : `<h3 style="margin:0 0 12px"><i class="fa-solid fa-basketball" style="color:var(--brand)"></i> Formazione in campo</h3>`;
+  const header = sport==='pallavolo'
+    ? `<h3 style="margin:0 0 12px"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>`
+    : `<h3 style="margin:0 0 12px"><i class="fa-solid fa-basketball" style="color:var(--brand)"></i> Formazione in campo</h3>`;
+  const liberoHtml = liberoRow ? (()=>{
+    const p=liberoRow.player;
+    const inner = p
+      ? `<span class="fmz-num">#${p.number}</span><span class="libero-name">${p.name}</span>${showOv?fmzBadge(liberoRow.v):''}`
+      : `<span class="hint" style="margin:0">Nessun giocatore con ruolo Libero in rosa.</span>`;
+    return `<div class="libero-panel"><div class="libero-tag"><i class="fa-solid fa-shield-halved"></i> Libero</div><div class="libero-row">${inner}</div></div>`;
+  })() : '';
   document.getElementById('formazione-content').innerHTML=`
     <div class="card">
-      ${rotHeader}
+      ${header}
       <div class="fpitch-wrap"><div class="fpitch readonly${sport==='basket'?' fpitch-basket':''}">
         ${courtZoneSVG(sport)}
         ${tokens}
       </div></div>
+      ${liberoHtml}
       <p class="hint" style="margin-top:1rem">Scelti per media voto. Più registri partite nello Scout, più la formazione diventa precisa.</p>
     </div>
     <div class="card"><h3><i class="fa-solid fa-users" style="color:var(--muted)"></i> Panchina (per rendimento)</h3>
