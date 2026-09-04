@@ -4334,12 +4334,35 @@ const VOLLEY_NET_SLOTS=[
   ['Palleggiatore','P1',.8,.78]
 ];
 /* Il Libero è uno specialista che sostituisce sempre e solo il centrale in seconda linea: non è un
-   ruolo che "compete" con gli altri per uno dei 6 slot sopra. Va scelto (tra chi ha quel ruolo,
-   primario o secondario, e non è già usato nei 6 slot) e mostrato a parte, vicino al campo ma
-   distinto sia dal campo che dalla panchina — vedi renderCourtFormation. */
+   ruolo che "compete" con gli altri per uno dei 6 slot sopra. Va scelto a parte e mostrato distinto
+   sia dal campo che dalla panchina — vedi renderCourtFormation. */
 const VOLLEY_LIBERO_POS=[.5,.5];
-function pickBestLibero(players,used){
-  return byRoleCandidates(players,'Libero').find(c=>!used.has(c.p.id))||null;
+/* "Gioca con Libero" (Prompt22): preferenza di sessione/vista per la Formazione Consigliata pallavolo,
+   NON un ruolo salvato sui giocatori. Se il coach non l'ha mai toccata (null = nessuna preferenza
+   esplicita salvata) il default è Sì solo se esiste almeno un candidato Libero in rosa. */
+function volleyUseLiberoPref(){
+  const L=DB.settings&&DB.settings.lineup&&DB.settings.lineup.pallavolo;
+  return (L && typeof L.useLibero==='boolean') ? L.useLibero : null;
+}
+function setVolleyUseLibero(v){
+  DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.pallavolo=DB.settings.lineup.pallavolo||{};
+  DB.settings.lineup.pallavolo.useLibero=!!v; save(); renderFormazione();
+}
+/* Il titolare Libero va scelto SEPARATAMENTE dal matching dei 6 slot di rete e su TUTTI i giocatori
+   con quel ruolo (primario o secondario): se calcolato dopo/dal risultato del matching, un giocatore
+   Libero+ruolo di rete che il matching assegna altrove sparirebbe dal pannello Libero anche quando è
+   il candidato migliore (o l'unico). Solo il titolare effettivamente scelto viene poi tolto dal pool
+   per i 6 slot di rete, per non contarlo due volte; gli altri Libero restano liberi di coprire il loro
+   altro ruolo. Se "Gioca con Libero" è No, non si calcola proprio: il pool resta invariato. */
+function volleyLineupPicks(players){
+  const liberoCands=byRoleCandidates(players,'Libero');
+  const pref=volleyUseLiberoPref();
+  const useLib = pref===null ? liberoCands.length>0 : pref;
+  const lib = useLib ? (liberoCands[0]||null) : null;
+  const netPlayers = lib ? players.filter(x=>x.p.id!==lib.p.id) : players;
+  const roleList=VOLLEY_NET_SLOTS.map(s=>s[0]);
+  const {picks}=assignRoleSlots(netPlayers,roleList);
+  return {picks,lib,useLib};
 }
 const BASKET_POS={Playmaker:[.5,.85],Guardia:[.82,.55],'Ala piccola':[.18,.55],'Ala grande':[.7,.25],Centro:[.5,.1]};
 function lineupSlot(zr,p,v,x,y){ return {ruolo_o_zona:zr,playerName:p.name,number:p.number,overall:cphOverall(v),tier:playerTier(p.id),x:+x.toFixed(3),y:+y.toFixed(3)}; }
@@ -4349,12 +4372,10 @@ function computeLineupCalcio(){
 }
 function computeLineupPallavolo(){
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const roleList=VOLLEY_NET_SLOTS.map(s=>s[0]);
-  const {picks,used}=assignRoleSlots(players,roleList);
+  const {picks,lib,useLib}=volleyLineupPicks(players);
   const out=[];
   VOLLEY_NET_SLOTS.forEach(([role,z,x,y],i)=>{ const pick=picks[i]; if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y)); });
-  const lib=pickBestLibero(players,used);
-  if(lib) out.push(lineupSlot('Libero',lib.p,lib.v,VOLLEY_LIBERO_POS[0],VOLLEY_LIBERO_POS[1]));
+  if(useLib && lib) out.push(lineupSlot('Libero',lib.p,lib.v,VOLLEY_LIBERO_POS[0],VOLLEY_LIBERO_POS[1]));
   return out;
 }
 function computeLineupBasket(){
@@ -6259,12 +6280,10 @@ function injectFmzCSS(){
 /* ---- Formazione PALLAVOLO/BASKET visuale: campo disegnato (stesso stile del campo calcio) ---- */
 function pickLineupPallavolo(){
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const roleList=VOLLEY_NET_SLOTS.map(s=>s[0]);
-  const {picks,used}=assignRoleSlots(players,roleList);
+  const {picks,lib,useLib}=volleyLineupPicks(players);
   const rows=VOLLEY_NET_SLOTS.map(([role,z,x,y],i)=>{ const pick=picks[i];
     return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null}; });
-  const lib=pickBestLibero(players,used);
-  rows.push({zone:'LIB',role:'Libero',x:VOLLEY_LIBERO_POS[0],y:VOLLEY_LIBERO_POS[1],player:lib?lib.p:null,v:lib?lib.v:null});
+  if(useLib) rows.push({zone:'LIB',role:'Libero',x:VOLLEY_LIBERO_POS[0],y:VOLLEY_LIBERO_POS[1],player:lib?lib.p:null,v:lib?lib.v:null});
   return rows;
 }
 function pickLineupBasket(){
@@ -6318,7 +6337,10 @@ function renderCourtFormation(sport){
   const bench=players.filter(x=>!usedIds.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
   const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
   const header = sport==='pallavolo'
-    ? `<h3 style="margin:0 0 12px"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>`
+    ? `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <h3 style="margin:0"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>
+        ${iosToggle(!!liberoRow,'setVolleyUseLibero(this.checked)','Gioca con Libero')}
+      </div>`
     : `<h3 style="margin:0 0 12px"><i class="fa-solid fa-basketball" style="color:var(--brand)"></i> Formazione in campo</h3>`;
   const liberoHtml = liberoRow ? (()=>{
     const p=liberoRow.player;
