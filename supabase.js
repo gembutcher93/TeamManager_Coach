@@ -85,6 +85,16 @@
     return true;
   }
 
+  /* ---- player_packages: cancellazione (coach) — Task 1 (Prompt20), collegata
+     alla rimozione di un giocatore dal roster locale ---- */
+  async function deletePlayerPackage(teamId, playerId) {
+    const sb = await getClient();
+    const { error } = await sb.rpc('delete_player_package', {
+      p_team_id: teamId, p_player_id: String(playerId)
+    });
+    if (error) throw error;
+  }
+
   /* ---- player_packages: lettura (player, via team_code+pin) ---- */
   async function getPlayerPackage(teamCode, pin) {
     const sb = await getClient();
@@ -131,6 +141,6 @@
     return (data && data[0]) || null; // {policy_version, policy_hash, accepted_at}
   }
 
-  window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus,
+  window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, deletePlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus,
     signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance };
 })();

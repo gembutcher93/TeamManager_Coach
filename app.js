@@ -1947,7 +1947,19 @@ function removePlayer(id){
     const p=playerById(id);
     confirmAction(`Rimuovere ${p.name} dalla rosa? Lo storico statistiche resterà nei tabellini.`,()=>{
         DB.players=DB.players.filter(x=>x.id!==id);save();renderRoster();toast('Atleta rimosso','info');
+        deletePlayerPackageOnline(id);
     });
+}
+/* ---------- Task 1 (Prompt20): propaga la rimozione locale del giocatore anche su
+   Supabase (player_packages), se la squadra ha gia' un sync online attivo. La
+   rimozione locale e' gia' avvenuta sopra: qualunque esito di questa chiamata
+   (giocatore mai sincronizzato, offline, nessun sync attivo) resta silenzioso,
+   senza mai bloccare o segnalare errore per la rimozione locale gia' fatta. ---------- */
+function deletePlayerPackageOnline(id){
+    const sync=DB.settings.sync;
+    if(!sync.hasEverSynced || !sync.teamId) return;
+    if(typeof AiRIMSync==='undefined') return;
+    AiRIMSync.deletePlayerPackage(sync.teamId, id).catch(()=>{});
 }
 /* ---------- ruoli validi per lo sport della squadra (usati in editing/multi-ruolo) ---------- */
 function sportRoles(){
@@ -4154,7 +4166,12 @@ function importData(e){
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
                    squadra importata al SUO account (owner_user_id) invece di lasciare che
-                   il prossimo "Sincronizza online" ne crei una nuova (squadra duplicata). */
+                   il prossimo "Sincronizza online" ne crei una nuova (squadra duplicata).
+                   Task 2 (Prompt20): il team_code/teamId nel backup potrebbe appartenere
+                   a un altro coach (backup condiviso/di un dispositivo diverso) — marcato
+                   "pending" finche' ensureTeamOnline() non lo verifica/rigenera in modo
+                   sicuro (vedi ensureTeamOnline), cosi' non viene mai riusato alla cieca. */
+                if(DB.settings.sync && DB.settings.sync.teamCode) DB.settings.sync.importedTeamPending=true;
                 save();renderTeamName();go('dashboard');toast('Backup importato con successo');
                 relinkTeamAfterImport();
             });
@@ -4508,11 +4525,19 @@ async function ensureTeamOnline(){
         // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
         team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
     }else{
+        /* Task 2 (Prompt20): un team_code ereditato da un backup importato (potenzialmente
+           di un altro coach) non va mai riusato alla cieca nel flusso anonimo, che — a
+           differenza di upsert_my_team sopra, protetto da owner_user_id — non ha alcun
+           controllo di ownership lato server: chiunque conosca quel codice puo' scrivere
+           sulla stessa riga. Senza login non possiamo verificare a chi appartiene davvero,
+           quindi lo scartiamo e ne generiamo uno nuovo: forza una squadra pulita invece di
+           rischiare di sovrascrivere i dati del coach originale. */
+        if(sync.importedTeamPending) sync.teamCode=null;
         if(!sync.teamCode) sync.teamCode=genTeamCode();
         team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
     }
     if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
-    sync.teamId=team.id; sync.teamCode=team.team_code; save();
+    sync.teamId=team.id; sync.teamCode=team.team_code; sync.importedTeamPending=false; save();
     return sync;
 }
 /* =========================================================
