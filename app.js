@@ -4555,6 +4555,7 @@ function buildPlayerPackage(id, photo){
 function encodePkg(o){ return btoa(unescape(encodeURIComponent(JSON.stringify(o)))); }
 function slug(s){ return s.toLowerCase().normalize('NFD').replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
 async function sharePlayer(id){
+    if(!guardShare()) return;
     const photo=await cIdbGet('p'+id); const p=playerById(id); const pkg=buildPlayerPackage(id,photo); const code=encodePkg(pkg);
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-share-nodes" style="color:var(--brand)"></i> Condividi · ${escapeHtml(p.name)}</h3>
@@ -4580,6 +4581,7 @@ function copyShare(){
     navigator.clipboard?.writeText(ta.value).then(()=>toast('Codice copiato')).catch(()=>{document.execCommand('copy');toast('Codice copiato');});
 }
 async function downloadPlayerPkg(id){
+    if(!guardShare()) return;
     const photo=await cIdbGet('p'+id); const p=playerById(id); const pkg=buildPlayerPackage(id,photo);
     const blob=new Blob([JSON.stringify(pkg)],{type:'application/json'});
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
@@ -4839,7 +4841,15 @@ async function coachAccountFinishSignup(){
         const cb=_coachAccountOnSuccess; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
         closeModal(); toast('Account creato'); renderSyncSettings();
         if(cb) cb();
-        else if(DB.settings.sync.teamCode){ try{ await ensureTeamOnline(); checkLicenseOnline(true); }catch(e){} } // reclama subito la squadra locale gia' sincronizzata
+        else if(DB.settings.sync.teamCode){
+            // reclama subito la squadra locale gia' sincronizzata — PROMPTFIXLITE: prima
+            // un fallimento qui spariva nel nulla (catch vuoto), lasciando owner_user_id
+            // null senza che il coach se ne accorgesse ("Account creato" era gia' apparso
+            // prima di questo tentativo). Ora l'errore e' visibile; il self-heal al
+            // prossimo avvio (vedi boot) ritenta comunque anche se l'utente ignora l'avviso.
+            try{ await ensureTeamOnline(); checkLicenseOnline(true); }
+            catch(e){ toast('Account creato, ma il collegamento della squadra è in sospeso: riprova da Impostazioni o riapri l\'app.','warning'); }
+        }
     }catch(e){
         if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
     }
@@ -4859,7 +4869,12 @@ async function coachAccountSubmit(mode){
         ensurePolicyAccepted(()=>{
             closeModal(); renderSyncSettings();
             if(cb) cb();
-            else if(DB.settings.sync.teamCode){ ensureTeamOnline().then(()=>checkLicenseOnline(true)).catch(()=>{}); }
+            else if(DB.settings.sync.teamCode){
+                // PROMPTFIXLITE: stesso fix del signup — errore visibile invece di sparire
+                // in un catch vuoto (il self-heal al prossimo avvio ritenta comunque).
+                ensureTeamOnline().then(()=>checkLicenseOnline(true))
+                    .catch(()=>toast('Accesso effettuato, ma il collegamento della squadra è in sospeso: riprova da Impostazioni o riapri l\'app.','warning'));
+            }
         });
     }catch(e){
         if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
@@ -5048,6 +5063,24 @@ function guardWrite(){
         toast(lvl==='blocked' ? 'Nessuna licenza attiva: azione non disponibile.' : 'Licenza scaduta: modifica disabilitata.', 'danger');
     }
     return false;
+}
+/* FIX: il canale file/codice (sharePlayer/downloadPlayerPkg) e' puro scambio locale
+   che non tocca mai Supabase — non passava mai da guardWrite(), quindi non veniva
+   mai intercettato dal paywall online (che scatta solo dopo un primo sync, vedi
+   isLicensePro). Chi non sincronizza mai online, o chi forza DEMO_BUILD=false /
+   supera il trial in una build demo, poteva continuare a generare pacchetti
+   completi per il Player all'infinito. guardShare() applica qui lo stesso gate:
+   licenza/trial online (stesso guardWrite(), stesso messaggio) PIU' il controllo
+   demo scaduta (che guardWrite() da solo non vede, essendo indipendente dal sync). */
+function guardShare(){
+    if(DEMO_BUILD && demoExpired()){
+        const now=Date.now();
+        if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
+            toast('Prova terminata: serve la versione completa per condividere nuovi dati con l\'app Player.','danger');
+        }
+        return false;
+    }
+    return guardWrite();
 }
 
 /* ---------- sync inverso: importa il codice "statistiche mentali" inviato dal giocatore (Mental Gym) ---------- */
@@ -5623,7 +5656,23 @@ checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
-setTimeout(()=>refreshCoachSession().then(session=>{ renderSyncSettings(); if(session) ensurePolicyAccepted(()=>{}); }), 2000);   /* Task 4 (Prompt16/17): sa gia' se il coach e' loggato prima che apra Impostazioni, e propone subito il re-consenso se la policy e' cambiata dall'ultimo accesso */
+setTimeout(()=>refreshCoachSession().then(session=>{
+    renderSyncSettings();
+    if(!session) return;
+    ensurePolicyAccepted(()=>{});
+    /* PROMPTFIXLITE: reclamo "self-heal" della squadra locale. Se il coach e' loggato
+       e la squadra locale ha gia' un team_code (sync avviato prima del login, o un
+       tentativo di reclamo precedente riuscito solo in apparenza — es. fallito per un
+       problema di rete transitorio subito dopo signup/signin, silenziosamente, senza
+       che owner_user_id venisse davvero popolato) ritenta qui il claim a ogni avvio.
+       ensureTeamOnline()->upsert_my_team e' idempotente: innocuo se gia' fatto, ma
+       garantisce che una squadra rimasta "orfana" (owner_user_id null nonostante un
+       account ora collegato) si autoripari alla prossima apertura dell'app, senza
+       richiedere un nuovo sync manuale del coach. */
+    if(DB.settings.sync && DB.settings.sync.teamCode){
+        ensureTeamOnline().then(()=>renderSyncSettings()).catch(()=>{});
+    }
+}), 2000);   /* Task 4 (Prompt16/17): sa gia' se il coach e' loggato prima che apra Impostazioni, e propone subito il re-consenso se la policy e' cambiata dall'ultimo accesso */
 setTimeout(()=>checkLicenseOnline(false), 2500);   /* check giornaliero (auto-throttlato), non ad ogni azione */
 
 /* =========================================================
