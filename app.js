@@ -11,6 +11,50 @@ const STRIPE_ANNUAL_URL  = '';            // idem
 const MULTITEAM_ENABLED = false;          // pannello multi-squadra/società = feature tier Club
 /* Tutta la logica demo (countdown, blocco a scadenza) si attiva SOLO se DEMO_BUILD===true. */
 
+/* ---------- SICUREZZA: escaping per interpolazioni non fidate dentro innerHTML ----------
+   Nomi giocatore, nome squadra, note, avversari ecc. arrivano da input utente (o da un pacchetto
+   sync importato) e finiscono spesso dentro template string assegnate a innerHTML. Senza escaping
+   un nome tipo <img src=x onerror=...> eseguirebbe HTML/JS arbitrario (XSS). Va applicato SEMPRE
+   al valore non fidato interpolato, MAI all'intero template (che contiene markup legittimo). */
+function escapeHtml(str){
+  if(str==null) return '';
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+/* Per un valore non fidato che finisce DENTRO un argomento stringa (apici singoli) di un
+   onclick="funzione('...')" — a sua volta dentro un attributo HTML (apici doppi). Serve escaping
+   a due livelli: prima si neutralizza l'apice singolo/backslash per non spezzare la stringa JS,
+   poi si applica escapeHtml perché l'intero markup passa comunque da un innerHTML. */
+function escapeJsAttr(str){
+  return escapeHtml(String(str==null?'':str).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+}
+/* ---------- SICUREZZA: prototype pollution su JSON.parse di dati non fidati ----------
+   Un backup (importData) o un pacchetto sync (mental/wellness) è JSON scelto da chi lo genera:
+   un file costruito ad arte con una chiave "__proto__"/"constructor"/"prototype" annidata può,
+   se quell'oggetto viene poi copiato campo-per-campo dentro un altro (merge/assign), inquinare
+   Object.prototype per l'intera pagina. JSON.parse non lo fa da solo, ma qui puliamo comunque
+   PRIMA di qualunque uso, a ogni livello di annidamento, così nessun percorso successivo (attuale
+   o futuro) può essere sfruttato. Muta l'oggetto passato e lo ritorna anche per comodità. */
+function stripDangerousKeys(node, seen){
+  if(node===null || typeof node!=='object') return node;
+  seen = seen || new Set();
+  if(seen.has(node)) return node;
+  seen.add(node);
+  if(Array.isArray(node)){
+    for(let i=0;i<node.length;i++) node[i]=stripDangerousKeys(node[i], seen);
+    return node;
+  }
+  ['__proto__','constructor','prototype'].forEach(k=>{
+    if(Object.prototype.hasOwnProperty.call(node,k)) delete node[k];
+  });
+  Object.keys(node).forEach(k=>{ node[k]=stripDangerousKeys(node[k], seen); });
+  return node;
+}
+
 /* ---------- STATO PROVA (solo DEMO_BUILD) ---------- */
 function demoDaysLeft(){
   const raw=localStorage.getItem('vt_demo_start');
@@ -280,13 +324,13 @@ function weightsExplainerHTML(){
 const ADMIN_PASS='coach173';   /* password admin di default — cambiabile qui */
 let WADRAFT=null;              /* copia di lavoro dei pesi durante l'editing */
 function openWeightsAdmin(){
-  const tries=prompt('Password admin per regolare il motore voto:');
-  if(tries===null) return;
-  if(tries!==ADMIN_PASS){ toast('Password errata','info'); return; }
-  WADRAFT=JSON.parse(JSON.stringify(getVolleyWeights()));
-  WEIGHTS_OVERRIDE=WADRAFT;
-  weightsCSS();
-  renderWeightsEditor();
+  promptModal({title:'Accesso admin', text:'Password admin per regolare il motore voto:', type:'password', okText:'Entra', onOk:(tries)=>{
+    if(tries!==ADMIN_PASS){ toast('Password errata','info'); return; }
+    WADRAFT=JSON.parse(JSON.stringify(getVolleyWeights()));
+    WEIGHTS_OVERRIDE=WADRAFT;
+    weightsCSS();
+    renderWeightsEditor();
+  }});
 }
 function closeWeightsAdmin(){ WEIGHTS_OVERRIDE=null; WADRAFT=null; closeModal(); }
 function renderWeightsEditor(){
@@ -425,10 +469,57 @@ function loadDB(){
 }
 const FRESH_INSTALL = !localStorage.getItem(dbKey()); // nessun dato squadra salvato per questo profilo
 let DB = loadDB();
-if(!DB.trainings) DB.trainings = {};
-if(!DB.substitutions) DB.substitutions = {};
-if(!DB.nextId) DB.nextId = Date.now();
-function save(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
+/* Prompt19/Task1: guardie di migrazione per i campi aggiunti dopo la creazione di
+   emptyDB() — un DB salvato PRIMA che un campo esistesse ne resta privo per sempre,
+   a meno di richiamare questa funzione ad ogni caricamento (qui) E dopo un import
+   backup (in importData(), che sostituisce l'intero oggetto DB). Il bug delle
+   "rotazioni scomparse" era esattamente questo: DB.rotationStats mancante su un DB
+   precedente all'introduzione del campo mandava rotData() in TypeError, lasciando
+   #scout-rot vuoto senza errore visibile per l'utente. */
+function ensureDBDefaults(){
+    if(!DB.trainings) DB.trainings = {};
+    if(!DB.substitutions) DB.substitutions = {};
+    if(!DB.rotationStats) DB.rotationStats = {};
+    if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
+    if(!DB.physicalTests.height) DB.physicalTests.height = [];
+    if(!DB.nextId) DB.nextId = Date.now();
+    if(!DB.settings) DB.settings = {};
+    ensureSyncSettings();
+}
+ensureDBDefaults();
+/* Task 1 (Prompt16): PIN casuale invece che sequenziale — un PIN progressivo
+   (1, 2, 3…) e' banale da indovinare per un compagno di squadra che vuole
+   sbirciare la scheda di un altro. 4 cifre casuali, ricontrollate contro i
+   PIN gia' in uso nella rosa per evitare collisioni. */
+function genPlayerPin(){
+    const used=new Set((DB.players||[]).map(p=>p.pin));
+    const arr=new Uint32Array(1);
+    let pin;
+    do{ (window.crypto||window.msCrypto).getRandomValues(arr); pin=String(1000+(arr[0]%9000)); }while(used.has(pin));
+    return pin;
+}
+(DB.players||[]).forEach(p=>{ if(!p.pin) p.pin=genPlayerPin(); }); // backfill PIN per i giocatori creati prima del sync online
+function ensureSyncSettings(){
+    // separata da funzione (non solo top-level) cosi' puo' essere richiamata anche
+    // dopo importData(), che sostituisce l'intero oggetto DB (Task 3/bugfix collegato)
+    if(!DB.settings.sync) DB.settings.sync = {teamId:null, teamCode:null, hasEverSynced:false, license:null};
+}
+/* Task Prompt18: ultima rete di sicurezza del paywall — save() e' l'UNICO punto
+   che scrive davvero su localStorage (ogni altra funzione dell'app passa sempre
+   da qui), quindi bloccarlo qui garantisce che nessuna modifica sopravviva a un
+   reload mentre la licenza non e' attiva, anche per azioni non esplicitamente
+   protette da guardWrite(). saveSystem() e' il bypass riservato al bookkeeping
+   del controllo licenza stesso (altrimenti lo stato non potrebbe mai aggiornarsi). */
+function _persistDB(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
+function saveSystem(){ _persistDB(); }
+function save(){
+    if(!canWriteDB()){
+        const now=Date.now();
+        if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now; toast('Licenza non attiva: le modifiche non vengono salvate.','danger'); }
+        return;
+    }
+    _persistDB();
+}
 function uid(){ return DB.nextId++; }
 
 /* =========================================================
@@ -438,9 +529,14 @@ const ONB_STEPS = [
   {icon:'fa-shield-halved',title:'Crea la tua squadra',body:'Dai un nome alla squadra e scegli lo sport — pallavolo, calcio o basket — da Impostazioni. Si cambia quando vuoi.'},
   {icon:'fa-users',title:'Aggiungi i giocatori',body:'Vai su Roster &amp; Ruoli e costruisci la rosa: nome, numero, ruolo. Da lì assegni anche capitano e vice capitano.'},
   {icon:'fa-calendar-days',title:'Pianifica gli allenamenti',body:'In Calendario crei sedute singole o serie ricorrenti, e assegni gli esercizi da far votare.'},
+  {icon:'fa-dumbbell',title:'Alleni e voti la seduta',body:"In Allenamenti &amp; Voti costruisci la seduta con gli esercizi — anche dalla Libreria già pronta — e dai un voto a ogni giocatore: la media confluisce nella sua scheda."},
   {icon:'fa-clipboard-list',title:'In partita usa lo Scout',body:'Durante la gara registra i fondamentali in Scout Gara: il voto di ogni giocatore nasce automaticamente da lì.'},
+  {icon:'fa-people-group',title:'La Formazione si sceglie da sola',body:"In Formazione l'app propone i titolari in base alla media voto — per ogni ruolo gioca chi rende di più — e puoi comunque sistemare posizioni e cambi a mano."},
   {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'},
+  {icon:'fa-chalkboard',title:'Spiega gli schemi in spogliatoio',body:'La Lavagnetta Tattica parte già dalla formazione consigliata: trascina i gettoni e disegna schemi e traiettorie sul campo.'},
+  {icon:'fa-stopwatch',title:'Misura sprint e salto da un video',body:'In Test Fisici calcoli tempo di reazione, velocità e salto verticale da un video con la telecamera ferma — calibrazione manuale, nessuna intelligenza artificiale.'},
   {icon:'fa-share-nodes',title:'Condividi con il Player',body:"Da Roster apri un giocatore e tocca Condividi: gli mandi file o codice con card, statistiche e formazione consigliata. Aggiorna e reinvia dopo ogni partita o allenamento. Il giocatore può a sua volta rimandarti le sue statistiche mentali (Mental Gym) da reimportare."},
+  {icon:'fa-wand-magic-sparkles',title:"C'è altro da scoprire",body:"Dentro la scheda di ogni giocatore trovi anche il radar comparativo e l'export PDF \"Scheda Crescita\"; in Impostazioni ci sono l'Officina Card e il motore voto avanzato (protetto da password)."},
   {icon:'fa-database',title:"L'app funziona offline",body:"Tutti i dati restano sul tuo dispositivo, non in un cloud. Fai backup regolari da Impostazioni per non perderli se cambi telefono o disinstalli l'app."}
 ];
 const ONB_DEMO_STEPS = [
@@ -453,10 +549,11 @@ function onbCSS(){
   if(document.getElementById('onb-css')) return;
   const st=document.createElement('style'); st.id='onb-css';
   st.textContent=`
-  #onb-overlay{position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;padding:1.2rem;
-    background:rgba(4,8,18,.86);backdrop-filter:blur(6px);}
-  .onb-card{width:100%;max-width:460px;background:var(--surface,#0E1525);border:1px solid var(--line,#22304E);border-radius:20px;
-    padding:1.8rem 1.6rem;text-align:center;box-shadow:0 20px 50px -20px rgba(0,0,0,.7);animation:onbPop .25s cubic-bezier(.2,.8,.2,1);}
+#onb-overlay{position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;padding:1.2rem;
+  overflow-y:auto;
+  background:rgba(4,8,18,.86);backdrop-filter:blur(6px);}
+.onb-card{width:100%;max-width:460px;max-height:90vh;overflow-y:auto;margin:auto;background:var(--surface,#0E1525);border:1px solid var(--line,#22304E);border-radius:20px;
+  padding:1.8rem 1.6rem;text-align:center;box-shadow:0 20px 50px -20px rgba(0,0,0,.7);animation:onbPop .25s cubic-bezier(.2,.8,.2,1);}
   @keyframes onbPop{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:none}}
   .onb-ic{width:64px;height:64px;border-radius:18px;background:rgba(34,197,94,.14);color:var(--brand,#22C55E);
     display:flex;align-items:center;justify-content:center;font-size:1.7rem;margin:0 auto 1.1rem;}
@@ -507,11 +604,12 @@ function onbFinish(){
 }
 
 /* =========================================================
-   TOUR CONTESTUALE (Modulo S) — overlay leggero con 2-3 punti,
-   mostrato alla PRIMA visita di Scout Gara, Formazione consigliata,
-   Calendario e Impostazioni/Backup (traccia con localStorage
+   TOUR CONTESTUALE (Modulo S, esteso in Modulo V) — overlay leggero
+   con 2-3 punti, mostrato alla PRIMA visita di Scout Gara, Formazione
+   consigliata, Calendario, Impostazioni/Backup, Presenze, Allenamenti,
+   Lavagnetta Tattica e Test Fisici (traccia con localStorage
    tut_seen_<schermata>). Non si ripresenta da solo dopo la prima
-   volta: si riapre a mano col bottone "?" su ciascuna delle 4
+   volta: si riapre a mano col bottone "?" su ciascuna di queste
    schermate. I passi il cui elemento non è presente/visibile (es.
    "Importa" nascosto in demo, "Modulo/rotazione" per il basket che
    non ce l'ha) vengono saltati senza errori.
@@ -536,6 +634,25 @@ const CTX_TOURS = {
     {sel:'#ctx-backup-export', title:'Backup dei dati', text:"Scarica qui un file con tutti i dati: rosa, calendario, statistiche, presenze. Fallo regolarmente — l'app è offline, i dati vivono solo su questo dispositivo."},
     {sel:'#ctx-backup-import', title:'Ripristina o trasferisci', text:'Carica un backup per ripristinare i dati o spostarli su un altro dispositivo.'},
     {sel:'#ctx-backup-guide', title:'Rivedi la guida', text:'Puoi riaprire il tutorial introduttivo in qualsiasi momento da qui.'}
+  ],
+  presenze: [
+    {sel:'#att-select', title:'Scegli la seduta', text:"Seleziona l'allenamento per cui vuoi fare l'appello."},
+    {sel:'#att-panel', title:"Segna chi c'è", text:'Tocca Presente, Assente o Giust. per ogni giocatore: la percentuale della seduta si aggiorna da sola.'},
+    {sel:'#att-season', title:'Costanza stagionale', text:'Qui vedi chi è più presente in stagione, giocatore per giocatore.'}
+  ],
+  allenamenti: [
+    {sel:'#tr-select', title:'Scegli la seduta', text:"Seleziona l'allenamento a cui vuoi assegnare esercizi e voti."},
+    {sel:'#ex-lib-btn', title:'Libreria esercizi', text:'Pesca un esercizio già pronto per categoria, oppure creane uno tuo: resta salvato per le prossime volte.'},
+    {sel:'#grade-card', title:'Voti per giocatore', text:'Da 1 a 10, lascia vuoto chi non hai valutato: la media confluisce nella scheda atleta.'}
+  ],
+  tattica: [
+    {sel:'#court-area', title:'Trascina i gettoni', text:'Parti già dalla formazione consigliata: sposta i giocatori per spiegare una rotazione o un cambio.'},
+    {sel:'#tact-tools', title:'Disegna schemi', text:'Scegli colore e spessore, poi disegna frecce e traiettorie direttamente sul campo.'},
+    {sel:'#tact-reset', title:'Ricomincia quando vuoi', text:'Cancella il disegno o riporta i gettoni alla formazione consigliata in un tocco.'}
+  ],
+  'test-fisici': [
+    {sel:'#phys-grid', title:'Tre test da un video', text:'Sprint, altezza raggiunta ed elevazione del salto: carica un video con la telecamera ferma e inserisci i marcatori a mano.'},
+    {sel:'#phys-hist-player', title:'Storico per giocatore', text:"Scegli un atleta per vedere l'andamento dei suoi test nel tempo."}
   ]
 };
 let _ctx=null;
@@ -575,7 +692,7 @@ function ctxStart(key){
   ctxCSS();
   _ctx={key,steps,idx:0};
   if(!document.getElementById('ctx-block')){
-    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-block'}));
+    document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-block',onclick:ctxFinish}));
     document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-hole'}));
     document.body.appendChild(Object.assign(document.createElement('div'),{id:'ctx-bubble'}));
   }
@@ -588,6 +705,8 @@ function ctxRender(){
   const hole=document.getElementById('ctx-hole'), bub=document.getElementById('ctx-bubble');
   if(!hole||!bub) return;
   if(el){
+    const r0=el.getBoundingClientRect();
+    if(r0.top<0||r0.bottom>window.innerHeight) el.scrollIntoView({block:'center'});
     const r=el.getBoundingClientRect(), pad=6;
     hole.style.display='block';
     hole.style.left=(r.left-pad)+'px'; hole.style.top=(r.top-pad)+'px';
@@ -668,8 +787,58 @@ function checkDemoLock(){
 }
 function checkOnboardingAndDemo(){
   updateDemoBadge();
+  checkLicenseLock();
   if(DEMO_BUILD && demoExpired()){ checkDemoLock(); return; }
   if(FRESH_INSTALL && !localStorage.getItem('vt_tutorial_done')) openOnboarding(false);
+}
+/* =========================================================
+   PAYWALL REALE (Prompt18) — Caso 1: blocco totale a schermo intero (riusa lo
+   stile .dexp-card gia' definito sopra per la scadenza demo). Caso 2: banner
+   persistente ma non invasivo, il resto dell'app resta visitabile in sola
+   lettura (l'enforcement vero e proprio e' in save()/guardWrite(), qui c'e'
+   solo la UI che informa/blocca la navigazione). Chiamata da go() ad ogni
+   cambio schermata e da checkLicenseOnline() dopo ogni verifica, cosi' lo
+   sblocco e' immediato appena la licenza torna attiva su Supabase. */
+function licReadonlyBannerCSS(){
+  if(document.getElementById('lic-ro-css')) return;
+  const st=document.createElement('style'); st.id='lic-ro-css';
+  st.textContent=`
+  #lic-ro-banner{position:fixed;left:0;right:0;bottom:0;z-index:9990;padding:9px 14px;
+    background:rgba(240,70,60,.16);border-top:1px solid rgba(240,70,60,.4);backdrop-filter:blur(6px);
+    color:var(--text,#F3F7FC);font-size:.8rem;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;text-align:center}
+  #lic-ro-banner b{color:var(--flame,#F0463C)}
+  `;
+  document.head.appendChild(st);
+}
+function checkLicenseLock(){
+  const lvl=licenseAccessLevel();
+  const lockEl=document.getElementById('lic-lock-overlay');
+  const bannerEl=document.getElementById('lic-ro-banner');
+  if(lvl!=='blocked' && lockEl) lockEl.remove();
+  if(lvl!=='readonly' && bannerEl) bannerEl.remove();
+  if(lvl==='blocked' && !lockEl){
+    dexpCSS();
+    const o=document.createElement('div'); o.id='lic-lock-overlay'; o.style.zIndex='99998';
+    o.className='';
+    o.style.cssText='position:fixed;inset:0;z-index:99998;display:flex;align-items:center;justify-content:center;padding:1.2rem;background:linear-gradient(170deg,#0A1020,#060A18);';
+    o.innerHTML=`<div class="dexp-card">
+      <div class="dexp-ic"><i class="fa-solid fa-lock"></i></div>
+      <h2>Nessuna licenza attiva</h2>
+      <p>Nessuna licenza attiva per questo account. Contatta <b>${CONTACT_INFO}</b> per attivare l'abbonamento.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="coachSignOut()"><i class="fa-solid fa-right-from-bracket"></i> Esci</button>
+    </div>`;
+    document.body.appendChild(o);
+  }
+  if(lvl==='readonly' && !bannerEl){
+    licReadonlyBannerCSS();
+    const b=document.createElement('div'); b.id='lic-ro-banner';
+    b.innerHTML=`<span><i class="fa-solid fa-triangle-exclamation"></i></span>
+      <b>Licenza scaduta</b><span>— modifica e sync disabilitati, i tuoi dati restano visibili.</span>
+      <span>Contatta ${CONTACT_INFO} per rinnovare.</span>
+      <button class="btn btn-ghost btn-sm" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
+    document.body.appendChild(b);
+  }
 }
 
 /* ---------- HELPERS DATI ---------- */
@@ -700,6 +869,71 @@ function getSeasonStats(pId){
     acc.lastVoto = acc.voti.length? acc.voti[acc.voti.length-1]:null;
     acc.cells = SCOUT[sport].season(acc);
     return acc;
+}
+/* ---------- multi-ruolo (Task 2): voto medio per un giocatore nello SPECIFICO ruolo giocato ----------
+   Ogni riga di scout salvata da qui in avanti porta con sè il ruolo giocato in quella gara (r.role).
+   Le righe storiche senza quel campo restano attribuite al ruolo attuale del giocatore — comportamento
+   identico a prima per chi non ha mai cambiato ruolo, quindi non retroattivo per chi lo fa in futuro. */
+function playerHasRole(p,role){ return !!p && (p.role===role || (p.secondaryRoles||[]).includes(role)); }
+function votoInRole(pId,role){
+    const p=playerById(pId), out=[];
+    DB.scoutHistory.forEach(m=>{
+        const r=m.rows.find(x=>x.pId===pId);
+        if(!r) return;
+        const playedRole=r.role || (p?p.role:null);
+        if(playedRole===role) out.push(rowVoto(r,m.sport));
+    });
+    return out.length? out.reduce((a,b)=>a+b,0)/out.length : null;
+}
+/* players: array di {p,v} (v = media stagionale sul ruolo primario, come già calcolata dal chiamante).
+   Ritorna i candidati per `role` — titolari di quel ruolo + multi-ruolo che lo hanno tra i secondari —
+   ordinati per voto medio ottenuto proprio in quel ruolo. */
+function byRoleCandidates(players,role){
+    return players.filter(x=>playerHasRole(x.p,role))
+        .map(x=> x.p.role===role ? x : {p:x.p, v:votoInRole(x.p.id,role)})
+        .sort((a,b)=>{
+            const av=a.v==null?-1:a.v, bv=b.v==null?-1:b.v;
+            if(bv!==av) return bv-av;
+            const ap=a.p.role===role?1:0, bp=b.p.role===role?1:0;
+            return bp-ap; // a parità di voto, preferisce il ruolo primario del giocatore
+        });
+}
+/* Assegna una lista di ruoli/zone (roleList: un ruolo per slot, duplicati ammessi per i ruoli con più
+   titolari, null per gli slot già occupati manualmente) ai candidati migliori disponibili — inclusi i
+   multi-ruolo. Usa un matching bipartito con augmenting path (algoritmo di Kuhn): ogni slot prova i
+   propri candidati in ordine di voto e, se il migliore è già assegnato altrove, verifica se quel
+   giocatore può essere "spostato" su un altro slot che sa coprire altrettanto bene. Questo evita che un
+   ruolo raro coperto solo da multi-ruolo (es. Opposto coperto solo da un Centrale+Opposto e uno
+   Schiacciatore+Opposto) resti vuoto solo perché quei giocatori sono stati assegnati per primi al loro
+   ruolo primario — se esiste UNA formazione che copre tutti gli slot, questo algoritmo la trova.
+   preUsed (opzionale) marca giocatori già assegnati altrove (es. sostituzioni manuali) come non
+   disponibili fin dall'inizio. */
+function assignRoleSlots(players,roleList,preUsed){
+    const used=preUsed?new Set(preUsed):new Set();
+    const out=new Array(roleList.length).fill(null);
+    const queueCache={};
+    const queueFor=role=>{ if(!queueCache[role]) queueCache[role]=byRoleCandidates(players,role).filter(c=>!used.has(c.p.id)); return queueCache[role]; };
+    const slotOfPlayer=new Map(); // playerId -> slot attualmente assegnato
+    const slots=[]; roleList.forEach((r,i)=>{ if(r!=null) slots.push(i); });
+    // ruoli più "scarsi" (meno candidati possibili) assegnati per primi: riduce i casi in cui serve spostare qualcuno
+    slots.sort((a,b)=>queueFor(roleList[a]).length-queueFor(roleList[b]).length);
+    function tryAssign(i,visited){
+        for(const cand of queueFor(roleList[i])){
+            const pid=cand.p.id;
+            if(visited.has(pid)) continue;
+            visited.add(pid);
+            const curSlot=slotOfPlayer.get(pid);
+            if(curSlot===undefined || tryAssign(curSlot,visited)){
+                slotOfPlayer.set(pid,i);
+                out[i]=cand;
+                return true;
+            }
+        }
+        return false;
+    }
+    slots.forEach(i=>tryAssign(i,new Set()));
+    slotOfPlayer.forEach((_,pid)=>used.add(pid));
+    return {picks:out, used};
 }
 function playerForm(pId){ // confronto media ultime 2 vs precedenti
     const v=getPlayerVoti(pId).map(x=>x.voto);
@@ -776,6 +1010,32 @@ function svgBars(items, opts={}){
     });
     return `<div class="chart-box"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${body}</svg></div>`;
 }
+/* radar/spider chart — assi = axes (array label), datasets = [{label,color,values(0-100)}] */
+function svgRadar(axes, datasets, opts={}){
+    if(!axes.length) return '<div class="empty-chart">Nessun asse disponibile</div>';
+    const w=opts.w||420, h=opts.h||420, cx=w/2, cy=h/2, R=Math.min(w,h)/2-48, n=axes.length, rings=4;
+    const angle=i=> -Math.PI/2 + i*2*Math.PI/n;
+    const pt=(i,frac)=>{ const a=angle(i), r=R*frac; return [cx+r*Math.cos(a), cy+r*Math.sin(a)]; };
+    let grid='';
+    for(let ring=1;ring<=rings;ring++){
+        const poly=axes.map((_,i)=>pt(i,ring/rings).join(',')).join(' ');
+        grid+=`<polygon points="${poly}" fill="none" stroke="var(--line-soft)" stroke-width="1"/>`;
+    }
+    let axisLines='', labels='';
+    axes.forEach((label,i)=>{
+        const [x,y]=pt(i,1);
+        axisLines+=`<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--line-soft)" stroke-width="1"/>`;
+        const [lx,ly]=pt(i,1.16);
+        labels+=`<text class="chart-axis" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${label}</text>`;
+    });
+    const shapes=(datasets||[]).map(ds=>{
+        const vals=ds.values.map(v=>Math.max(0,Math.min(100,v||0)));
+        const poly=vals.map((v,i)=>pt(i,v/100).join(',')).join(' ');
+        const dots=vals.map((v,i)=>{ const [x,y]=pt(i,v/100); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.4" fill="${ds.color}"/>`; }).join('');
+        return `<polygon points="${poly}" fill="${ds.color}" fill-opacity=".18" stroke="${ds.color}" stroke-width="2.2"/>${dots}`;
+    }).join('');
+    return `<div class="chart-box"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">${grid}${axisLines}${shapes}${labels}</svg></div>`;
+}
 
 /* ---------- TOAST / MODAL / CONFIRM ---------- */
 function toast(msg,type='success'){
@@ -783,7 +1043,7 @@ function toast(msg,type='success'){
     const el=document.createElement('div');
     el.className=`toast ${type}`;
     const ic={success:'fa-circle-check',danger:'fa-circle-xmark',warning:'fa-triangle-exclamation',info:'fa-circle-info'}[type];
-    el.innerHTML=`<i class="fa-solid ${ic}"></i><span>${msg}</span>`;
+    el.innerHTML=`<i class="fa-solid ${ic}"></i><span>${escapeHtml(msg)}</span>`;
     stack.appendChild(el);
     setTimeout(()=>{el.style.animation='fadeOut .3s forwards';setTimeout(()=>el.remove(),300);},3200);
 }
@@ -802,7 +1062,39 @@ function openModal(html,wide){
     m.innerHTML=html;
     document.getElementById('modal-overlay').classList.add('show');
 }
-function closeModal(){ document.getElementById('modal-overlay').classList.remove('show'); }
+function closeModal(){
+    document.getElementById('modal-overlay').classList.remove('show');
+    if(typeof PHYS!=='undefined' && PHYS){ if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL); PHYS=null; }
+}
+/* ---------- modale custom al posto di window.prompt() ---------- */
+let _promptCb=null;
+function promptModal(opts){
+    opts=opts||{};
+    _promptCb=typeof opts.onOk==='function'?opts.onOk:null;
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-keyboard" style="color:var(--brand)"></i> ${opts.title||'Inserisci un valore'}</h3>
+        <button class="modal-close" onclick="promptModalCancel()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        ${opts.text?`<p class="hint" style="margin-bottom:10px">${opts.text}</p>`:''}
+        <input id="prompt-modal-input" type="${opts.type||'text'}" placeholder="${opts.placeholder||''}" value="${opts.value||''}"
+          style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16))">
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost" style="flex:1" onclick="promptModalCancel()">${opts.cancelText||'Annulla'}</button>
+          <button class="btn btn-accent" style="flex:1" onclick="promptModalOk()">${opts.okText||'Conferma'}</button>
+        </div>
+      </div>`);
+    setTimeout(()=>{
+        const i=document.getElementById('prompt-modal-input');
+        if(i){ i.focus(); i.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); promptModalOk(); } }; }
+    },50);
+}
+function promptModalOk(){
+    const inp=document.getElementById('prompt-modal-input');
+    const v=inp?inp.value:'';
+    const cb=_promptCb; _promptCb=null;
+    closeModal();
+    if(cb) cb(v);
+}
+function promptModalCancel(){ _promptCb=null; closeModal(); }
 
 /* =========================================================
    LAYOUT — costruzione delle sezioni dentro <main>
@@ -834,7 +1126,18 @@ function buildLayout(){
             <p class="hint">Tocca il numero di maglia in tabella per assegnare i gradi: Standard ➔ Capitano 👑 ➔ Vice 🥈.</p>
         </div>
         <div class="card">
-            <h3><i class="fa-solid fa-users"></i> Rosa <span id="roster-count" style="color:var(--muted);font-weight:600;font-size:.85rem"></span></h3>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1rem">
+                <h3 style="margin:0"><i class="fa-solid fa-users"></i> Rosa <span id="roster-count" style="color:var(--muted);font-weight:600;font-size:.85rem"></span></h3>
+            </div>
+            <button class="radar-cta" style="margin-bottom:1rem" onclick="openRadarCompare()">
+                <span class="radar-cta-ic"><i class="fa-solid fa-chart-area"></i></span>
+                <span class="radar-cta-txt"><b>Radar comparativo</b><span>Metti a confronto due giocatori su tutte le statistiche</span></span>
+                <span class="radar-cta-arrow"><i class="fa-solid fa-chevron-right"></i></span>
+            </button>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+                <div class="fg" style="flex:1;min-width:180px;margin:0"><input id="roster-search" placeholder="Cerca per nome…" oninput="setRosterSearch(this.value)"></div>
+                <div id="roster-role-filter" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+            </div>
             <div class="table-wrap"><table>
                 <thead><tr><th>Maglia</th><th style="text-align:left">Giocatore</th><th>Ruolo</th><th>Stato</th><th>Media</th><th>Forma</th><th>Pres.</th><th>Azioni</th></tr></thead>
                 <tbody id="roster-body"></tbody></table></div>
@@ -913,14 +1216,18 @@ function buildLayout(){
     <section id="formazione" class="section">
         <div class="page-head"><div><div class="eyebrow">Meritocrazia</div><h2>Formazione consigliata</h2>
             <p class="sub">L'app propone i titolari in base alla media voto: per ogni ruolo gioca chi rende di più. Chi merita, gioca.</p></div>
-            <button class="ctx-help-btn" onclick="ctxStart('formazione')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-ghost btn-sm" onclick="exportFormationModal()"><i class="fa-solid fa-image"></i> Esporta formazione</button>
+                <button class="ctx-help-btn" onclick="ctxStart('formazione')" title="Guida rapida"><i class="fa-solid fa-question"></i></button>
+            </div></div>
         <div id="formazione-content"></div>
     </section>
 
     <!-- PRESENZE -->
     <section id="presenze" class="section">
         <div class="page-head"><div><div class="eyebrow">Gestione gruppo</div><h2>Presenze Allenamenti</h2>
-            <p class="sub">Segna chi c'è ad ogni seduta. Tieni d'occhio la costanza del gruppo e dei singoli.</p></div></div>
+            <p class="sub">Segna chi c'è ad ogni seduta. Tieni d'occhio la costanza del gruppo e dei singoli.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('presenze')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <div class="fg" style="max-width:420px"><label>Seduta di allenamento</label>
                 <select id="att-select" onchange="renderAttendance()"><option value="">Scegli una seduta…</option></select></div>
@@ -940,7 +1247,8 @@ function buildLayout(){
     <!-- ALLENAMENTI -->
     <section id="allenamenti" class="section">
         <div class="page-head"><div><div class="eyebrow">Programmazione</div><h2>Allenamenti &amp; Voti</h2>
-            <p class="sub">Costruisci la seduta con gli esercizi e assegna un voto a ogni giocatore. Le medie confluiscono nelle schede atleta e nell'app del giocatore.</p></div></div>
+            <p class="sub">Costruisci la seduta con gli esercizi e assegna un voto a ogni giocatore. Le medie confluiscono nelle schede atleta e nell'app del giocatore.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('allenamenti')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card">
             <div class="form-row">
                 <div class="fg" style="max-width:420px"><label>Seduta di allenamento</label>
@@ -953,7 +1261,7 @@ function buildLayout(){
             <div class="card">
                 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                     <h3 style="margin:0"><i class="fa-solid fa-list-check"></i> Esercizi della seduta</h3>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" onclick="openFieldEditor()"><i class="fa-solid fa-pen-ruler"></i> Disegna esercizio</button><button type="button" class="btn btn-ghost" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn btn-ghost" onclick="openFieldEditor()"><i class="fa-solid fa-pen-ruler"></i> Disegna esercizio</button><button type="button" class="btn btn-ghost" id="ex-lib-btn" onclick="openExLibrary()"><i class="fa-solid fa-book-open"></i> Libreria esercizi</button></div>
                 </div>
                 <form onsubmit="addExercise(event)"><div class="form-row" style="margin-top:.8rem">
                     <div class="fg"><label>Nome esercizio</label><input id="ex-name" placeholder="Es. Ricezione in bagher zona 5" required></div>
@@ -973,13 +1281,50 @@ function buildLayout(){
             </div>
         </div>
     </section>
+
+    <!-- TEST FISICI -->
+    <section id="test-fisici" class="section">
+        <div class="page-head"><div><div class="eyebrow">Preparazione</div><h2>Test Fisici</h2>
+            <p class="sub">Misura sprint, tempo di reazione e salto verticale da un video con telecamera ferma su cavalletto — calibrazione manuale, nessuna intelligenza artificiale.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('test-fisici')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+        <div class="phys-grid" id="phys-grid">
+            <div class="card">
+                <h3><i class="fa-solid fa-person-running"></i> Sprint &amp; Reazione</h3>
+                <p class="hint" style="margin-bottom:.8rem">Tempo di reazione al via e velocità media su una distanza nota, da un video con 3 marcatori (via, partenza, arrivo).</p>
+                <div class="fg"><label>Giocatore</label><select id="phys-sprint-player"></select></div>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('sprint')"><i class="fa-solid fa-stopwatch"></i> Nuovo test Sprint</button>
+            </div>
+            <div class="card">
+                <h3><i class="fa-solid fa-hand-point-up"></i> Altezza Raggiunta</h3>
+                <p class="hint" style="margin-bottom:.8rem" title="Altezza Raggiunta = quanto in alto tocchi. Elevazione del Salto = di quanto ti sollevi da terra.">Quanto in alto tocchi da terra (mano, testa o palla), con calibrazione pixel→metri rispetto a un riferimento noto (rete/muro/soffitto).</p>
+                <div class="fg"><label>Giocatore</label><select id="phys-height-player"></select></div>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('height')"><i class="fa-solid fa-ruler-vertical"></i> Nuovo test Altezza Raggiunta</button>
+                <p class="hint" style="margin-top:8px" title="Versione base a marcatori manuali. In arrivo (V2) tracking automatico su dispositivi più potenti."><i class="fa-solid fa-circle-info"></i> Versione base a marcatori manuali. In arrivo (V2) tracking automatico.</p>
+            </div>
+            <div class="card">
+                <h3><i class="fa-solid fa-arrow-up-long"></i> Elevazione del Salto</h3>
+                <p class="hint" style="margin-bottom:.8rem" title="Altezza Raggiunta = quanto in alto tocchi. Elevazione del Salto = di quanto ti sollevi da terra.">Di quanto ti sollevi da terra: differenza fra stacco e massima elevazione sullo stesso punto (bacino o piedi).</p>
+                <div class="fg"><label>Giocatore</label><select id="phys-jump-player"></select></div>
+                <button class="btn btn-accent" style="width:100%;margin-top:10px" onclick="openPhysTest('jump')"><i class="fa-solid fa-ruler-vertical"></i> Nuovo test Elevazione</button>
+                <p class="hint" style="margin-top:8px" title="Versione base a marcatori manuali. In arrivo (V2) tracking automatico su dispositivi più potenti."><i class="fa-solid fa-circle-info"></i> Versione base a marcatori manuali. In arrivo (V2) tracking automatico.</p>
+            </div>
+        </div>
+        <div class="card">
+            <h3><i class="fa-solid fa-clock-rotate-left"></i> Storico test</h3>
+            <div class="fg" style="max-width:320px"><label>Giocatore</label><select id="phys-hist-player" onchange="renderPhysHistory()"></select></div>
+            <div id="phys-hist" style="margin-top:1rem"></div>
+        </div>
+        <p class="hint">Precisione dipende da stabilità della telecamera, qualità del video e precisione dei marcatori inseriti manualmente. Per misurazioni ufficiali/agonistiche usa strumentazione certificata.</p>
+    </section>
+
     <section id="tattica" class="section">
         <div class="page-head"><div><div class="eyebrow">Spogliatoio</div><h2>Lavagnetta Tattica</h2>
-            <p class="sub">Disponi la rotazione trascinando i gettoni e disegna schemi, traiettorie e vettori direttamente sul campo.</p></div></div>
+            <p class="sub">Disponi la rotazione trascinando i gettoni e disegna schemi, traiettorie e vettori direttamente sul campo.</p></div>
+            <button class="ctx-help-btn" onclick="ctxStart('tattica')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="tactical-wrap">
             <div id="court-area"><canvas id="courtCanvas"></canvas></div>
             <div>
-                <div class="card" style="margin-bottom:1rem">
+                <div class="card" style="margin-bottom:1rem" id="tact-tools">
                     <h3 style="margin-bottom:.6rem"><i class="fa-solid fa-pen"></i> Strumenti</h3>
                     <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Colore</label>
                     <div class="color-picker">
@@ -992,8 +1337,10 @@ function buildLayout(){
                     <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;display:block;margin-top:14px">Spessore</label>
                     <input id="brush" type="range" min="1" max="10" value="3" style="width:100%;margin-top:6px;accent-color:var(--brand)">
                 </div>
-                <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
-                <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
+                <div id="tact-reset">
+                    <button class="btn btn-danger" style="width:100%;margin-bottom:10px" onclick="clearDraw()"><i class="fa-solid fa-eraser"></i> Cancella disegno</button>
+                    <button class="btn btn-ghost" style="width:100%" onclick="resetTokens()"><i class="fa-solid fa-arrows-spin"></i> Reset posizioni</button>
+                </div>
                 <p class="hint" style="margin-top:14px;line-height:1.5">Trascina i gettoni per spostarli. Capitano in oro 👑, vice in argento 🥈. Si parte dalla formazione consigliata; usa la panchina per spiegare un cambio senza toccarla.</p>
                 <div id="bench-area" style="margin-top:14px;display:none"></div>
             </div>
@@ -1007,11 +1354,15 @@ function buildLayout(){
             <button class="ctx-help-btn" onclick="ctxStart('backup')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
         <div class="card" id="ctx-backup-export"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON. Salva i dati, non le foto: quelle restano sul dispositivo.</p>
+            <div id="backup-status" style="margin-bottom:1rem"></div>
             <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button></div>
         ${DEMO_BUILD?'':`<div class="card" id="ctx-backup-import"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
             <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
+        <div class="card"><h3><i class="fa-solid fa-cloud"></i> Sincronizza online</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Codice squadra e PIN dei giocatori sincronizzati: il giocatore li usa nella sua app per accedere senza file da inviare. Sincronizza un giocatore dalla sua scheda (Condividi → Sincronizza online).</p>
+            <div id="sync-settings-card"></div></div>
         <div class="card"><h3><i class="fa-solid fa-brain"></i> Statistiche mentali</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Mental Gym → "Invia al mister") per aggiornare i suoi valori Riflessi/Percezione sulla card.</p>
             <button class="btn btn-ghost" onclick="openImportMental()"><i class="fa-solid fa-file-import"></i> Importa statistiche mentali</button></div>
@@ -1033,7 +1384,7 @@ function buildLayout(){
             <button class="btn btn-ghost" onclick="openWeightsAdmin()"><i class="fa-solid fa-lock"></i> Apri motore voto</button></div>
         <div class="card"><h3><i class="fa-solid fa-palette"></i> Aspetto</h3>
             <div class="fg" style="margin-bottom:12px"><label>Nome squadra</label>
-                <input value="${(DB.teamName||'').replace(/"/g,'&quot;')}" onchange="setTeamName(this.value)" style="width:100%;padding:11px;border-radius:10px;background:var(--surface);color:inherit;border:1px solid var(--line)"></div>
+                <input value="${escapeHtml(DB.teamName||'')}" onchange="setTeamName(this.value)" style="width:100%;padding:11px;border-radius:10px;background:var(--surface);color:inherit;border:1px solid var(--line)"></div>
             <div style="display:flex;gap:16px;flex-wrap:wrap">
                 <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Accento<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.brand)||'#22C55E')}" oninput="setColor('brand',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
                 <label style="display:flex;flex-direction:column;gap:4px;font-size:.82rem;color:var(--muted)">Sfondo<input type="color" value="${((DB.settings&&DB.settings.theme&&DB.settings.theme.bg)||'#060A18')}" oninput="setColor('bg',this.value)" style="width:52px;height:36px;border:none;background:none"></label>
@@ -1058,12 +1409,365 @@ function buildLayout(){
 }
 
 /* =========================================================
+   TEST FISICI V1 (Prompt8/9, Moduli A+B+C) — calibrazione manuale
+   pixel→metri + marcatori su frame, nessuna pose detection/AI.
+   Modulo C (Altezza Raggiunta, Prompt9) usa una calibrazione con
+   riferimento a terra (punto più basso dei 2 = y0, altezza nota
+   del punto più alto) cosi' da poter leggere un'altezza assoluta
+   da terra, invece della sola differenza fra due frame (Modulo B).
+   Il video non viene MAI salvato (solo un object URL per la
+   sessione corrente): si registra solo il risultato calcolato.
+   NOTA implementativa: lo stepping frame-by-frame usa currentTime
+   ± 1/fps (fps inseribile dall'utente, default 30) invece di
+   requestVideoFrameCallback — più uniforme fra i browser; i tempi
+   salvati vengono comunque letti da video.currentTime al momento
+   del tap, quindi la precisione del risultato non dipende dagli fps.
+   ========================================================= */
+let PHYS=null; // stato del wizard di test in corso
+function physCSS(){
+    if(document.getElementById('phys-css')) return;
+    const st=document.createElement('style'); st.id='phys-css';
+    st.textContent=`
+    .phys-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem;margin-bottom:1.2rem;}
+    @media(max-width:720px){.phys-grid{grid-template-columns:1fr;}}
+    .phys-video-wrap{position:relative;width:100%;background:#000;border-radius:12px;overflow:hidden;}
+    .phys-video-wrap video{width:100%;display:block;max-height:60vh;}
+    .phys-video-wrap canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;}
+    .phys-controls{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap;}
+    .phys-note{background:rgba(240,70,60,.1);border:1px solid rgba(240,70,60,.3);border-radius:10px;padding:.7rem .9rem;font-size:.82rem;color:var(--text);display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;}
+    .phys-note i{color:var(--flame);margin-top:2px;}
+    `;
+    document.head.appendChild(st);
+}
+function physDisclaimerHTML(){
+    return `<p class="hint" style="margin-top:14px;font-style:italic">Precisione dipende da stabilità della telecamera, qualità del video e precisione dei marcatori inseriti manualmente. Per misurazioni ufficiali/agonistiche usa strumentazione certificata.</p>`;
+}
+function physCameraNoteHTML(){
+    return `<div class="phys-note"><i class="fa-solid fa-triangle-exclamation"></i> La telecamera deve restare ferma per tutta la ripresa dopo la calibrazione. Se la sposti, ricalibra.</div>`;
+}
+/* ---- rendering sezione + storico ---- */
+function renderPhysicalTests(){
+    physCSS();
+    const opts = DB.players.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+    ['phys-sprint-player','phys-height-player','phys-jump-player','phys-hist-player'].forEach(id=>{
+        const el=document.getElementById(id); if(!el) return;
+        const prev=el.value;
+        el.innerHTML = DB.players.length ? opts : '<option value="">Nessun giocatore in rosa</option>';
+        if(prev && DB.players.some(p=>String(p.id)===prev)) el.value=prev;
+    });
+    renderPhysHistory();
+}
+function physPlayerTests(pid){
+    return { sprint:(DB.physicalTests.sprint||[]).filter(t=>t.playerId===pid), jump:(DB.physicalTests.jump||[]).filter(t=>t.playerId===pid), height:(DB.physicalTests.height||[]).filter(t=>t.playerId===pid) };
+}
+function renderPhysHistory(){
+    const sel=document.getElementById('phys-hist-player'), box=document.getElementById('phys-hist');
+    if(!sel||!box) return;
+    const pid=parseInt(sel.value);
+    if(!pid){ box.innerHTML='<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i>Aggiungi un giocatore in rosa per registrare test.</div>'; return; }
+    const {sprint,jump,height}=physPlayerTests(pid);
+    const rowsS=sprint.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
+        `<tr><td>${fmtDate(t.date)}</td><td class="num">${t.tempoReazione.toFixed(3)}s</td><td class="num">${t.tempoSprint.toFixed(3)}s</td><td class="num">${t.distanza}m</td><td class="num">${t.velocitaMedia.toFixed(2)} m/s</td><td class="num">${(t.velocitaMedia*3.6).toFixed(1)} km/h</td></tr>`).join('');
+    const rowsH=height.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
+        `<tr><td>${fmtDate(t.date)}</td><td class="num">${(t.altezzaRaggiunta/100).toFixed(2)} m</td><td>${t.puntoUsato}</td></tr>`).join('');
+    const rowsJ=jump.slice().sort((a,b)=>new Date(b.date)-new Date(a.date)).map(t=>
+        `<tr><td>${fmtDate(t.date)}</td><td class="num">${t.altezzaSalto} cm</td><td>${t.puntoRiferimentoUsato}</td></tr>`).join('');
+    box.innerHTML=`
+        <h4 style="font-size:.8rem;margin-bottom:6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Sprint &amp; Reazione</h4>
+        ${sprint.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Reazione</th><th>Sprint</th><th>Distanza</th><th>Vel. media</th><th>Km/h</th></tr></thead><tbody>${rowsS}</tbody></table></div>`:'<p class="hint">Nessun test sprint registrato.</p>'}
+        <h4 style="font-size:.8rem;margin:14px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Altezza Raggiunta</h4>
+        ${height.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Altezza</th><th>Punto</th></tr></thead><tbody>${rowsH}</tbody></table></div>`:'<p class="hint">Nessun test altezza raggiunta registrato.</p>'}
+        <h4 style="font-size:.8rem;margin:14px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Elevazione del Salto</h4>
+        ${jump.length?`<div class="table-wrap"><table><thead><tr><th>Data</th><th>Elevazione</th><th>Punto</th></tr></thead><tbody>${rowsJ}</tbody></table></div>`:'<p class="hint">Nessun test elevazione registrato.</p>'}`;
+}
+/* ---- video + canvas overlay condivisi fra tutti gli step ---- */
+function physVideoBlock(){
+    return `<div class="phys-video-wrap"><video id="phys-video" playsinline preload="auto"></video><canvas id="phys-canvas"></canvas></div>
+    <div class="phys-controls">
+        <button type="button" class="btn btn-ghost btn-icon" onclick="physStep(-1)" title="Indietro 1 frame"><i class="fa-solid fa-backward-step"></i></button>
+        <button type="button" class="btn btn-ghost btn-icon" id="phys-playbtn" onclick="physTogglePlay()" title="Play/Pausa"><i class="fa-solid fa-play"></i></button>
+        <button type="button" class="btn btn-ghost btn-icon" onclick="physStep(1)" title="Avanti 1 frame"><i class="fa-solid fa-forward-step"></i></button>
+        <input id="phys-seek" type="range" min="0" max="1000" value="0" step="1" oninput="physSeekFromRange(this.value)" style="flex:1;min-width:120px">
+        <span id="phys-time" class="num" style="min-width:66px;text-align:right;font-size:.8rem;color:var(--muted)">0.000s</span>
+    </div>
+    <div class="fg" style="max-width:170px;margin-top:8px"><label>FPS video (per lo step)</label><input id="phys-fps" type="number" min="1" max="240" value="${PHYS.fps}" onchange="PHYS.fps=parseFloat(this.value)||30"></div>`;
+}
+function physRedraw(){
+    const cv=document.getElementById('phys-canvas'); if(!cv) return;
+    const ctx=cv.getContext('2d'); ctx.clearRect(0,0,cv.width,cv.height);
+    if(PHYS && PHYS.overlayDraw) PHYS.overlayDraw(ctx,cv);
+}
+function physDot(ctx,cv,x,y,color){ ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x,y,Math.max(4,cv.width*0.008),0,Math.PI*2); ctx.fill(); }
+function physUpdateTimeUI(){
+    const v=document.getElementById('phys-video'); if(!v||!PHYS) return;
+    const t=document.getElementById('phys-time'); if(t) t.textContent=v.currentTime.toFixed(3)+'s';
+    const seek=document.getElementById('phys-seek'); if(seek && document.activeElement!==seek) seek.value=Math.round(v.currentTime*1000);
+    PHYS.lastTime=v.currentTime;
+}
+function physSeekFromRange(ms){ const v=document.getElementById('phys-video'); if(!v) return; v.pause(); v.currentTime=ms/1000; }
+function physStep(dir){ const v=document.getElementById('phys-video'); if(!v||!PHYS) return; v.pause(); const dt=1/(PHYS.fps||30); v.currentTime=Math.max(0,Math.min(v.duration||0, v.currentTime+dir*dt)); }
+function physTogglePlay(){ const v=document.getElementById('phys-video'); if(!v) return; if(v.paused) v.play(); else v.pause(); }
+function physInitVideo(onReady, opts){
+    opts=opts||{};
+    const v=document.getElementById('phys-video'), cv=document.getElementById('phys-canvas'), seek=document.getElementById('phys-seek');
+    v.src=PHYS.videoURL;
+    v.addEventListener('loadedmetadata',()=>{
+        cv.width=v.videoWidth; cv.height=v.videoHeight;
+        if(seek) seek.max=Math.round((v.duration||0)*1000);
+        if(PHYS.lastTime) v.currentTime=Math.min(PHYS.lastTime, v.duration||0);
+        physRedraw(); physUpdateTimeUI();
+        if(onReady) onReady();
+    }, {once:true});
+    v.addEventListener('seeked',physRedraw);
+    v.addEventListener('timeupdate',physUpdateTimeUI);
+    v.addEventListener('play',()=>{ const b=document.getElementById('phys-playbtn'); if(b) b.innerHTML='<i class="fa-solid fa-pause"></i>'; });
+    v.addEventListener('pause',()=>{ const b=document.getElementById('phys-playbtn'); if(b) b.innerHTML='<i class="fa-solid fa-play"></i>'; });
+    cv.onclick = opts.onCanvasClick ? (e)=>{
+        const r=cv.getBoundingClientRect();
+        const x=(e.clientX-r.left)*(cv.width/r.width), y=(e.clientY-r.top)*(cv.height/r.height);
+        opts.onCanvasClick(x,y);
+    } : null;
+}
+/* ---- avvio test ---- */
+function openPhysTest(type){
+    const sel=document.getElementById('phys-'+type+'-player');
+    const pid=parseInt(sel&&sel.value);
+    if(!pid){ toast('Scegli un giocatore prima di avviare il test','info'); return; }
+    PHYS={type, playerId:pid, fps:30, calib:{pts:[],pxPerMeter:null}, markers:{}, videoURL:null, overlayDraw:null, lastTime:0};
+    physStepUpload();
+}
+function physStepUpload(){
+    const label = PHYS.type==='sprint' ? 'Sprint &amp; Reazione' : (PHYS.type==='height' ? 'Altezza Raggiunta' : 'Elevazione del Salto');
+    const p=playerById(PHYS.playerId);
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-video" style="color:var(--brand)"></i> Test Fisici · ${label}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Giocatore: <b>${p?p.name:'—'}</b></p>
+        ${physCameraNoteHTML()}
+        <div class="fg"><label>Carica il video del test</label><input type="file" accept="video/*" capture="environment" onchange="physPickVideo(this)"></div>
+        <p class="hint" style="margin-top:8px">Da smartphone il selettore ti fa scegliere fra "Registra video" al volo e "Scegli dalla libreria" per uno già pronto.</p>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+}
+function physPickVideo(input){
+    const f=input.files&&input.files[0]; if(!f) return;
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS.videoURL=URL.createObjectURL(f);
+    PHYS.calib={pts:[],pxPerMeter:null};
+    physStepCalibrate();
+}
+/* ---- calibrazione (comune ai due moduli) ---- */
+function physStepCalibrate(){
+    const isHeight = PHYS.type==='height';
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-ruler-combined" style="color:var(--brand)"></i> Calibrazione</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        ${physCameraNoteHTML()}
+        <p class="hint" style="margin-bottom:10px">${isHeight
+            ? 'Scorri al frame in cui vedi un riferimento noto e fermo (rete, muro con nastro, soffitto). Tocca prima il punto A TERRA (livello del pavimento), poi il punto di riferimento noto a un\'altezza nota (es. altezza soffitto/canestro/segno sul muro).'
+            : 'Scorri al frame in cui vedi un riferimento noto e fermo (rete, muro con nastro, linea di campo), poi tocca i suoi due estremi sul video.'}</p>
+        ${physVideoBlock()}
+        <div id="phys-calib-form" style="margin-top:12px;display:none">
+            <div class="fg"><label>${isHeight ? 'Altezza da terra del punto di riferimento (metri)' : 'Distanza reale fra i due punti (metri)'}</label><input id="phys-calib-dist" type="number" min="0.01" step="0.01" placeholder="Es. 1.00"></div>
+            <button type="button" class="btn btn-accent" style="width:100%;margin-top:8px" onclick="physCalibCompute()"><i class="fa-solid fa-check"></i> Calcola calibrazione</button>
+        </div>
+        <div id="phys-calib-result" style="margin-top:12px"></div>
+      </div>`, true);
+    PHYS.calib.pts=[];
+    PHYS.overlayDraw=(ctx,cv)=>{
+        const pts=PHYS.calib.pts;
+        pts.forEach(pt=>physDot(ctx,cv,pt.x,pt.y,'#22C55E'));
+        if(pts.length===2){ ctx.strokeStyle='#22C55E'; ctx.lineWidth=Math.max(2,cv.width*0.004); ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y); ctx.lineTo(pts[1].x,pts[1].y); ctx.stroke(); }
+    };
+    physInitVideo(null, {onCanvasClick:physCalibClick});
+}
+function physCalibClick(x,y){
+    if(PHYS.calib.pts.length>=2) PHYS.calib.pts=[];
+    PHYS.calib.pts.push({x,y});
+    physRedraw();
+    const form=document.getElementById('phys-calib-form');
+    if(form) form.style.display = PHYS.calib.pts.length===2 ? 'block' : 'none';
+}
+function physCalibCompute(){
+    const pts=PHYS.calib.pts;
+    if(pts.length<2){ toast('Tocca i due punti di riferimento sul video','info'); return; }
+    const dist=parseFloat(document.getElementById('phys-calib-dist').value);
+    if(!dist||dist<=0){ toast('Inserisci la distanza reale in metri','info'); return; }
+    const distPx=Math.hypot(pts[1].x-pts[0].x, pts[1].y-pts[0].y);
+    const pxPerMeter=distPx/dist;
+    document.getElementById('phys-calib-result').innerHTML=`
+        <div class="phys-note" style="border-color:var(--brand);background:rgba(34,197,94,.1)">
+            <i class="fa-solid fa-check" style="color:var(--brand)"></i>
+            <div><b>${pxPerMeter.toFixed(1)} px/metro</b> — torna giusto?
+                <div style="display:flex;gap:8px;margin-top:8px">
+                    <button type="button" class="btn btn-accent btn-sm" onclick="physCalibAccept(${pxPerMeter})"><i class="fa-solid fa-check"></i> Sì, continua</button>
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="physCalibRetry()"><i class="fa-solid fa-rotate-left"></i> Ricalibra</button>
+                </div>
+            </div>
+        </div>`;
+}
+function physCalibRetry(){
+    PHYS.calib.pts=[];
+    const form=document.getElementById('phys-calib-form'); if(form) form.style.display='none';
+    const res=document.getElementById('phys-calib-result'); if(res) res.innerHTML='';
+    physRedraw();
+}
+function physCalibAccept(pxPerMeter){
+    PHYS.calib.pxPerMeter=pxPerMeter;
+    if(PHYS.type==='sprint'){
+        physStepMarkersSprint(0);
+    } else if(PHYS.type==='height'){
+        const pts=PHYS.calib.pts;
+        const groundPt = pts[0].y>pts[1].y ? pts[0] : pts[1]; // y maggiore = più in basso sullo schermo = a terra
+        PHYS.calib.groundY=groundPt.y;
+        physStepHeightRef();
+    } else {
+        physStepJumpRef();
+    }
+}
+/* ---- Modulo A: Sprint + Reazione (3 marcatori) ---- */
+const PHYS_SPRINT_STEPS=[
+    {key:'viola', label:'Via', color:'#8B5CF6', desc:'Scorri il video fino al frame in cui parte il segnale di via (fischio/voce), poi premi "Segna qui".'},
+    {key:'verde', label:'Start movimento', color:'#22C55E', desc:'Scorri fino al frame in cui il giocatore inizia davvero a muoversi, poi premi "Segna qui".'},
+    {key:'rosso', label:'Arrivo', color:'#EF4444', desc:'Scorri fino al frame in cui il giocatore raggiunge la linea di arrivo, tocca il punto sul video e poi premi "Segna qui".'}
+];
+function physStepMarkersSprint(idx){
+    const step=PHYS_SPRINT_STEPS[idx];
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-flag-checkered" style="color:${step.color}"></i> Marcatore ${idx+1}/3 — ${step.label}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">${step.desc}</p>
+        ${physVideoBlock()}
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:12px" id="phys-mark-btn" onclick="physMarkSprint(${idx})" ${step.key==='rosso'?'disabled':''}><i class="fa-solid fa-map-pin"></i> Segna qui</button>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+    PHYS._pendingPoint=null;
+    const needsTap = step.key==='rosso';
+    PHYS.overlayDraw = needsTap ? (ctx,cv)=>{ if(PHYS._pendingPoint) physDot(ctx,cv,PHYS._pendingPoint.x,PHYS._pendingPoint.y,step.color); } : null;
+    physInitVideo(null, needsTap ? {onCanvasClick:(x,y)=>{ PHYS._pendingPoint={x,y}; physRedraw(); const b=document.getElementById('phys-mark-btn'); if(b) b.disabled=false; }} : {});
+}
+function physMarkSprint(idx){
+    const v=document.getElementById('phys-video'), step=PHYS_SPRINT_STEPS[idx];
+    PHYS.markers[step.key]=v.currentTime;
+    if(step.key==='rosso') PHYS.markers.arrivoPx=PHYS._pendingPoint;
+    if(idx<2) physStepMarkersSprint(idx+1); else physStepSprintDistance();
+}
+function physStepSprintDistance(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-ruler-horizontal" style="color:var(--brand)"></i> Distanza sprint</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Distanza nota dello sprint (es. 20 metri) — indipendente dalla calibrazione video: la distanza reale la conosce già l'allenatore.</p>
+        <div class="fg"><label>Distanza (metri)</label><input id="phys-sprint-dist" type="number" min="0.1" step="0.1" placeholder="Es. 20"></div>
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physSaveSprint()"><i class="fa-solid fa-floppy-disk"></i> Calcola e salva</button>
+      </div>`, true);
+}
+function physSaveSprint(){
+    const distanza=parseFloat(document.getElementById('phys-sprint-dist').value);
+    if(!distanza||distanza<=0){ toast('Inserisci la distanza in metri','info'); return; }
+    const m=PHYS.markers;
+    const tempoReazione=+(m.verde-m.viola).toFixed(3);
+    const tempoSprint=+(m.rosso-m.verde).toFixed(3);
+    if(tempoSprint<=0){ toast('Il marcatore Arrivo deve venire dopo Start movimento','danger'); return; }
+    const velocitaMedia=+(distanza/tempoSprint).toFixed(2);
+    const accelerazioneMedia=+(velocitaMedia/tempoSprint).toFixed(2);
+    DB.physicalTests.sprint.push({id:uid(), playerId:PHYS.playerId, date:today().toISOString().slice(0,10),
+        tempoReazione, tempoSprint, distanza, velocitaMedia, accelerazioneMedia});
+    save();
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS=null; closeModal(); toast('Test sprint salvato'); renderPhysHistory();
+}
+/* ---- Modulo B: Elevazione del Salto (calibrazione + 2 marcatori) ---- */
+function physStepJumpRef(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crosshairs" style="color:var(--brand)"></i> Punto di riferimento</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Scegli il punto del corpo che userai per marcare stacco e massima elevazione (bacino o piedi): userai sempre lo stesso punto su entrambi i frame.</p>
+        <div class="fg"><label>Punto di riferimento</label><select id="phys-jump-refpt"><option>Bacino</option><option>Piedi</option></select></div>
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physJumpRefConfirm()"><i class="fa-solid fa-arrow-right"></i> Continua</button>
+      </div>`, true);
+}
+function physJumpRefConfirm(){ PHYS.refPoint=document.getElementById('phys-jump-refpt').value; physStepMarkersJump(0); }
+const PHYS_JUMP_STEPS=[
+    {key:'stacco', label:'Stacco da terra', desc:'Scorri fino al frame di stacco da terra e tocca il punto di riferimento sul corpo del giocatore.'},
+    {key:'massimo', label:'Massima elevazione', desc:'Scorri fino al frame di massima elevazione e tocca lo stesso punto di riferimento.'}
+];
+function physStepMarkersJump(idx){
+    const step=PHYS_JUMP_STEPS[idx];
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-arrow-up" style="color:var(--brand)"></i> Marcatore ${idx+1}/2 — ${step.label}</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">${step.desc} Punto di riferimento: <b>${PHYS.refPoint}</b>.</p>
+        ${physVideoBlock()}
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:12px" id="phys-mark-btn" onclick="physMarkJump(${idx})" disabled><i class="fa-solid fa-map-pin"></i> Conferma marcatore</button>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+    PHYS._pendingPoint=null;
+    PHYS.overlayDraw=(ctx,cv)=>{ if(PHYS._pendingPoint) physDot(ctx,cv,PHYS._pendingPoint.x,PHYS._pendingPoint.y,'#22C55E'); };
+    physInitVideo(null, {onCanvasClick:(x,y)=>{ PHYS._pendingPoint={x,y}; physRedraw(); const b=document.getElementById('phys-mark-btn'); if(b) b.disabled=false; }});
+}
+function physMarkJump(idx){
+    const step=PHYS_JUMP_STEPS[idx];
+    PHYS.markers[step.key]=PHYS._pendingPoint;
+    if(idx===0) physStepMarkersJump(1); else physSaveJump();
+}
+function physSaveJump(){
+    const {stacco,massimo}=PHYS.markers;
+    const pxDelta=stacco.y-massimo.y; // massima elevazione = y minore (più in alto sullo schermo)
+    if(pxDelta<=0){ toast('Il punto di massima elevazione deve essere più in alto dello stacco','danger'); return; }
+    const altezzaSalto=+((pxDelta/PHYS.calib.pxPerMeter)*100).toFixed(1); // cm
+    DB.physicalTests.jump.push({id:uid(), playerId:PHYS.playerId, date:today().toISOString().slice(0,10),
+        altezzaSalto, puntoRiferimentoUsato:PHYS.refPoint});
+    save();
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS=null; closeModal(); toast('Test elevazione salvato'); renderPhysHistory();
+}
+/* ---- Modulo C: Altezza Raggiunta (calibrazione con riferimento a terra + 1 marcatore) ---- */
+function physStepHeightRef(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-crosshairs" style="color:var(--brand)"></i> Punto raggiunto</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Scegli cosa hai marcato come punto più alto toccato/raggiunto dal giocatore.</p>
+        <div class="fg"><label>Punto raggiunto</label><select id="phys-height-refpt"><option>Mano</option><option>Testa</option><option>Palla</option><option>Altro</option></select></div>
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:10px" onclick="physHeightRefConfirm()"><i class="fa-solid fa-arrow-right"></i> Continua</button>
+      </div>`, true);
+}
+function physHeightRefConfirm(){ PHYS.refPoint=document.getElementById('phys-height-refpt').value; physStepMarkerHeight(); }
+function physStepMarkerHeight(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-arrow-up" style="color:var(--brand)"></i> Marcatore — Punto più alto</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Scorri fino al frame di massima elevazione e tocca il punto più alto toccato/raggiunto. Punto: <b>${PHYS.refPoint}</b>.</p>
+        ${physVideoBlock()}
+        <button type="button" class="btn btn-accent" style="width:100%;margin-top:12px" id="phys-mark-btn" onclick="physMarkHeight()" disabled><i class="fa-solid fa-map-pin"></i> Conferma marcatore</button>
+        ${physDisclaimerHTML()}
+      </div>`, true);
+    PHYS._pendingPoint=null;
+    PHYS.overlayDraw=(ctx,cv)=>{ if(PHYS._pendingPoint) physDot(ctx,cv,PHYS._pendingPoint.x,PHYS._pendingPoint.y,'#22C55E'); };
+    physInitVideo(null, {onCanvasClick:(x,y)=>{ PHYS._pendingPoint={x,y}; physRedraw(); const b=document.getElementById('phys-mark-btn'); if(b) b.disabled=false; }});
+}
+function physMarkHeight(){
+    PHYS.markers.punto=PHYS._pendingPoint;
+    physSaveHeight();
+}
+function physSaveHeight(){
+    const {punto}=PHYS.markers;
+    const pxDelta=PHYS.calib.groundY-punto.y; // più in alto sullo schermo = y minore
+    if(pxDelta<=0){ toast('Il punto marcato deve essere più in alto del livello del terreno','danger'); return; }
+    const altezzaRaggiunta=+((pxDelta/PHYS.calib.pxPerMeter)*100).toFixed(1); // cm da terra
+    DB.physicalTests.height.push({id:uid(), playerId:PHYS.playerId, date:today().toISOString().slice(0,10),
+        altezzaRaggiunta, puntoUsato:PHYS.refPoint});
+    save();
+    if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL);
+    PHYS=null; closeModal(); toast('Test altezza raggiunta salvato'); renderPhysHistory();
+}
+
+/* =========================================================
    NAVIGAZIONE
    ========================================================= */
 const RENDERERS = {
     dashboard:renderDashboard, roster:renderRoster, calendario:renderCalendar,
-    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>pwaMarkSettings(!!(swReg&&swReg.waiting)),
-    formazione:renderFormazione
+    scout:populateScout, presenze:populateAtt, allenamenti:populateTraining, tattica:initBoard, backup:()=>{ pwaMarkSettings(!!(swReg&&swReg.waiting)); renderBackupStatus(); renderSyncSettings(); },
+    formazione:renderFormazione, 'test-fisici':renderPhysicalTests
 };
 function go(sec){
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
@@ -1074,7 +1778,7 @@ function go(sec){
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
     setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
-    updateDemoBadge(); checkDemoLock();
+    updateDemoBadge(); checkDemoLock(); checkLicenseLock();
     if(CTX_TOURS[sec]) setTimeout(()=>ctxAutoShow(sec), 200);
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
@@ -1135,7 +1839,7 @@ function renderDashboard(){
         const isMatch=ne.type==='Partita';
         cd=`<div>
             <div class="hero-label">${isMatch?'Prossima partita':'Prossimo allenamento'}</div>
-            <h2>${ne.notes}</h2>
+            <h2>${escapeHtml(ne.notes)}</h2>
             <div class="meta">${fmtDateLong(ne.date)} · <span class="pill ${isMatch?'match':'train'}">${ne.type}</span></div>
             <div class="countdown"><div class="cd-box"><b class="num">${days}</b><span>${days===1?'giorno':'giorni'}</span></div>
             ${isMatch?`<button class="btn btn-accent" style="align-self:center;margin-left:6px" onclick="go('scout')"><i class="fa-solid fa-clipboard-list"></i> Prepara scout</button>`:''}</div>
@@ -1168,21 +1872,21 @@ function renderDashboard(){
     let top=ranked.length? ranked.map((x,i)=>{
         const f=playerForm(x.p.id);
         return `<div class="leader-row"><div class="leader-rank r${i+1}">${i+1}</div>
-            <div class="leader-info"><b>${x.p.name}</b><span>${x.p.role} · #${x.p.number}</span></div>
+            <div class="leader-info"><b>${escapeHtml(x.p.name)}</b><span>${x.p.role} · #${x.p.number}</span></div>
             <div style="text-align:right"><div class="voto num" style="color:var(--brand);font-size:1.15rem">${x.s.avgVoto.toFixed(1)}</div>
             <span class="delta ${f.dir}" style="font-size:.72rem">${f.txt}</span></div></div>`;
     }).join('') : `<div class="empty-state"><i class="fa-solid fa-chart-line"></i><b>Ancora nessuna statistica</b>Registra uno scout gara per vedere la classifica.</div>`;
 
     // prossimi 3 eventi
     const up=DB.events.filter(e=>new Date(e.date)>=t).sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,4);
-    let upcoming=up.length? `<ul class="mini-list">`+up.map(e=>`<li><span><span class="status-dot" style="background:${e.type==='Partita'?'var(--brand)':'var(--muted)'}"></span>${e.notes}</span><span style="color:var(--muted);font-size:.82rem">${fmtDate(e.date)}</span></li>`).join('')+`</ul>`
+    let upcoming=up.length? `<ul class="mini-list">`+up.map(e=>`<li><span><span class="status-dot" style="background:${e.type==='Partita'?'var(--brand)':'var(--muted)'}"></span>${escapeHtml(e.notes)}</span><span style="color:var(--muted);font-size:.82rem">${fmtDate(e.date)}</span></li>`).join('')+`</ul>`
         : `<div class="empty-state" style="padding:1.5rem"><i class="fa-solid fa-calendar"></i>Nessun evento futuro</div>`;
 
     brandCSS();
     document.getElementById('dash-content').innerHTML=`
         <div class="page-head dash-head">
-            <div class="dash-badge" onclick="pickTeamLogo()" title="Carica / cambia lo stemma">${TEAM_LOGO?`<img src="${TEAM_LOGO}" alt="stemma">`:`<i class="fa-solid fa-shield-halved"></i>`}</div>
-            <div><div class="eyebrow">Bentornato, mister</div><h2 style="margin:0">${DB.teamName}</h2>
+            <div class="dash-badge" onclick="pickTeamLogo()" title="Carica / cambia lo stemma">${TEAM_LOGO?`<img src="${escapeHtml(TEAM_LOGO)}" alt="stemma">`:`<i class="fa-solid fa-shield-halved"></i>`}</div>
+            <div><div class="eyebrow">Bentornato, mister</div><h2 style="margin:0">${escapeHtml(DB.teamName)}</h2>
                 <div style="color:var(--muted);font-size:.82rem">${TEAM_LOGO?'Tocca lo stemma per cambiarlo':'Tocca lo scudetto per caricare lo stemma della squadra'}</div></div>
         </div>
         <div class="hero">${court}<div class="hero-inner">${cd}</div></div>
@@ -1209,12 +1913,56 @@ function applyTeamLogo(){ const bl=document.getElementById('brand-logo'); if(bl)
    ROSTER
    ========================================================= */
 const STATUS_META={active:{c:'var(--ok)',t:'Disponibile'},injured:{c:'var(--bad)',t:'Infortunato'},suspended:{c:'var(--warn)',t:'Squalificato'}};
+/* ---------- Task 1: ricerca/filtro rapido roster (solo visivo, non tocca DB.players) ---------- */
+let ROSTER_FILTER={q:'',role:''};
+function setRosterSearch(v){ ROSTER_FILTER.q=v; renderRoster(); }
+function setRosterRoleFilter(r){ ROSTER_FILTER.role = ROSTER_FILTER.role===r? '' : r; renderRoster(); }
+function rosterFilterCSS(){
+    if(document.getElementById('roster-filter-css')) return;
+    const st=document.createElement('style'); st.id='roster-filter-css';
+    st.textContent=`.rf-chip{border:1px solid var(--line,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:9px;padding:6px 12px;font-weight:700;font-family:'Outfit',sans-serif;font-size:.78rem;cursor:pointer;}
+    .rf-chip.on{border-color:var(--brand);color:#fff;background:color-mix(in srgb,var(--brand) 20%,transparent);}`;
+    document.head.appendChild(st);
+}
+/* ---------- entry point grande per il Radar comparativo (stesso pattern di un tile "Mental Gym" in un profilo) ---------- */
+function radarCtaCSS(){
+    if(document.getElementById('radar-cta-css')) return;
+    const st=document.createElement('style'); st.id='radar-cta-css';
+    st.textContent=`
+    .radar-cta{display:flex;align-items:center;gap:14px;width:100%;text-align:left;border:none;cursor:pointer;
+        background:linear-gradient(135deg,#7C3AED,#A855F7);color:#fff;border-radius:16px;padding:16px 18px;
+        box-shadow:0 8px 20px -8px rgba(124,58,237,.55);transition:.15s;font-family:inherit;}
+    .radar-cta:hover{transform:translateY(-2px);box-shadow:0 12px 26px -6px rgba(124,58,237,.7);}
+    .radar-cta:active{transform:translateY(0);}
+    .radar-cta-ic{flex:0 0 auto;width:46px;height:46px;border-radius:12px;background:rgba(255,255,255,.2);
+        display:flex;align-items:center;justify-content:center;font-size:1.25rem;}
+    .radar-cta-txt{flex:1;min-width:0;}
+    .radar-cta-txt b{display:block;font-family:'Outfit',sans-serif;font-size:1.02rem;font-weight:800;}
+    .radar-cta-txt span{display:block;font-size:.8rem;opacity:.88;margin-top:2px;font-weight:500;}
+    .radar-cta-arrow{flex:0 0 auto;opacity:.8;font-size:.9rem;}
+    `;
+    document.head.appendChild(st);
+}
+function renderRosterRoleChips(){
+    const box=document.getElementById('roster-role-filter'); if(!box) return;
+    const roles=[...new Set(DB.players.map(p=>p.role))];
+    if(!roles.length){ box.innerHTML=''; return; }
+    box.innerHTML=`<button type="button" class="rf-chip${!ROSTER_FILTER.role?' on':''}" onclick="setRosterRoleFilter('')">Tutti</button>`+
+        roles.map(r=>`<button type="button" class="rf-chip${ROSTER_FILTER.role===r?' on':''}" onclick="setRosterRoleFilter('${r}')">${r}</button>`).join('');
+}
 function renderRoster(){
+    rosterFilterCSS(); radarCtaCSS();
     const body=document.getElementById('roster-body');
-    document.getElementById('roster-count').textContent=`(${DB.players.length} in rosa)`;
+    renderRosterRoleChips();
+    const q=(ROSTER_FILTER.q||'').trim().toLowerCase();
+    const roleF=ROSTER_FILTER.role;
+    const list=DB.players.filter(p=>(!roleF||p.role===roleF)&&(!q||p.name.toLowerCase().includes(q)));
+    document.getElementById('roster-count').textContent = list.length===DB.players.length
+        ? `(${DB.players.length} in rosa)` : `(${list.length} su ${DB.players.length})`;
     if(!DB.players.length){body.innerHTML=`<tr class="empty-row"><td colspan="8">Nessun atleta. Aggiungi il primo giocatore qui sopra.</td></tr>`;return;}
+    if(!list.length){body.innerHTML=`<tr class="empty-row"><td colspan="8">Nessun giocatore corrisponde alla ricerca/filtro.</td></tr>`;return;}
     body.innerHTML='';
-    DB.players.forEach(p=>{
+    list.forEach(p=>{
         const s=getSeasonStats(p.id), f=playerForm(p.id), att=playerAttendance(p.id);
         let lead='', jcls='';
         if(p.isCaptain){lead='<span class="lead-tag c">👑 C</span>';jcls='captain';}
@@ -1225,13 +1973,14 @@ function renderRoster(){
         tr.onclick=(ev)=>{ if(ev.target.closest('.no-open'))return; openPlayer(p.id); };
         tr.innerHTML=`
             <td><div class="jersey ${jcls} no-open" onclick="event.stopPropagation();cycleLeadership(${p.id})">${p.number}</div></td>
-            <td style="text-align:left;font-weight:700">${p.name}${lead}<div style="font-size:.74rem;color:var(--muted-2);font-weight:500">${p.hand||'Dx'} · ${p.height?p.height+' cm':'—'}</div></td>
+            <td style="text-align:left;font-weight:700">${escapeHtml(p.name)}${lead}<div style="font-size:.74rem;color:var(--muted-2);font-weight:500">${p.hand||'Dx'} · ${p.height?p.height+' cm':'—'}</div></td>
             <td><span class="pill role">${p.role}</span></td>
             <td><span class="status-dot" style="background:${st.c}"></span><span style="font-size:.82rem">${st.t}</span></td>
             <td class="voto num" style="color:var(--brand)">${s.avgVoto?s.avgVoto.toFixed(1):'—'}</td>
             <td><span class="delta ${f.dir}" style="font-size:.78rem;font-weight:700">${f.txt}</span></td>
             <td class="num">${att!==null?att+'%':'—'}</td>
             <td><div class="row-actions no-open"><button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();openPlayer(${p.id})" title="Scheda"><i class="fa-solid fa-eye"></i></button>
+                <button class="btn btn-ghost btn-icon" onclick="event.stopPropagation();editPlayer(${p.id})" title="Modifica dati anagrafici"><i class="fa-solid fa-pen"></i></button>
                 <button class="btn btn-accent btn-icon" onclick="event.stopPropagation();sharePlayer(${p.id})" title="Condividi codice col giocatore"><i class="fa-solid fa-share-nodes"></i></button>
                 <button class="btn btn-danger btn-icon" onclick="event.stopPropagation();removePlayer(${p.id})" title="Rimuovi"><i class="fa-solid fa-trash-can"></i></button></div></td>`;
         body.appendChild(tr);
@@ -1239,19 +1988,97 @@ function renderRoster(){
 }
 function addPlayer(e){
     e.preventDefault();
+    if(!guardWrite()) return;
     // nessun limite di rosa: calcio/basket possono avere 20+ atleti
     const number=parseInt(document.getElementById('p-number').value);
     if(DB.players.some(p=>p.number===number)) return toast(`La maglia ${number} è già assegnata`,'warning');
     DB.players.push({id:uid(),name:document.getElementById('p-name').value.trim(),number,
         role:document.getElementById('p-role').value,hand:document.getElementById('p-hand').value,
-        height:parseInt(document.getElementById('p-height').value)||0,status:'active',isCaptain:false,isViceCaptain:false});
+        height:parseInt(document.getElementById('p-height').value)||0,status:'active',isCaptain:false,isViceCaptain:false,
+        pin:genPlayerPin()});
     save();e.target.reset();renderRoster();toast('Atleta inserito');
 }
 function removePlayer(id){
+    if(!guardWrite()) return;
     const p=playerById(id);
     confirmAction(`Rimuovere ${p.name} dalla rosa? Lo storico statistiche resterà nei tabellini.`,()=>{
         DB.players=DB.players.filter(x=>x.id!==id);save();renderRoster();toast('Atleta rimosso','info');
+        deletePlayerPackageOnline(id);
     });
+}
+/* ---------- Task 1 (Prompt20): propaga la rimozione locale del giocatore anche su
+   Supabase (player_packages), se la squadra ha gia' un sync online attivo. La
+   rimozione locale e' gia' avvenuta sopra: qualunque esito di questa chiamata
+   (giocatore mai sincronizzato, offline, nessun sync attivo) resta silenzioso,
+   senza mai bloccare o segnalare errore per la rimozione locale gia' fatta. ---------- */
+function deletePlayerPackageOnline(id){
+    const sync=DB.settings.sync;
+    if(!sync.hasEverSynced || !sync.teamId) return;
+    if(typeof AiRIMSync==='undefined') return;
+    AiRIMSync.deletePlayerPackage(sync.teamId, id).catch(()=>{});
+}
+/* ---------- ruoli validi per lo sport della squadra (usati in editing/multi-ruolo) ---------- */
+function sportRoles(){
+    try{
+        if(window.POLISPORT && POLISPORT.SPORTS){
+            const sp=curSport();
+            return (POLISPORT.SPORTS[sp]||POLISPORT.SPORTS.pallavolo).roles;
+        }
+    }catch(e){}
+    return ['Palleggiatore','Schiacciatore','Centrale','Opposto','Libero'];
+}
+/* ---------- Task 1/2: editing anagrafica giocatore esistente + ruoli secondari ---------- */
+function editPlayerSecondaryHtml(role,checked){
+    return sportRoles().filter(r=>r!==role).map(r=>
+        `<label class="ep-sec-chk"><input type="checkbox" value="${r}" ${checked.includes(r)?'checked':''}> ${r}</label>`
+    ).join('');
+}
+function editPlayer(id){
+    const p=playerById(id); if(!p) return;
+    const roles=sportRoles();
+    const secondary=p.secondaryRoles||[];
+    closeModal();
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-pen" style="color:var(--brand)"></i> Modifica giocatore</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <div class="fg"><label>Nome e cognome</label><input id="ep-name" value="${escapeHtml(p.name)}"></div>
+        <div class="form-row">
+            <div class="fg" style="min-width:90px;max-width:110px"><label>N° maglia</label><input id="ep-number" type="number" min="1" max="99" value="${p.number}"></div>
+            <div class="fg"><label>Ruolo principale</label><select id="ep-role" onchange="epSyncSecondary()">
+                ${roles.map(r=>`<option value="${r}" ${p.role===r?'selected':''}>${r}</option>`).join('')}</select></div>
+            <div class="fg" style="min-width:80px;max-width:100px"><label>Mano</label>
+                <select id="ep-hand"><option ${(!p.hand||p.hand==='Dx')?'selected':''}>Dx</option><option ${p.hand==='Sx'?'selected':''}>Sx</option></select></div>
+            <div class="fg" style="min-width:90px;max-width:110px"><label>Altezza cm</label><input id="ep-height" type="number" min="120" max="230" value="${p.height||''}"></div>
+        </div>
+        <div class="fg"><label>Ruoli secondari <span class="hint" style="font-weight:400">(opzionale — usati dalla Formazione consigliata)</span></label>
+            <div id="ep-secondary" style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:4px">${editPlayerSecondaryHtml(p.role,secondary)}</div>
+        </div>
+        <button class="btn btn-accent" style="width:100%;margin-top:16px" onclick="savePlayerEdit(${id})"><i class="fa-solid fa-floppy-disk"></i> Salva modifiche</button>
+        <p class="hint" style="margin-top:8px">Storico, statistiche, scout e presenze restano collegati a questo giocatore: non vengono toccati.</p>
+      </div>`, true);
+}
+function epSyncSecondary(){
+    const role=document.getElementById('ep-role').value;
+    const box=document.getElementById('ep-secondary');
+    const checked=Array.from(box.querySelectorAll('input:checked')).map(x=>x.value);
+    box.innerHTML=editPlayerSecondaryHtml(role,checked);
+}
+function savePlayerEdit(id){
+    if(!guardWrite()) return;
+    const p=playerById(id); if(!p) return;
+    const name=(document.getElementById('ep-name').value||'').trim();
+    const number=parseInt(document.getElementById('ep-number').value);
+    const role=document.getElementById('ep-role').value;
+    if(!name) return toast('Inserisci nome e cognome','warning');
+    if(!number) return toast('Inserisci il numero di maglia','warning');
+    if(!role) return toast('Scegli il ruolo','warning');
+    if(DB.players.some(x=>x.id!==id && x.number===number)) return toast(`La maglia ${number} è già assegnata`,'warning');
+    const secondaryRoles=Array.from(document.querySelectorAll('#ep-secondary input:checked')).map(x=>x.value).filter(r=>r!==role);
+    p.name=name; p.number=number; p.role=role;
+    p.hand=document.getElementById('ep-hand').value;
+    p.height=parseInt(document.getElementById('ep-height').value)||0;
+    p.secondaryRoles=secondaryRoles;
+    save(); renderRoster(); closeModal(); openPlayer(id); toast('Dati giocatore aggiornati');
 }
 function cycleLeadership(id){
     const p=playerById(id);if(!p)return;
@@ -1282,19 +2109,26 @@ function openPlayer(id){
                 <div style="flex:1"><div class="bar-track" style="height:8px"><div class="bar-fill" style="width:${pct}%;background:${col}"></div></div></div>
                 <div class="num" style="font-weight:800;font-family:'Outfit';width:34px;text-align:right;color:${v>=6?'var(--brand)':'var(--flame)'}">${v.toFixed(1)}</div></div>`;
         }).join('') : '';
-    coachMediaCSS();
+    coachMediaCSS(); radarCtaCSS();
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-id-card" style="color:var(--brand)"></i> Scheda atleta</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
       <div class="modal-body">
         <div class="player-head">
-            <div class="player-avatar" id="cph-av" onclick="pickPhotoCoach(${id})"><div class="cph-im" id="cph-im-${id}">${COACH_PHOTOS[id]?`<img src="${COACH_PHOTOS[id]}">`:p.number}</div><div class="cph-cam"><i class="fa-solid fa-camera"></i></div></div>
-            <div class="meta"><h4>${p.name} ${p.isCaptain?'👑':p.isViceCaptain?'🥈':''}</h4>
-                <p>${p.role} · ${p.hand||'Dx'} · ${p.height?p.height+' cm':'altezza n.d.'} · <span class="delta ${f.dir}" style="font-weight:700">${f.txt}</span></p></div>
+            <div class="player-avatar" id="cph-av" onclick="pickPhotoCoach(${id})"><div class="cph-im" id="cph-im-${id}">${COACH_PHOTOS[id]?`<img src="${escapeHtml(COACH_PHOTOS[id])}">`:p.number}</div><div class="cph-cam"><i class="fa-solid fa-camera"></i></div></div>
+            <div class="meta"><h4>${escapeHtml(p.name)} ${p.isCaptain?'👑':p.isViceCaptain?'🥈':''}</h4>
+                <p>${p.role}${(p.secondaryRoles&&p.secondaryRoles.length)?` <span style="color:var(--muted)">(anche ${escapeHtml(p.secondaryRoles.join(', '))})</span>`:''} · ${p.hand||'Dx'} · ${p.height?p.height+' cm':'altezza n.d.'} · <span class="delta ${f.dir}" style="font-weight:700">${f.txt}</span></p></div>
         </div>
+        <button class="radar-cta" style="margin-bottom:1rem" onclick="openRadarCompare(${id})">
+            <span class="radar-cta-ic"><i class="fa-solid fa-chart-area"></i></span>
+            <span class="radar-cta-txt"><b>Radar comparativo</b><span>Confronta ${(p.name||'').split(' ')[0]} con un altro giocatore su tutte le statistiche</span></span>
+            <span class="radar-cta-arrow"><i class="fa-solid fa-chevron-right"></i></span>
+        </button>
         <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" onclick="editPlayer(${id})"><i class="fa-solid fa-pen"></i> Modifica</button>
             <button class="btn btn-accent btn-sm" onclick="sharePlayer(${id})"><i class="fa-solid fa-share-nodes"></i> Condividi</button>
             <button class="btn btn-ghost btn-sm" onclick="openPlayerCard(${id})"><i class="fa-solid fa-id-badge"></i> Card giocatore</button>
+            <button class="btn btn-ghost btn-sm" onclick="exportGrowthCard(${id})"><i class="fa-solid fa-file-pdf"></i> Esporta Scheda Crescita</button>
             <button class="btn btn-ghost btn-sm" onclick="openImportMental()"><i class="fa-solid fa-brain"></i> Importa statistiche mentali</button>
             <button class="btn btn-ghost btn-sm" onclick="openImportWellness()"><i class="fa-solid fa-heart-pulse"></i> Importa check-in benessere</button>
         </div>
@@ -1344,7 +2178,7 @@ function renderWellnessBlock(p, statCell){
     const last=list[list.length-1];
     const bigCell=(lbl,v,suf='')=>`<div class="stat-cell" style="padding:1.1rem"><div class="lbl">${lbl}</div><div class="v num" style="font-size:2.1rem">${v}${suf?`<small style="font-size:.9rem">${suf}</small>`:''}</div></div>`;
     const zonesHtml=(last.zone&&last.zone.length)
-      ? last.zone.map(z=>`<span class="pill" style="margin:2px 4px 2px 0">${z.zone||'Zona'} · ${z.intensita}/5</span>`).join('')
+      ? last.zone.map(z=>`<span class="pill" style="margin:2px 4px 2px 0">${escapeHtml(z.zone||'Zona')} · ${z.intensita}/5</span>`).join('')
       : '<span style="color:var(--muted);font-size:.85rem">Nessuna zona segnalata nell\'ultimo check-in.</span>';
     const histRows=list.slice(0,-1).slice(-5).reverse().map(c=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line-soft);font-size:.74rem;color:var(--muted)"><span>${fmtDate(c.date)}</span><span>${wellnessSummaryLine(c)}</span></div>`).join('');
     return `<h3 style="font-size:.95rem;margin:1.2rem 0 .3rem"><i class="fa-solid fa-heart-pulse"></i> Check-in benessere</h3>
@@ -1361,6 +2195,118 @@ function renderWellnessBlock(p, statCell){
             <div style="margin-top:.8rem">${zonesHtml}</div>
         </div>
         ${histRows?`<div style="margin-top:.8rem"><b style="font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Aggiornamenti precedenti</b>${histRows}</div>`:''}`;
+}
+
+/* =========================================================
+   RADAR COMPARATIVO (Modulo A, blocco Prompt7)
+   Confronto libero fra 2 giocatori qualsiasi (nessun vincolo di ruolo)
+   oppure giocatore vs media squadra. Riusa i valori già calcolati da
+   radarAttributes()/radarTeamAverage() — nessuna nuova logica statistica.
+   ========================================================= */
+function radarDatasetFor(sel){
+    if(sel==='team') return {label:'Media Squadra', values: radarTeamAverage().map(a=>a.rating)};
+    const id=parseInt(sel), p=playerById(id);
+    return {label:p?p.name:'—', values: p? radarAttributes(id).map(a=>a.rating) : radarDefs(curSport()).map(()=>0)};
+}
+function renderRadarCompare(){
+    const selA=document.getElementById('radar-a'), selB=document.getElementById('radar-b');
+    if(!selA||!selB) return;
+    const dsA=radarDatasetFor(selA.value), dsB=radarDatasetFor(selB.value);
+    dsA.color='var(--brand)'; dsB.color='var(--gold)';
+    const axes=radarDefs(curSport()).map(d=>d[0]);
+    const chart=svgRadar(axes,[dsA,dsB]);
+    const legend=`<div style="display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-top:.6rem">
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700"><i style="width:12px;height:12px;border-radius:3px;display:inline-block;background:${dsA.color}"></i>${escapeHtml(dsA.label)}</span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700"><i style="width:12px;height:12px;border-radius:3px;display:inline-block;background:${dsB.color}"></i>${escapeHtml(dsB.label)}</span>
+    </div>`;
+    document.getElementById('radar-chart-wrap').innerHTML=chart+legend;
+}
+function openRadarCompare(presetA){
+    const players=DB.players;
+    if(players.length<2){ toast('Servono almeno 2 giocatori in rosa per un confronto','info'); return; }
+    presetA = players.some(p=>p.id===presetA) ? presetA : players[0].id;
+    const defaultB = (players.find(p=>p.id!==presetA)||players[0]).id;
+    const optsA=players.map(p=>`<option value="${p.id}" ${presetA===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
+    const optsB='<option value="team">Media Squadra</option>'+players.map(p=>`<option value="${p.id}" ${defaultB===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-chart-area" style="color:var(--brand)"></i> Confronto Radar</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Confronta due giocatori qualsiasi (o un giocatore con la media squadra) sugli stessi attributi — utile anche per valutare cambi di ruolo.</p>
+        <div class="form-row">
+            <div class="fg"><label>Giocatore A</label><select id="radar-a" onchange="renderRadarCompare()">${optsA}</select></div>
+            <div class="fg"><label>Giocatore B</label><select id="radar-b" onchange="renderRadarCompare()">${optsB}</select></div>
+        </div>
+        <div id="radar-chart-wrap" style="margin-top:1rem"></div>
+      </div>`, true);
+    renderRadarCompare();
+}
+
+/* =========================================================
+   PDF "SCHEDA CRESCITA" (Modulo B, blocco Prompt7)
+   Solo lettura/visualizzazione di dati già calcolati altrove
+   (season stats, presenze, tier, voti). Nessuna modifica ai motori
+   voto/scout esistenti. jsPDF caricato on-demand (stesso schema di
+   loadXLSX/loadImgly), non serve al primo avvio offline.
+   ========================================================= */
+let _jsPDFCtor=null;
+async function loadJsPDF(){ if(_jsPDFCtor) return _jsPDFCtor; const m=await import('https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm'); _jsPDFCtor=m.jsPDF||m.default; return _jsPDFCtor; }
+async function exportGrowthCard(id){
+    const p=playerById(id); if(!p) return;
+    toast('Generazione PDF in corso…','info');
+    try{
+        const JsPDF=await loadJsPDF();
+        const doc=new JsPDF({unit:'mm',format:'a4'});
+        const s=getSeasonStats(id), att=playerAttendance(id), tier=playerTier(id), f=playerForm(id);
+        const voti=getPlayerVoti(id);
+        const oneMonthAgo=new Date(); oneMonthAgo.setDate(oneMonthAgo.getDate()-30);
+        const votiMese=voti.filter(v=>new Date(v.date)>=oneMonthAgo);
+        const mediaMese = votiMese.length? (votiMese.reduce((a,b)=>a+b.voto,0)/votiMese.length) : null;
+        let trendMese='—';
+        if(votiMese.length>=2){
+            const half=Math.ceil(votiMese.length/2), secondHalf=votiMese.slice(half);
+            const primaMeta=votiMese.slice(0,half).reduce((a,b)=>a+b.voto,0)/half;
+            const secondaMeta=secondHalf.length? secondHalf.reduce((a,b)=>a+b.voto,0)/secondHalf.length : primaMeta;
+            const d=secondaMeta-primaMeta;
+            trendMese = d>0.25? 'In crescita' : d<-0.25? 'In calo' : 'Stabile';
+        }
+        const M=20; let y=M;
+        doc.setFont('helvetica','bold'); doc.setFontSize(20); doc.setTextColor(20,30,50);
+        doc.text('Scheda Crescita', M, y); y+=6;
+        doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(90,100,120);
+        doc.text(`${DB.teamName||'Squadra'} · ${fmtDateLong(today().toISOString().slice(0,10))}`, M, y); y+=12;
+        const section=(title)=>{ doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(20,30,50); doc.text(title, M, y); y+=2;
+            doc.setDrawColor(220,225,235); doc.line(M,y,190,y); y+=7; doc.setFont('helvetica','normal'); doc.setFontSize(11); doc.setTextColor(40,48,64); };
+        const row=(label,value)=>{ doc.setFont('helvetica','bold'); doc.text(label+':', M, y); doc.setFont('helvetica','normal'); doc.text(String(value), M+58, y); y+=7; };
+        section('Dati giocatore');
+        row('Nome', p.name);
+        row('Numero maglia', p.number||'—');
+        row('Ruolo', p.role||'—');
+        row('Altezza', p.height? p.height+' cm':'—');
+        y+=4;
+        section('Stato di forma attuale');
+        row('Livello', TIER_LABEL[tier]||tier);
+        row('Media voto stagione', s.avgVoto!=null? s.avgVoto.toFixed(1):'—');
+        row('Andamento recente', f.txt.replace(/^[↑↓→]\s*/,''));
+        y+=4;
+        section('Presenze');
+        row('Presenza allenamenti', att!=null? att+'%':'—');
+        row('Partite disputate', s.matches||0);
+        y+=4;
+        section('Evoluzione nel tempo');
+        doc.text(`Livello attuale: ${TIER_LABEL[tier]||tier}.`, M, y); y+=6;
+        doc.setTextColor(140,148,164); doc.setFontSize(9.5);
+        doc.text("Storico dell'evoluzione disponibile da futuri aggiornamenti.", M, y); y+=10;
+        doc.setTextColor(40,48,64); doc.setFontSize(11);
+        section('Voti scout ultimo mese');
+        row('Numero valutazioni', votiMese.length);
+        row('Media voto', mediaMese!=null? mediaMese.toFixed(1):'—');
+        row('Andamento', trendMese);
+        doc.save(`Scheda-Crescita-${(p.name||'giocatore').replace(/\s+/g,'_')}.pdf`);
+        toast('PDF generato');
+    }catch(err){
+        console.error(err);
+        toast('Impossibile generare il PDF — serve una connessione internet al primo utilizzo','danger');
+    }
 }
 
 /* =========================================================
@@ -1445,7 +2391,7 @@ function renderCalDay(){
           : `<button class="btn btn-accent btn-sm" onclick="calOpenTraining(${ev.id})"><i class="fa-solid fa-dumbbell"></i> Allenamento</button>
              <button class="btn btn-ghost btn-sm" onclick="calOpenAttendance(${ev.id})"><i class="fa-solid fa-clipboard-user"></i> Presenze</button>`;
         return `<div class="cal-ev">
-            <div class="cal-ev-head"><span class="pill ${isMatch?'match':'train'}">${ev.type}</span> <b>${ev.notes||''}</b> ${res}</div>
+            <div class="cal-ev-head"><span class="pill ${isMatch?'match':'train'}">${ev.type}</span> <b>${escapeHtml(ev.notes||'')}</b> ${res}</div>
             <div class="cal-ev-actions">${actions}
                 <button class="btn btn-danger btn-icon btn-sm" onclick="removeEvent(${ev.id})" title="Elimina"><i class="fa-solid fa-trash-can"></i></button></div>
         </div>`;
@@ -1562,7 +2508,7 @@ function impShow(matches){
   window.__imp.matches=matches;
   const box=document.getElementById('imp-preview'), go=document.getElementById('imp-go');
   if(!matches.length){ if(box) box.innerHTML='<p class="hint" style="margin-top:12px">Nessuna partita riconosciuta. Controlla che ci siano una data e un avversario per riga.</p>'; if(go) go.disabled=true; return; }
-  if(box) box.innerHTML=`<div style="font-size:.75rem;color:var(--muted);margin:12px 0 4px;font-weight:700">${matches.length} partite riconosciute</div>`+matches.map(m=>`<div class="imp-row"><span class="d">${fmtDate(m.date)}</span> <span>${m.opponent}</span></div>`).join('');
+  if(box) box.innerHTML=`<div style="font-size:.75rem;color:var(--muted);margin:12px 0 4px;font-weight:700">${matches.length} partite riconosciute</div>`+matches.map(m=>`<div class="imp-row"><span class="d">${fmtDate(m.date)}</span> <span>${escapeHtml(m.opponent)}</span></div>`).join('');
   if(go) go.disabled=false;
 }
 function impAnalyzeText(){ const t=document.getElementById('imp-text'); impShow(detectMatches(parseCSVText(t?t.value:''))); }
@@ -1972,6 +2918,7 @@ function fieldEditorCSS(){
 }
 function addEvent(e){
     e.preventDefault();
+    if(!guardWrite()) return;
     const date=document.getElementById('e-date').value;
     DB.events.push({id:uid(),type:document.getElementById('e-type').value,date,
         notes:document.getElementById('e-notes').value.trim(),result:null});
@@ -1980,13 +2927,14 @@ function addEvent(e){
     renderCalendar();toast('Evento aggiunto');
 }
 function removeEvent(id){
+    if(!guardWrite()) return;
     confirmAction('Eliminare questo evento dal calendario?',()=>{DB.events=DB.events.filter(e=>e.id!==id);save();renderCalendar();toast('Evento rimosso','info');});
 }
 function editResult(id){
     const ev=DB.events.find(e=>e.id===id);const r=ev.result||{w:0,l:0};
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-flag-checkered" style="color:var(--brand)"></i> Risultato</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
-        <div class="modal-body"><p style="color:var(--muted);margin-bottom:1rem">${ev.notes} · ${fmtDateLong(ev.date)}</p>
+        <div class="modal-body"><p style="color:var(--muted);margin-bottom:1rem">${escapeHtml(ev.notes)} · ${fmtDateLong(ev.date)}</p>
         <div class="result-box"><div class="set-score">
             <div style="text-align:center"><label style="font-size:.7rem;color:var(--muted);text-transform:uppercase">Noi</label><br><input id="r-w" type="number" min="0" max="3" value="${r.w}"></div>
             <span style="font-size:1.4rem;color:var(--muted)">–</span>
@@ -2072,7 +3020,7 @@ function setupScout(){
     if(summaryEl) summaryEl.style.display='none';   /* partita aperta → nascondi il riepilogo di squadra */
     const match=DB.events.find(e=>e.id===id);
     const existing=DB.scoutHistory.find(s=>s.matchId===id);
-    document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${match.notes} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
+    document.getElementById('scout-title').innerHTML=`<i class="fa-solid fa-clipboard-list"></i> ${escapeHtml(match.notes)} · ${fmtDate(match.date)}${existing?' <span class="pill" style="margin-left:8px">già registrato — modifica</span>':''}`;
     panel.style.display='block';
     renderSubsPanel(id);
     const numEl=document.getElementById('scout-numeric'), tapEl=document.getElementById('scout-tap');
@@ -2112,7 +3060,7 @@ function setupScout(){
         const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
         const cells=fields.map(k=>`<td><input data-k="${k}" type="number" min="0" value="${g[k]||0}" oninput="calcRow(${p.id})"></td>`).join('');
         const tr=document.createElement('tr');tr.dataset.pid=p.id;
-        tr.innerHTML=`<td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>${cells}<td class="voto num" id="voto-${p.id}" style="color:var(--brand)">${ex?rowVoto(ex,sport).toFixed(1):"6.0"}</td>`;
+        tr.innerHTML=`<td style="text-align:left;font-weight:600">#${p.number} ${pre}${escapeHtml(p.name)}</td>${cells}<td class="voto num" id="voto-${p.id}" style="color:var(--brand)">${ex?rowVoto(ex,sport).toFixed(1):"6.0"}</td>`;
         body.appendChild(tr);
     });
     renderScoutLegend(sport);
@@ -2124,12 +3072,13 @@ function readRow(id){
 }
 function calcRow(id){ document.getElementById('voto-'+id).textContent=computeVoto(readRow(id),null,(playerById(id)||{}).role).toFixed(1); }
 function saveScout(){
+    if(!guardWrite()) return;
     const id=parseInt(document.getElementById('scout-select').value);
     const match=DB.events.find(e=>e.id===id);
     const rows=[];
     document.querySelectorAll('#scout-body tr[data-pid]').forEach(tr=>{
         const pId=parseInt(tr.dataset.pid);const s=readRow(pId);
-        rows.push({pId,...s,voto:+computeVoto(s,null,(playerById(pId)||{}).role).toFixed(1)});
+        rows.push({pId,role:(playerById(pId)||{}).role,...s,voto:+computeVoto(s,null,(playerById(pId)||{}).role).toFixed(1)});
     });
     DB.scoutHistory=DB.scoutHistory.filter(s=>s.matchId!==id);
     DB.scoutHistory.push({matchId:id,date:match.date,opponent:match.notes,sport:curSport(),rows});
@@ -2220,7 +3169,7 @@ function tapRenderPlayers(){
     const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
     const vClass=v>=7?'hi':v>=5.5?'md':'lo';
     return `<button class="stap-player${TAP.sel===p.id?' sel':''}" onclick="tapSelect(${p.id})">
-      <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+      <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${escapeHtml(p.name)}</span><span class="stap-role">${p.role}</span></div>
       <div class="stap-p-stat"><span>Ric ${rec==null?'—':rec+'%'}</span><span>Att ${eff==null?'—':eff+'%'}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
     </button>`;
   }).join('');
@@ -2229,7 +3178,7 @@ function tapRenderSel(){
   const sel=document.getElementById('stap-sel'); if(!sel) return;
   const p=TAP.sel?playerById(TAP.sel):null;
   sel.innerHTML = p
-    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${escapeHtml(p.name)}</b> <span class="stap-sel-role">${p.role}</span>`
     : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
   const on=!!p;
   document.querySelectorAll('.stap-grade').forEach(b=>b.disabled=!on);
@@ -2259,7 +3208,7 @@ function tapRenderDetail(){
     ? evs.map(e=>`<button class="stap-chip ${gClass(e.grade)}" onclick="tapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
          <span class="stap-chip-f">${fShort[e.fund]||e.fund}</span><b>${e.grade}</b><i class="fa-solid fa-xmark"></i></button>`).join('')
     : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione${baseRow?' (oltre a quelli già salvati)':''}.</div>`;
-  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div>${baseInfo}<div class="stap-chips">${chips}</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${escapeHtml(p.name)}</b> <span class="stap-detail-n">${evs.length}</span></div>${baseInfo}<div class="stap-chips">${chips}</div>`;
   /* PERCHÉ (scomposizione) + OVERRIDE manuale del mister */
   const row=tapDeriveRow(TAP.sel);
   const calc=computeVoto(row,'pallavolo',p.role);
@@ -2314,13 +3263,14 @@ function tapUndo(){
   tapRenderPlayers(); tapRenderSel();
 }
 function saveScoutTap(){
+  if(!guardWrite()) return;
   if(!TAP) return;
   const match=DB.events.find(e=>e.id===TAP.matchId);
   const rows=[];
   activePlayers().forEach(p=>{
     const s=tapDeriveRow(p.id);
     const ov=TAP.override[p.id];
-    const row={pId:p.id, ...s, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'pallavolo').toFixed(1)};
+    const row={pId:p.id, role:p.role, ...s, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'pallavolo').toFixed(1)};
     if(typeof ov==='number') row.votoOverride=ov;
     rows.push(row);
   });
@@ -2466,7 +3416,7 @@ function bTapRenderPlayers(){
     const minVal=bTapMinValue(p.id);
     return `<div class="stap-player${BTAP.sel===p.id?' sel':''}" data-pid="${p.id}">
       <button class="stap-p-btn" onclick="bTapSelect(${p.id})">
-        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${escapeHtml(p.name)}</span><span class="stap-role">${p.role}</span></div>
         <div class="stap-p-stat"><span>PT ${row.punti}</span><span>Rim ${(row.roff||0)+(row.rdif||0)}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
       </button>
       ${BTAP.minAuto
@@ -2479,7 +3429,7 @@ function bTapRenderSel(){
   const sel=document.getElementById('stap-sel'); if(!sel) return;
   const p=BTAP.sel?playerById(BTAP.sel):null;
   sel.innerHTML = p
-    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${escapeHtml(p.name)}</b> <span class="stap-sel-role">${p.role}</span>`
     : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
   const on=!!p;
   document.querySelectorAll('.btap-cat').forEach(b=>b.disabled=!on);
@@ -2541,7 +3491,7 @@ function bTapRenderDetail(){
         return `<button class="stap-chip btap-chip" onclick="bTapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
           <span class="stap-chip-f">${c?c.label:e.cat}</span>${outLbl?`<b>${outLbl}</b>`:''}<i class="fa-solid fa-xmark"></i></button>`; }).join('')
     : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione.</div>`;
-  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${escapeHtml(p.name)}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
   const row=bTapDeriveRow(BTAP.sel);
   const calc=computeVoto(row,'basket',p.role);
   const ov=BTAP.override[BTAP.sel];
@@ -2570,6 +3520,7 @@ function bTapClearOverride(){
   bTapRenderPlayers(); bTapRenderSel();
 }
 function saveScoutTapBasket(){
+  if(!guardWrite()) return;
   if(!BTAP) return;
   const match=DB.events.find(e=>e.id===BTAP.matchId);
   const rows=[];
@@ -2577,7 +3528,7 @@ function saveScoutTapBasket(){
     const s=bTapDeriveRow(p.id);
     const ov=BTAP.override[p.id];
     const min=bTapMinValue(p.id);
-    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'basket').toFixed(1)};
+    const row={pId:p.id, role:p.role, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'basket').toFixed(1)};
     if(typeof ov==='number') row.votoOverride=ov;
     rows.push(row);
   });
@@ -2699,7 +3650,7 @@ function cTapRenderPlayers(){
     const minVal=cTapMinValue(p.id);
     return `<div class="stap-player${CTAP.sel===p.id?' sel':''}" data-pid="${p.id}">
       <button class="stap-p-btn" onclick="cTapSelect(${p.id})">
-        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${p.name}</span><span class="stap-role">${p.role}</span></div>
+        <div class="stap-p-main"><span class="stap-num">#${p.number}</span><span class="stap-name">${pre}${escapeHtml(p.name)}</span><span class="stap-role">${p.role}</span></div>
         <div class="stap-p-stat"><span>+${pos}</span><span>−${neg}</span><span class="stap-voto ${vClass}">${v.toFixed(1)}${typeof ov==='number'?'<i class="stap-ovm" title="voto manuale">M</i>':''}</span></div>
       </button>
       ${CTAP.minAuto
@@ -2712,7 +3663,7 @@ function cTapRenderSel(){
   const sel=document.getElementById('stap-sel'); if(!sel) return;
   const p=CTAP.sel?playerById(CTAP.sel):null;
   sel.innerHTML = p
-    ? `<span class="stap-sel-num">#${p.number}</span> <b>${p.name}</b> <span class="stap-sel-role">${p.role}</span>`
+    ? `<span class="stap-sel-num">#${p.number}</span> <b>${escapeHtml(p.name)}</b> <span class="stap-sel-role">${p.role}</span>`
     : `<span class="stap-sel-empty">Seleziona un giocatore ↖</span>`;
   const on=!!p;
   document.querySelectorAll('.ctap-cat').forEach(b=>b.disabled=!on);
@@ -2775,7 +3726,7 @@ function cTapRenderDetail(){
     ? evs.map(e=>`<button class="stap-chip btap-chip" onclick="cTapRemoveEvent(${e.id})" title="Rimuovi questo tocco">
          <span class="stap-chip-f">${cTapActionLabel(e.field)}</span><i class="fa-solid fa-xmark"></i></button>`).join('')
     : `<div class="stap-detail-empty">Nessun tocco registrato in questa sessione.</div>`;
-  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${p.name}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
+  box.innerHTML=`<div class="stap-detail-h">Tocchi di <b>#${p.number} ${escapeHtml(p.name)}</b> <span class="stap-detail-n">${evs.length}</span></div><div class="stap-chips">${chips}</div>`;
   const row=cTapDeriveRow(CTAP.sel);
   const calc=computeVoto(row,'calcio',p.role);
   const ov=CTAP.override[CTAP.sel];
@@ -2804,6 +3755,7 @@ function cTapClearOverride(){
   cTapRenderPlayers(); cTapRenderSel();
 }
 function saveScoutTapCalcio(){
+  if(!guardWrite()) return;
   if(!CTAP) return;
   const match=DB.events.find(e=>e.id===CTAP.matchId);
   const rows=[];
@@ -2811,7 +3763,7 @@ function saveScoutTapCalcio(){
     const s=cTapDeriveRow(p.id);
     const ov=CTAP.override[p.id];
     const min=cTapMinValue(p.id);
-    const row={pId:p.id, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'calcio').toFixed(1)};
+    const row={pId:p.id, role:p.role, ...s, min, voto:+rowVoto({pId:p.id,...s,votoOverride:ov},'calcio').toFixed(1)};
     if(typeof ov==='number') row.votoOverride=ov;
     rows.push(row);
   });
@@ -2948,7 +3900,7 @@ function renderSubsPanel(matchId){
   const sport=curSport();
   const evs=subsSorted(matchId);
   const rows=evs.map(e=>{ const po=playerById(e.out), pi=playerById(e.in);
-    return `<div class="subs-row"><span class="subs-min">${e.min}'</span> Esce <b>#${po?po.number:'?'} ${po?po.name:'?'}</b>, entra <b>#${pi?pi.number:'?'} ${pi?pi.name:'?'}</b>
+    return `<div class="subs-row"><span class="subs-min">${e.min}'</span> Esce <b>#${po?po.number:'?'} ${po?escapeHtml(po.name):'?'}</b>, entra <b>#${pi?pi.number:'?'} ${pi?escapeHtml(pi.name):'?'}</b>
       <button class="subs-del" onclick="removeSub(${matchId},${e.id})" title="Rimuovi cambio"><i class="fa-solid fa-xmark"></i></button></div>`; }).join('');
   const autoMin = !!(MATCH_FULL_MIN[sport] && evs.length);
   host.innerHTML=`<div class="card">
@@ -2963,8 +3915,8 @@ function openAddSub(matchId){
   const onField=[...matchOnFieldNow(matchId,sport).values()];
   const onFieldIds=new Set(onField.map(p=>p.id));
   const bench=activePlayers().filter(p=>!onFieldIds.has(p.id));
-  const outOpts=onField.map(p=>`<option value="${p.id}">#${p.number} ${p.name}</option>`).join('');
-  const inOpts=bench.map(p=>`<option value="${p.id}">#${p.number} ${p.name}</option>`).join('');
+  const outOpts=onField.map(p=>`<option value="${p.id}">#${p.number} ${escapeHtml(p.name)}</option>`).join('');
+  const inOpts=bench.map(p=>`<option value="${p.id}">#${p.number} ${escapeHtml(p.name)}</option>`).join('');
   openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Registra cambio</h3>
       <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body">
@@ -3032,7 +3984,7 @@ function renderAttendance(){
         const cur=map[p.id]||'';
         const row=document.createElement('div');row.className='att-row';
         row.innerHTML=`<div class="jersey" style="width:32px;height:32px;font-size:.85rem;cursor:default">${p.number}</div>
-            <div class="att-name">${p.name}<div style="font-size:.74rem;color:var(--muted-2);font-weight:500">${p.role}</div></div>
+            <div class="att-name">${escapeHtml(p.name)}<div style="font-size:.74rem;color:var(--muted-2);font-weight:500">${p.role}</div></div>
             <div class="att-toggle">${ATT_STATES.map(st=>`<button class="${st} ${cur===st?'on':''}" onclick="setAtt(${id},${p.id},'${st}')">${ATT_LABEL[st]}</button>`).join('')}</div>`;
         list.appendChild(row);
     });
@@ -3056,7 +4008,7 @@ function renderAttSeason(){
     const rows=DB.players.map(p=>({p,pct:playerAttendance(p.id)})).filter(x=>x.pct!==null).sort((a,b)=>b.pct-a.pct);
     if(!rows.length){box.innerHTML=`<div class="empty-state"><i class="fa-solid fa-user-clock"></i>Nessuna presenza registrata ancora.</div>`;return;}
     box.innerHTML=rows.map(x=>`<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-soft)">
-        <div style="width:130px;font-weight:600;font-size:.9rem">${x.p.name}</div>
+        <div style="width:130px;font-weight:600;font-size:.9rem">${escapeHtml(x.p.name)}</div>
         <div style="flex:1"><div class="bar-track"><div class="bar-fill" style="width:${x.pct}%;background:${x.pct>=75?'linear-gradient(90deg,var(--brand-deep),var(--brand))':x.pct>=50?'var(--warn)':'var(--flame)'}"></div></div></div>
         <div class="num" style="font-weight:800;font-family:'Outfit';width:42px;text-align:right">${x.pct}%</div></div>`).join('');
 }
@@ -3158,13 +4110,13 @@ function renderBench(){
       .map(p=>({p,v:getSeasonStats(p.id).avgVoto}))
       .sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
     host.innerHTML=`<div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:700;margin-bottom:8px"><i class="fa-solid fa-chair"></i> Panchina</div>`+
-      (bench.length ? `<div class="bench-chips">`+bench.map(b=>`<button class="bench-chip" onclick="benchSubstitute(${b.p.id})"><span class="bench-num">${b.p.number}</span> ${(b.p.name||'').split(' ').slice(-1)[0]}</button>`).join('')+`</div>`
+      (bench.length ? `<div class="bench-chips">`+bench.map(b=>`<button class="bench-chip" onclick="benchSubstitute(${b.p.id})"><span class="bench-num">${b.p.number}</span> ${escapeHtml((b.p.name||'').split(' ').slice(-1)[0])}</button>`).join('')+`</div>`
                     : '<p class="hint" style="margin:0">Tutti in campo.</p>');
 }
 function benchSubstitute(pid){
     if(!BOARD_LINEUP) return;
     const inField=BOARD_LINEUP.map((s,i)=>({i,s})).filter(x=>x.s.player);
-    const opts=inField.map(({i,s})=>`<button class="sub-opt" onclick="boardApplySub(${i},${pid});closeModal()"><span class="fmz-num">#${s.player.number}</span> ${s.player.name} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
+    const opts=inField.map(({i,s})=>`<button class="sub-opt" onclick="boardApplySub(${i},${pid});closeModal()"><span class="fmz-num">#${s.player.number}</span> ${escapeHtml(s.player.name)} <span class="fmz-role-tag">${s.role}</span></button>`).join('');
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Chi fai uscire?</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
       <div class="modal-body"><p class="hint" style="margin-bottom:10px">Solo per spiegare la tattica: non cambia la formazione ufficiale di "Formazione consigliata".</p>
@@ -3220,22 +4172,64 @@ function resetTokens(){
 /* =========================================================
    BACKUP
    ========================================================= */
+/* ---------- stato backup (Task 3): traccia data ultimo backup e conteggio ---------- */
+const BACKUP_LOG_KEY='vt_backup_log';
+const BACKUP_WARN_DAYS=7;
+function getBackupLog(){
+    try{ return JSON.parse(localStorage.getItem(BACKUP_LOG_KEY))||{last:null,count:0}; }catch(e){ return {last:null,count:0}; }
+}
+function logBackupDone(){
+    const log=getBackupLog();
+    log.last=new Date().toISOString();
+    log.count=(log.count||0)+1;
+    try{ localStorage.setItem(BACKUP_LOG_KEY, JSON.stringify(log)); }catch(e){}
+}
+function renderBackupStatus(){
+    const box=document.getElementById('backup-status'); if(!box) return;
+    const log=getBackupLog();
+    if(!log.last){
+        box.innerHTML=`<div class="pill" style="background:rgba(240,70,60,.16);color:var(--flame);display:inline-flex;align-items:center;gap:6px;padding:7px 12px">
+            <i class="fa-solid fa-triangle-exclamation"></i> Nessun backup ancora effettuato</div>`;
+        return;
+    }
+    const days=Math.floor((Date.now()-new Date(log.last))/86400000);
+    const late=days>=BACKUP_WARN_DAYS;
+    const col=late?'var(--flame)':'var(--brand)', bg=late?'rgba(240,70,60,.16)':'rgba(34,197,94,.14)';
+    const when=days===0?'oggi':days===1?'ieri':`${days} giorni fa`;
+    box.innerHTML=`<div class="pill" style="background:${bg};color:${col};display:inline-flex;align-items:center;gap:6px;padding:7px 12px">
+            <i class="fa-solid ${late?'fa-triangle-exclamation':'fa-circle-check'}"></i> Ultimo backup: ${when} (${fmtDateLong(log.last.slice(0,10))})</div>
+        <div style="color:var(--muted);font-size:.82rem;margin-top:6px">${log.count} backup effettuat${log.count===1?'o':'i'} in totale.${late?` Sono passati ${days} giorni: fanne uno nuovo.`:''}</div>`;
+}
 function exportData(){
     const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob);const a=document.createElement('a');
     const d=new Date().toISOString().slice(0,10);
-    a.href=url;a.download=`volleyteam-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
+    const teamSlug=(DB.teamName||'TEAM').trim().replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-')||'TEAM';
+    a.href=url;a.download=`${teamSlug}-Airim-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
+    logBackupDone(); renderBackupStatus();
     toast('Backup scaricato');
 }
 function importData(e){
+    if(!guardWrite()){ e.target.value=''; return; }
     const file=e.target.files[0];if(!file)return;
     const reader=new FileReader();
     reader.onload=()=>{
         try{
-            const data=JSON.parse(reader.result);
+            const data=stripDangerousKeys(JSON.parse(reader.result));
             if(!data.players||!data.events) throw new Error('formato');
             confirmAction('Importare questo backup? I dati attuali verranno sovrascritti.',()=>{
-                DB=data;if(!DB.nextId)DB.nextId=Date.now();save();renderTeamName();go('dashboard');toast('Backup importato con successo');
+                DB=data;ensureDBDefaults();
+                /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
+                   account coach — se il coach e' loggato su questo device, ricollega la
+                   squadra importata al SUO account (owner_user_id) invece di lasciare che
+                   il prossimo "Sincronizza online" ne crei una nuova (squadra duplicata).
+                   Task 2 (Prompt20): il team_code/teamId nel backup potrebbe appartenere
+                   a un altro coach (backup condiviso/di un dispositivo diverso) — marcato
+                   "pending" finche' ensureTeamOnline() non lo verifica/rigenera in modo
+                   sicuro (vedi ensureTeamOnline), cosi' non viene mai riusato alla cieca. */
+                if(DB.settings.sync && DB.settings.sync.teamCode) DB.settings.sync.importedTeamPending=true;
+                save();renderTeamName();go('dashboard');toast('Backup importato con successo');
+                relinkTeamAfterImport();
             });
         }catch(err){toast('File non valido o danneggiato','danger');}
         e.target.value='';
@@ -3285,7 +4279,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v52';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v62';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -3370,21 +4364,61 @@ if('serviceWorker' in navigator){
    (il centrale che ruoterebbe dietro), come da regolamento pallavolo.
    Basket: nuovo — 5 posizioni base su mezzo campo (nessun motore per il basket esisteva in Formazione).
    ========================================================= */
+/* Le 6 zone di posizione sul campo (coordinate visive fisse, come un mezzo campo calcio con 6
+   "maglie"): la ROTAZIONE (P1..P6, Prompt24/PromptCorrection) decide SOLO quale delle 6 zone
+   occupa ciascuno dei 6 ruoli "di rete" — è disposizione tattica di partenza (equivalente al
+   modulo nel calcio, es. 4-3-3 vs 4-3-1-2), non chi gioca. Il Libero NON è mai una di queste 6
+   zone e non vi compete mai per un posto (vedi VOLLEY_LIBERO_POS più sotto) — questo è il fix
+   del Prompt21/22 e resta invariato: la rotazione qui sotto sposta solo Palleggiatore/Opposto/
+   Centrali/Schiacciatori fra loro, mai il Libero. Nessuna rotazione dinamica punto-per-punto
+   (fuori scope): è solo la posizione di partenza scelta dal coach. */
 const VOLLEY_ZONES=[['P4',.2,.22],['P3',.5,.18],['P2',.8,.22],['P5',.2,.78],['P6',.5,.82],['P1',.8,.78]];
-/* Ordine di ruolo lungo il giro di rotazione P1→P2→P3→P4→P5→P6 quando il palleggiatore
-   parte da P1 (rotazione 1): Palleggiatore, Schiacciatore, Centrale, Opposto (sempre
-   opposto al palleggiatore, 3 zone dopo), Schiacciatore, Libero (sostituisce il centrale
-   che tornerebbe dietro). Per far partire il palleggiatore da un'altra zona (rotazione N)
-   basta scorrere questo stesso ciclo di quante zone lo separano da P1. */
-const VOLLEY_ROLE_CYCLE=[['Palleggiatore',0],['Schiacciatore',0],['Centrale',0],['Opposto',0],['Schiacciatore',1],['Libero',0]];
-function volleyZoneRoleMap(startRot){
+/* Ordine dei 6 ruoli di rete lungo il giro P1→P2→P3→P4→P5→P6 quando il palleggiatore parte da P1
+   (rotazione 1): Palleggiatore, Schiacciatore, Centrale, Opposto (sempre opposto al palleggiatore,
+   3 zone dopo), Schiacciatore, Centrale. Per far partire il palleggiatore da un'altra zona
+   (rotazione N) basta scorrere questo stesso ciclo di quante zone lo separano da P1. */
+const VOLLEY_ROLE_CYCLE=['Palleggiatore','Schiacciatore','Centrale','Opposto','Schiacciatore','Centrale'];
+function volleyRoleZoneMap(startRot){
   const off=(((startRot||1)-1)%6+6)%6;
   const zones=['P1','P2','P3','P4','P5','P6'], map={};
   zones.forEach((z,i)=>{ map[z]=VOLLEY_ROLE_CYCLE[(i-off+6)%6]; });
-  return map;
+  return map; // zona -> ruolo di rete
 }
 function getLineupPallavolo(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.pallavolo=DB.settings.lineup.pallavolo||{rotation:1}; if(!DB.settings.lineup.pallavolo.rotation) DB.settings.lineup.pallavolo.rotation=1; return DB.settings.lineup.pallavolo; }
 function setLineupRotation(r){ const L=getLineupPallavolo(); L.rotation=r; save(); renderFormazione(); }
+/* Il Libero è uno specialista che sostituisce sempre e solo il centrale in seconda linea: non è un
+   ruolo che "compete" con gli altri per uno dei 6 slot sopra. Va scelto a parte e mostrato distinto
+   sia dal campo che dalla panchina — vedi renderCourtFormation. */
+const VOLLEY_LIBERO_POS=[.5,.5];
+/* "Gioca con Libero" (Prompt22): preferenza di sessione/vista per la Formazione Consigliata pallavolo,
+   NON un ruolo salvato sui giocatori. Se il coach non l'ha mai toccata (null = nessuna preferenza
+   esplicita salvata) il default è Sì solo se esiste almeno un candidato Libero in rosa. */
+function volleyUseLiberoPref(){
+  const L=DB.settings&&DB.settings.lineup&&DB.settings.lineup.pallavolo;
+  return (L && typeof L.useLibero==='boolean') ? L.useLibero : null;
+}
+function setVolleyUseLibero(v){
+  DB.settings=DB.settings||{}; DB.settings.lineup=DB.settings.lineup||{}; DB.settings.lineup.pallavolo=DB.settings.lineup.pallavolo||{};
+  DB.settings.lineup.pallavolo.useLibero=!!v; save(); renderFormazione();
+}
+/* Il titolare Libero va scelto SEPARATAMENTE dal matching dei 6 slot di rete e su TUTTI i giocatori
+   con quel ruolo (primario o secondario): se calcolato dopo/dal risultato del matching, un giocatore
+   Libero+ruolo di rete che il matching assegna altrove sparirebbe dal pannello Libero anche quando è
+   il candidato migliore (o l'unico). Solo il titolare effettivamente scelto viene poi tolto dal pool
+   per i 6 slot di rete, per non contarlo due volte; gli altri Libero restano liberi di coprire il loro
+   altro ruolo. Se "Gioca con Libero" è No, non si calcola proprio: il pool resta invariato. La
+   rotazione (quale zona tocca a quale ruolo) è indipendente da tutto questo. */
+function volleyLineupPicks(players){
+  const liberoCands=byRoleCandidates(players,'Libero');
+  const pref=volleyUseLiberoPref();
+  const useLib = pref===null ? liberoCands.length>0 : pref;
+  const lib = useLib ? (liberoCands[0]||null) : null;
+  const netPlayers = lib ? players.filter(x=>x.p.id!==lib.p.id) : players;
+  const roleMap=volleyRoleZoneMap(getLineupPallavolo().rotation);
+  const roleList=VOLLEY_ZONES.map(([z])=>roleMap[z]);
+  const {picks}=assignRoleSlots(netPlayers,roleList);
+  return {picks,lib,useLib,roleList};
+}
 const BASKET_POS={Playmaker:[.5,.85],Guardia:[.82,.55],'Ala piccola':[.18,.55],'Ala grande':[.7,.25],Centro:[.5,.1]};
 function lineupSlot(zr,p,v,x,y){ return {ruolo_o_zona:zr,playerName:p.name,number:p.number,overall:cphOverall(v),tier:playerTier(p.id),x:+x.toFixed(3),y:+y.toFixed(3)}; }
 function computeLineupCalcio(){
@@ -3392,24 +4426,19 @@ function computeLineupCalcio(){
   return slots.filter(s=>s.player).map(s=>lineupSlot(s.role,s.player,getSeasonStats(s.player.id).avgVoto,s.x,s.y));
 }
 function computeLineupPallavolo(){
-  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const {picks,lib,useLib,roleList}=volleyLineupPicks(players);
   const out=[];
-  VOLLEY_ZONES.forEach(([z,x,y])=>{
-    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
-    if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y));
-  });
+  VOLLEY_ZONES.forEach(([z,x,y],i)=>{ const pick=picks[i]; if(pick) out.push(lineupSlot(z,pick.p,pick.v,x,y)); });
+  if(useLib && lib) out.push(lineupSlot('Libero',lib.p,lib.v,VOLLEY_LIBERO_POS[0],VOLLEY_LIBERO_POS[1]));
   return out;
 }
 function computeLineupBasket(){
   const players=activePlayers().map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
+  const roles=Object.keys(BASKET_POS);
+  const {picks}=assignRoleSlots(players,roles);
   const out=[];
-  Object.keys(BASKET_POS).forEach(role=>{
-    const pick=byRole(role)[0]; if(!pick) return;
-    const [x,y]=BASKET_POS[role]; out.push(lineupSlot(role,pick.p,pick.v,x,y));
-  });
+  roles.forEach((role,i)=>{ const pick=picks[i]; if(!pick) return; const [x,y]=BASKET_POS[role]; out.push(lineupSlot(role,pick.p,pick.v,x,y)); });
   return out;
 }
 function computeLineup(sport){
@@ -3418,6 +4447,68 @@ function computeLineup(sport){
   if(sport==='pallavolo') return computeLineupPallavolo();
   if(sport==='basket') return computeLineupBasket();
   return [];
+}
+/* ---------- export rapido formazione titolare come immagine (condivisione WhatsApp) ---------- */
+function exportFormationModal(){
+  const matches=DB.events.filter(e=>e.type==='Partita').sort((a,b)=>new Date(a.date)-new Date(b.date));
+  const t=today();
+  const next=matches.find(e=>new Date(e.date)>=t);
+  const opts=matches.map(e=>`<option value="${e.id}" ${next&&e.id===next.id?'selected':''}>${fmtDateLong(e.date)} · ${escapeHtml(e.notes)}</option>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-image" style="color:var(--brand)"></i> Esporta formazione</h3>
+      <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+    <div class="modal-body">
+      <div class="fg"><label>Partita</label><select id="ef-match">${opts||'<option value="">Nessuna partita in calendario</option>'}</select></div>
+      <p class="hint" style="margin-top:6px">Genera un'immagine con la formazione attuale — pronta per essere condivisa nel gruppo prima della gara.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:12px" onclick="downloadFormationImage()"><i class="fa-solid fa-download"></i> Genera e scarica immagine</button>
+    </div>`);
+}
+function roundRectPath(c,x,y,w,h,r){
+  c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+function drawFormationCanvas(sport,slots,match){
+  const W=900,H=1300, cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const c=cv.getContext('2d');
+  c.fillStyle='#0A1020'; c.fillRect(0,0,W,H);
+  c.fillStyle='#F3F7FC'; c.font='800 40px Arial,sans-serif'; c.textAlign='center';
+  c.fillText(DB.teamName||'TEAM', W/2, 62);
+  c.font='600 24px Arial,sans-serif'; c.fillStyle='#8395B4';
+  c.fillText(match?`${fmtDateLong(match.date)} · vs ${match.notes}`:'Formazione consigliata', W/2, 98);
+  const fieldTop=140, fieldH=H-fieldTop-56, fieldW=W-80, fieldX=40;
+  const grad=c.createLinearGradient(0,fieldTop,0,fieldTop+fieldH);
+  if(sport==='calcio'){ grad.addColorStop(0,'#1f7a43'); grad.addColorStop(1,'#176135'); }
+  else if(sport==='basket'){ grad.addColorStop(0,'#b5763b'); grad.addColorStop(1,'#95602c'); }
+  else { grad.addColorStop(0,'#0e2a4d'); grad.addColorStop(1,'#0a1f3a'); }
+  c.fillStyle=grad; roundRectPath(c,fieldX,fieldTop,fieldW,fieldH,18); c.fill();
+  c.strokeStyle='rgba(255,255,255,.5)'; c.lineWidth=2; c.strokeRect(fieldX+8,fieldTop+8,fieldW-16,fieldH-16);
+  if(sport==='pallavolo'){ c.beginPath(); c.moveTo(fieldX+8,fieldTop+fieldH/2); c.lineTo(fieldX+fieldW-8,fieldTop+fieldH/2); c.stroke(); }
+  else { c.beginPath(); c.arc(fieldX+fieldW/2,fieldTop+fieldH/2,fieldW*0.13,0,2*Math.PI); c.stroke();
+    c.beginPath(); c.moveTo(fieldX+8,fieldTop+fieldH/2); c.lineTo(fieldX+fieldW-8,fieldTop+fieldH/2); c.stroke(); }
+  slots.forEach(s=>{
+    const x=fieldX+s.x*fieldW, y=fieldTop+s.y*fieldH;
+    c.beginPath(); c.arc(x,y,34,0,2*Math.PI); c.fillStyle='#22C55E'; c.fill();
+    c.lineWidth=3; c.strokeStyle='#fff'; c.stroke();
+    c.fillStyle='#04140A'; c.textAlign='center'; c.textBaseline='middle';
+    c.font='800 26px Arial,sans-serif'; c.fillText(String(s.number||''), x, y-6);
+    c.font='700 13px Arial,sans-serif'; c.fillText((s.playerName||'').split(' ').slice(-1)[0], x, y+16);
+  });
+  c.fillStyle='#8395B4'; c.font='500 18px Arial,sans-serif'; c.textAlign='center';
+  c.fillText('Generato con AIrim TeamManager', W/2, H-18);
+  return cv;
+}
+function downloadFormationImage(){
+  const sel=document.getElementById('ef-match');
+  const matchId=sel?parseInt(sel.value):null;
+  const match=matchId?DB.events.find(e=>e.id===matchId):null;
+  const sport=curSport();
+  let slots; try{ slots=computeLineup(sport); }catch(e){ slots=[]; }
+  if(!slots||!slots.length){ toast('Nessun giocatore disponibile per la formazione','warning'); return; }
+  const cv=drawFormationCanvas(sport,slots,match);
+  const teamSlug=(DB.teamName||'TEAM').trim().replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-')||'TEAM';
+  const a=document.createElement('a');
+  a.href=cv.toDataURL('image/png');
+  a.download=`${teamSlug}-formazione${match?'-'+match.date:''}.png`;
+  document.body.appendChild(a); a.click(); a.remove();
+  closeModal(); toast('Immagine formazione scaricata');
 }
 function showLineupOverall(){ return !(DB.settings&&DB.settings.showLineupOverall===false); }
 function setShowLineupOverall(v){ DB.settings=DB.settings||{}; DB.settings.showLineupOverall=!!v; save(); toast(v?'Overall visibile ai giocatori':'Overall nascosto ai giocatori','info'); }
@@ -3464,9 +4555,10 @@ function buildPlayerPackage(id, photo){
 function encodePkg(o){ return btoa(unescape(encodeURIComponent(JSON.stringify(o)))); }
 function slug(s){ return s.toLowerCase().normalize('NFD').replace(/[^\w]+/g,'-').replace(/^-|-$/g,''); }
 async function sharePlayer(id){
+    if(!guardShare()) return;
     const photo=await cIdbGet('p'+id); const p=playerById(id); const pkg=buildPlayerPackage(id,photo); const code=encodePkg(pkg);
     openModal(`
-      <div class="modal-head"><h3><i class="fa-solid fa-share-nodes" style="color:var(--brand)"></i> Condividi · ${p.name}</h3>
+      <div class="modal-head"><h3><i class="fa-solid fa-share-nodes" style="color:var(--brand)"></i> Condividi · ${escapeHtml(p.name)}</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
       <div class="modal-body">
         <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Manda al giocatore <b>il file</b> (consigliato, via WhatsApp/email) oppure <b>il codice</b> da incollare nella sua app. Aggiorna e riinvia dopo ogni partita o allenamento.</p>
@@ -3474,6 +4566,12 @@ async function sharePlayer(id){
         <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Oppure codice da copiare</label>
         <textarea id="share-code" readonly style="width:100%;height:90px;margin-top:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace">${code}</textarea>
         <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="copyShare()"><i class="fa-solid fa-copy"></i> Copia codice</button>
+        <div style="border-top:1px solid var(--line,rgba(255,255,255,.12));margin-top:14px;padding-top:14px">
+            <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Oppure sincronizza online</label>
+            <p class="hint" style="margin:4px 0 8px">Il giocatore accede da solo dalla sua app con il codice squadra e il suo PIN — nessun file da inviare.</p>
+            <button class="btn btn-ghost" style="width:100%" id="sync-online-btn" onclick="syncPlayerOnline(${id})"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza online</button>
+            <div id="sync-online-status" style="margin-top:8px;font-size:.82rem;color:var(--muted)"></div>
+        </div>
         ${DEMO_BUILD?`
         <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice di esempio, ma serve l'app Player per riceverlo.</p>`:''}
       </div>`);
@@ -3483,6 +4581,7 @@ function copyShare(){
     navigator.clipboard?.writeText(ta.value).then(()=>toast('Codice copiato')).catch(()=>{document.execCommand('copy');toast('Codice copiato');});
 }
 async function downloadPlayerPkg(id){
+    if(!guardShare()) return;
     const photo=await cIdbGet('p'+id); const p=playerById(id); const pkg=buildPlayerPackage(id,photo);
     const blob=new Blob([JSON.stringify(pkg)],{type:'application/json'});
     const url=URL.createObjectURL(blob); const a=document.createElement('a');
@@ -3490,8 +4589,561 @@ async function downloadPlayerPkg(id){
     toast('File profilo scaricato');
 }
 
+/* =========================================================
+   SYNC ONLINE (Supabase) — la logica sta qui, il trasporto in supabase.js.
+   Terzo canale accanto a file/codice: crea/aggiorna la squadra online al
+   primo utilizzo, assegna un PIN casuale a ogni giocatore in addPlayer(),
+   e fa il upsert del pacchetto su player_packages.
+   Task 4 (Prompt16): se il coach e' loggato (Supabase Auth), la squadra
+   e' sempre quella legata al suo account (owner_user_id) — niente piu'
+   team_code random che si perde a ogni reinstall/backup scollegato.
+   ========================================================= */
+function genTeamCode(){
+    const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // niente 0/O/1/I, meno ambiguo da leggere/digitare
+    const arr=new Uint32Array(8);
+    (window.crypto||window.msCrypto).getRandomValues(arr);
+    return Array.from(arr,n=>alphabet[n%alphabet.length]).join('');
+}
+let COACH_EMAIL=null; // cache locale della sessione Supabase Auth, popolata al boot e dopo login/logout
+async function refreshCoachSession(){
+    if(typeof AiRIMSync==='undefined') return null;
+    try{
+        const session=await AiRIMSync.getSession();
+        COACH_EMAIL=(session&&session.user&&session.user.email)||null;
+        return session;
+    }catch(e){ COACH_EMAIL=null; return null; }
+}
+async function ensureTeamOnline(){
+    const sync=DB.settings.sync;
+    const session=await refreshCoachSession();
+    let team;
+    if(session){
+        // Task 3/4: coach loggato -> sempre la SUA squadra (crea, reclama quella locale
+        // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
+        team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
+    }else{
+        /* Task 2 (Prompt20): un team_code ereditato da un backup importato (potenzialmente
+           di un altro coach) non va mai riusato alla cieca nel flusso anonimo, che — a
+           differenza di upsert_my_team sopra, protetto da owner_user_id — non ha alcun
+           controllo di ownership lato server: chiunque conosca quel codice puo' scrivere
+           sulla stessa riga. Senza login non possiamo verificare a chi appartiene davvero,
+           quindi lo scartiamo e ne generiamo uno nuovo: forza una squadra pulita invece di
+           rischiare di sovrascrivere i dati del coach originale. */
+        if(sync.importedTeamPending) sync.teamCode=null;
+        if(!sync.teamCode) sync.teamCode=genTeamCode();
+        team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
+    }
+    if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
+    sync.teamId=team.id; sync.teamCode=team.team_code; sync.importedTeamPending=false; save();
+    return sync;
+}
+/* =========================================================
+   PRIVACY POLICY — clickwrap con log di accettazione (Prompt17).
+   Testo verbatim di privacy_policy_airim.md: NON alterare senza bumpare
+   POLICY_VERSION (Task 4 — un bump forza una nuova accettazione esplicita
+   ad ogni coach al prossimo accesso/sync online).
+   ========================================================= */
+const POLICY_VERSION = 'v1.0 — 2026-09-03';
+const POLICY_TEXT = `PRIVACY POLICY E TERMINI DI SERVIZIO — AIrim Team Manager
+
+Accettando questa informativa (spunta "Accetto" in fase di registrazione), la Società Sportiva conferma di aver letto e compreso i termini sottostanti e stipula con lo Sviluppatore un accordo relativo al trattamento dei dati inseriti nell'applicazione.
+
+1. Definizione dei Ruoli nel Trattamento dei Dati
+
+- Titolare del Trattamento (Data Controller): la Società Sportiva / ASD che utilizza l'applicazione e vi inserisce i dati dei propri atleti e tesserati. La Società Sportiva è responsabile della liceità del trattamento, della veridicità dei dati inseriti e della preventiva raccolta dei consensi (inclusi quelli genitoriali per i minori, vedi punto 2).
+- Responsabile del Trattamento (Data Processor): l'Amministratore/Sviluppatore dell'applicazione, che fornisce l'infrastruttura software in modalità SaaS e il relativo database per la gestione tecnica dell'applicazione, operando sulla base delle istruzioni della Società Sportiva.
+
+Ai sensi dell'art. 28 del Regolamento (UE) 2016/679 (GDPR), il presente documento costituisce l'accordo di nomina a Responsabile del Trattamento tra la Società Sportiva (Titolare) e lo Sviluppatore (Responsabile).
+
+2. Trattamento Dati di Minori e Consenso Genitoriale
+
+L'inserimento nell'applicazione di dati relativi a soggetti minorenni è effettuato sotto la responsabilità della Società Sportiva, in qualità di Titolare del Trattamento. La Società Sportiva dichiara di aver raccolto, prima dell'inserimento dei dati, il consenso informato dei genitori o tutori legali dei minori tesserati, tramite il modulo fornito in calce a questo documento o modulo equivalente.
+
+3. Dati Raccolti (principio di minimizzazione)
+
+L'applicazione raccoglie e memorizza i seguenti dati, strettamente necessari alla gestione dell'attività sportiva:
+
+- Nome e cognome del tesserato
+- Ruolo di gioco, numero di maglia, altezza indicativa
+- Statistiche di gara (gol, presenze, convocazioni, minuti giocati, valutazioni tecniche)
+- Fotografia del tesserato, se caricata volontariamente dalla Società o dal tesserato/genitore per la personalizzazione della scheda giocatore (facoltativa, non richiesta per l'uso base dell'applicazione)
+
+L'applicazione non richiede e non tratta dati sanitari, certificati medici, codici fiscali, documenti d'identità o dati di geolocalizzazione.
+
+4. Sicurezza, Conservazione e Limitazione di Responsabilità
+
+I dati sono conservati su infrastrutture Cloud di terze parti (Supabase, basata su infrastruttura AWS), con accesso protetto da autenticazione. I dati raccolti non vengono venduti, ceduti o comunicati a terzi per finalità commerciali o di marketing.
+
+In conformità all'art. 82 del GDPR, il Responsabile del Trattamento risponde dei danni derivanti dal trattamento solo qualora non abbia rispettato gli obblighi specificamente rivolti ai responsabili del trattamento dal Regolamento, oppure abbia agito in modo difforme o contrario alle istruzioni legittime impartite dal Titolare. Lo Sviluppatore non potrà essere ritenuto responsabile per intrusioni informatiche, vulnerabilità o violazioni dei dati (Data Breach) derivanti da falle di sicurezza dell'infrastruttura Cloud di terze parti o da eventi che esulano dal proprio ragionevole controllo tecnico. In caso di Data Breach relativo ai server terzi, lo Sviluppatore si impegna a notificare tempestivamente l'evento alla Società Sportiva interessata, nei termini di legge.
+
+5. Cancellazione e Rettifica dei Dati
+
+La Società Sportiva si impegna a modificare o cancellare tempestivamente i dati di un tesserato su richiesta dell'interessato o del genitore/tutore del minore. Lo Sviluppatore garantisce la cancellazione dei dati dai propri database in caso di cessazione dell'account da parte della Società Sportiva, salvo diversi obblighi di conservazione previsti dalla legge.
+
+---
+
+MODULO PER LE FAMIGLIE
+Testo da copiare nel modulo di iscrizione della Società Sportiva
+
+Il/la sottoscritto/a, genitore/tutore legale dell'atleta ____________________,
+autorizza l'Associazione Sportiva [Nome Squadra] al trattamento dei dati
+personali del/della minore (nome, cognome, ruolo, altezza indicativa,
+statistiche di gara ed eventuale fotografia) tramite l'applicazione
+gestionale "AIrim Team Manager", che conserva i dati su infrastruttura
+cloud Supabase, al solo fine di organizzare l'attività sportiva,
+gli allenamenti, le convocazioni e la valutazione tecnica dell'atleta.
+
+Data: ____________        Firma: ____________________`;
+async function sha256Hex(text){
+    const buf=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function policyScrollHtml(){
+    return `<div id="policy-text-box" style="max-height:260px;overflow-y:auto;padding:12px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));border:1px solid var(--line,rgba(255,255,255,.16));font-size:.85rem;line-height:1.55;white-space:pre-wrap"></div>`;
+}
+function mountPolicyText(){
+    // testContent (non innerHTML): garantisce che il testo mostrato sia byte-per-byte
+    // lo stesso che viene hashato in coachAccountFinishSignup/coachAcceptPolicyGate.
+    const box=document.getElementById('policy-text-box'); if(box) box.textContent=POLICY_TEXT;
+}
+function openPolicyViewer(){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-shield" style="color:var(--brand)"></i> Privacy Policy e Termini</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">${policyScrollHtml()}</div>`, true);
+    mountPolicyText();
+}
+let COACH_POLICY=null; // {policy_version, policy_hash, accepted_at} cache per la vista Impostazioni (Task 3)
+/* Task 4: gate versione — se l'utente loggato non ha ancora accettato POLICY_VERSION
+   corrente (mai, o una versione precedente), mostra di nuovo il clickwrap prima di
+   proseguire. Usata sia nel gate di sync online sia proattivamente al boot. */
+function ensurePolicyAccepted(onDone){
+    AiRIMSync.getMyPolicyAcceptance().then(acc=>{
+        COACH_POLICY=acc; renderSyncSettings();
+        if(acc && acc.policy_version===POLICY_VERSION){ onDone(); return; }
+        openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-shield" style="color:var(--brand)"></i> ${acc?'Termini aggiornati':'Privacy Policy e Termini'}</h3>
+            <button class="modal-close" onclick="_policyGateOnDone=null;closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+          <div class="modal-body">
+            <p class="hint" style="margin-bottom:10px">${acc?'La Privacy Policy e i Termini di Servizio sono stati aggiornati: leggili e accettali di nuovo per continuare a sincronizzare online.':'Prima di sincronizzare online, leggi e accetta la Privacy Policy e i Termini di Servizio.'}</p>
+            ${policyScrollHtml()}
+            <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:.85rem;cursor:pointer">
+              <input type="checkbox" id="policy-accept-chk" onchange="document.getElementById('policy-signup-btn').disabled=!this.checked" style="margin-top:3px">
+              <span>Ho letto e accetto i Termini di Servizio e la Privacy Policy</span>
+            </label>
+            <div id="acc-status" class="hint" style="margin-top:8px"></div>
+            <button class="btn btn-accent" style="width:100%;margin-top:14px" id="policy-signup-btn" disabled onclick="coachAcceptPolicyGate()">Accetto e continuo</button>
+          </div>`);
+        mountPolicyText();
+        _policyGateOnDone=onDone;
+    }).catch(()=>{ onDone(); }); // check non riuscito (offline): non blocchiamo, si ritenta al prossimo giro
+}
+let _policyGateOnDone=null;
+async function coachAcceptPolicyGate(){
+    const statusEl=document.getElementById('acc-status');
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
+    try{
+        const hash=await sha256Hex(POLICY_TEXT);
+        await AiRIMSync.recordPolicyAcceptance(POLICY_VERSION, hash);
+        COACH_POLICY={policy_version:POLICY_VERSION, policy_hash:hash, accepted_at:new Date().toISOString()};
+        const done=_policyGateOnDone; _policyGateOnDone=null;
+        closeModal(); renderSyncSettings();
+        if(done) done();
+    }catch(e){
+        if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
+    }
+}
+/* ---------- Task 4: gate account coach al primo sync online ---------- */
+function requireCoachAccount(onReady,onCancel){
+    if(DB.settings.sync.hasEverSynced){
+        refreshCoachSession().then(session=>{ if(session) ensurePolicyAccepted(onReady); else onReady(); });
+        return;
+    } // sync gia' avviato in passato (anche senza account): non blocchiamo un flusso in corso, salvo l'eventuale gate versione policy se nel frattempo si e' loggato
+    refreshCoachSession().then(session=>{
+        if(session) ensurePolicyAccepted(onReady); else openCoachAccountModal(onReady,onCancel);
+    });
+}
+function openCoachAccountModal(onSuccess,onCancel){
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-user-shield" style="color:var(--brand)"></i> Account coach</h3>
+        <button class="modal-close" onclick="coachAccountDismiss()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:10px">Crea o accedi al tuo account: ritroverai sempre la stessa squadra, anche da un altro telefono o dopo aver reinstallato l'app.</p>
+        <input id="acc-email" type="email" placeholder="Email" autocomplete="email" style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16))">
+        <input id="acc-pass" type="password" placeholder="Password" autocomplete="current-password" style="width:100%;padding:11px;border-radius:10px;background:var(--surface,rgba(0,0,0,.2));color:inherit;border:1px solid var(--line,rgba(255,255,255,.16));margin-top:8px">
+        <div id="acc-status" class="hint" style="margin-top:8px"></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost" style="flex:1" onclick="coachAccountSubmit('signIn')">Accedi</button>
+          <button class="btn btn-accent" style="flex:1" onclick="coachAccountGoToPolicy()">Crea account</button>
+        </div>
+      </div>`);
+    _coachAccountOnSuccess=typeof onSuccess==='function'?onSuccess:null;
+    _coachAccountOnCancel=typeof onCancel==='function'?onCancel:null;
+}
+let _coachAccountOnSuccess=null, _coachAccountOnCancel=null, _pendingSignup=null;
+function coachAccountDismiss(){
+    const cancel=_coachAccountOnCancel; _coachAccountOnSuccess=null; _coachAccountOnCancel=null; _pendingSignup=null;
+    closeModal();
+    if(cancel) cancel();
+}
+/* Task 1 (Prompt17): step intermedio obbligatorio della registrazione — email e
+   password sono gia' state inserite ma il signup vero e proprio (coachAccountFinishSignup)
+   parte solo dopo aver spuntato la checkbox di accettazione qui sotto. */
+function coachAccountGoToPolicy(){
+    const email=(document.getElementById('acc-email').value||'').trim();
+    const pass=document.getElementById('acc-pass').value||'';
+    const statusEl=document.getElementById('acc-status');
+    if(!email||!pass){ if(statusEl) statusEl.textContent='Inserisci email e password.'; return; }
+    _pendingSignup={email,pass};
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-file-shield" style="color:var(--brand)"></i> Privacy Policy e Termini</h3>
+        <button class="modal-close" onclick="coachAccountDismiss()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        ${policyScrollHtml()}
+        <label style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:.85rem;cursor:pointer">
+          <input type="checkbox" id="policy-accept-chk" onchange="document.getElementById('policy-signup-btn').disabled=!this.checked" style="margin-top:3px">
+          <span>Ho letto e accetto i Termini di Servizio e la Privacy Policy</span>
+        </label>
+        <div id="acc-status" class="hint" style="margin-top:8px"></div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost" style="flex:1" onclick="coachAccountBack()">Indietro</button>
+          <button class="btn btn-accent" style="flex:1" id="policy-signup-btn" disabled onclick="coachAccountFinishSignup()">Registrati</button>
+        </div>
+      </div>`);
+    mountPolicyText();
+}
+function coachAccountBack(){
+    const pending=_pendingSignup;
+    openCoachAccountModal(_coachAccountOnSuccess,_coachAccountOnCancel);
+    if(pending){
+        const e=document.getElementById('acc-email'), p=document.getElementById('acc-pass');
+        if(e) e.value=pending.email; if(p) p.value=pending.pass;
+    }
+}
+/* ---------- Task 4: dopo login/signup riuscito, un'unica logica condivisa —
+   1) c'e' un chiamante specifico in attesa (cb, es. un "Sincronizza" o
+      "Importa squadra dal server" in sospeso): gli si passa subito il
+      controllo, e' lui a sapere cosa fare (importTeamFromServer gestisce da
+      solo il proprio pull/conferma, per non farlo scattare due volte).
+   2) nessun cb (es. "Accedi / crea account" da Impostazioni, o il login
+      diretto): se il DB locale e' vuoto (device nuovo o cache cancellata)
+      prova a ripristinare dal backup online, senza chiedere conferma — non
+      c'e' nulla da perdere localmente. E' il fix del bug "squadra vuota dopo
+      login" segnalato dall'utente.
+   3) altrimenti comportamento invariato: se la squadra locale ha gia' un
+      team_code, la reclama sul nuovo account (self-heal PROMPTFIXLITE). ---------- */
+async function finishCoachLoginFlow(cb){
+    if(cb){ cb(); return; }
+    if(!DB.players.length){
+        await pullTeamFromServer().catch(()=>false);
+        return;
+    }
+    if(DB.settings.sync.teamCode){
+        try{ await ensureTeamOnline(); checkLicenseOnline(true); }
+        catch(e){ toast('Login riuscito, ma il collegamento della squadra è in sospeso: riprova da Impostazioni o riapri l\'app.','warning'); }
+    }
+}
+async function coachAccountFinishSignup(){
+    const pending=_pendingSignup||{}; const email=pending.email, pass=pending.pass;
+    const statusEl=document.getElementById('acc-status');
+    if(!email||!pass) return;
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
+    try{
+        const res=await AiRIMSync.signUp(email,pass);
+        if(!res.session){
+            // Progetto Supabase con "Confirm email" ancora attivo (default): l'utente
+            // e' stato creato ma senza sessione attiva. NON procedere con la sync in
+            // sospeso ne' con la registrazione dell'accettazione (serve auth.uid(), che
+            // richiede una sessione vera): altrimenti si ricadrebbe silenziosamente sul
+            // vecchio flusso anonimo (Task 3/4 vanificato). L'accettazione verra'
+            // registrata al primo "Accedi" riuscito, tramite il gate versione qui sopra.
+            if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-envelope-circle-check"></i> Account creato: controlla la mail e conferma il link, poi torna qui e premi "Accedi".';
+            return;
+        }
+        await refreshCoachSession();
+        const hash=await sha256Hex(POLICY_TEXT);
+        await AiRIMSync.recordPolicyAcceptance(POLICY_VERSION, hash);
+        COACH_POLICY={policy_version:POLICY_VERSION, policy_hash:hash, accepted_at:new Date().toISOString()};
+        _pendingSignup=null;
+        const cb=_coachAccountOnSuccess; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+        closeModal(); toast('Account creato'); renderSyncSettings();
+        await finishCoachLoginFlow(cb);
+    }catch(e){
+        if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
+    }
+}
+async function coachAccountSubmit(mode){
+    // usato solo per 'signIn': il signup passa da coachAccountGoToPolicy (clickwrap prima del signup vero)
+    const email=(document.getElementById('acc-email').value||'').trim();
+    const pass=document.getElementById('acc-pass').value||'';
+    const statusEl=document.getElementById('acc-status');
+    if(!email||!pass){ if(statusEl) statusEl.textContent='Inserisci email e password.'; return; }
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Un attimo…';
+    try{
+        await AiRIMSync.signIn(email,pass);
+        await refreshCoachSession();
+        const cb=_coachAccountOnSuccess, cancel=_coachAccountOnCancel; _coachAccountOnSuccess=null; _coachAccountOnCancel=null;
+        toast('Accesso effettuato');
+        ensurePolicyAccepted(()=>{
+            closeModal(); renderSyncSettings();
+            finishCoachLoginFlow(cb);
+        });
+    }catch(e){
+        if(statusEl) statusEl.textContent=(e&&e.message)||'Operazione non riuscita, riprova.';
+    }
+}
+/* vuln-0006 (report Strix): il solo signOut() Supabase lasciava sul device — rilevante sui
+   dispositivi condivisi — l'intero DB squadra in localStorage, le foto/logo in IndexedDB
+   (store pm-media/img) e gli eventuali token sb-* residui. "Esci" ora ripulisce esplicitamente
+   tutto questo. Dato che qui non teniamo traccia fine di "cosa non è ancora sincronizzato",
+   se la squadra non ha MAI sincronizzato nulla online il messaggio di conferma è più netto
+   (si perde tutto per sempre), per evitare che un tocco accidentale cancelli lavoro non salvato. */
+async function coachSignOut(){
+    const neverSynced=!(DB.settings&&DB.settings.sync&&DB.settings.sync.hasEverSynced);
+    const warn = neverSynced
+        ? 'Questa squadra non è mai stata sincronizzata online: uscendo, TUTTI i dati locali di questo dispositivo (rosa, scout, calendario, foto) verranno cancellati e persi per sempre. Continuare?'
+        : 'Uscire dall\'account coach su questo dispositivo? I dati locali (rosa, scout, calendario, foto) verranno rimossi da QUESTO dispositivo — la squadra resta comunque sincronizzata online, potrai recuperarla accedendo di nuovo.';
+    confirmAction(warn,async()=>{
+        try{ await AiRIMSync.signOut(); }catch(e){}
+        try{ localStorage.removeItem(dbKey()); }catch(e){}
+        try{ Object.keys(localStorage).filter(k=>k.startsWith('sb-')).forEach(k=>localStorage.removeItem(k)); }catch(e){}
+        try{ await cIdbClearAll(); }catch(e){}
+        COACH_EMAIL=null; COACH_POLICY=null;
+        COACH_PHOTOS={}; TEAM_LOGO=null; _logoLoaded=false;
+        DB=emptyDB();
+        toast('Disconnesso: dati locali rimossi da questo dispositivo','info');
+        renderTeamName(); go('dashboard'); openOnboarding(true);
+    });
+}
+async function syncPlayerOnline(id){
+    if(!guardWrite()) return;
+    const statusEl=document.getElementById('sync-online-status');
+    if(typeof AiRIMSync==='undefined'){ if(statusEl) statusEl.textContent='Modulo sync non disponibile: ricarica la pagina e riprova.'; return; }
+    const p=playerById(id); if(!p) return;
+    requireCoachAccount(async()=>{
+    if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione in corso…';
+    try{
+        const sync=await ensureTeamOnline();
+        const photo=await cIdbGet('p'+id);
+        const pkg=buildPlayerPackage(id,photo);
+        await AiRIMSync.upsertPlayerPackage(sync.teamId, id, p.name, p.pin, pkg);
+        sync.hasEverSynced=true; save();
+        // coach loggato: aggiorna anche il backup completo, cosi' un pull da un
+        // altro device ritrova sempre l'ultimo stato (scout/allenamenti inclusi),
+        // non solo le card giocatore. Best-effort: non deve mai far fallire il
+        // sync PIN esistente se questa chiamata in piu' va storta.
+        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(()=>{});
+        if(statusEl) statusEl.innerHTML=`<span style="color:var(--brand)"><i class="fa-solid fa-circle-check"></i> Sincronizzato.</span> Codice squadra <b>${escapeHtml(sync.teamCode)}</b> · PIN di ${escapeHtml((p.name||'').split(' ')[0])}: <b>${escapeHtml(p.pin)}</b>`;
+        toast('Profilo sincronizzato online');
+        renderSyncSettings();
+        checkLicenseOnline(true);
+    }catch(e){
+        if(statusEl) statusEl.textContent='Sync non riuscita: verifica la connessione e riprova.';
+        toast('Sincronizzazione fallita','danger');
+    }
+    });
+}
+async function syncAllPlayersOnline(){
+    if(!guardWrite()) return;
+    requireCoachAccount(async()=>{
+    const btn=document.getElementById('sync-all-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; }
+    let ok=0, fail=0;
+    try{
+        const sync=await ensureTeamOnline();
+        for(const p of DB.players){
+            try{
+                const photo=await cIdbGet('p'+p.id);
+                const pkg=buildPlayerPackage(p.id,photo);
+                await AiRIMSync.upsertPlayerPackage(sync.teamId, p.id, p.name, p.pin, pkg);
+                ok++;
+            }catch(e){ fail++; }
+        }
+        sync.hasEverSynced=true; save();
+        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(()=>{});
+        toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
+        checkLicenseOnline(true);
+    }catch(e){
+        toast('Sincronizzazione fallita: verifica la connessione','danger');
+    }
+    renderSyncSettings();
+    });
+}
+/* ---------- Task 3: dopo import backup, se il coach e' gia' loggato su questo
+   device ricollega subito la squadra importata al suo account (claim del
+   team_code portato dal backup) invece di aspettare il prossimo sync manuale,
+   cosi' non resta mai una finestra in cui un secondo "Sincronizza online"
+   potrebbe generarne una nuova. ---------- */
+async function relinkTeamAfterImport(){
+    if(typeof AiRIMSync==='undefined') return;
+    const session=await refreshCoachSession();
+    if(!session || !DB.settings.sync.hasEverSynced) return;
+    try{ await ensureTeamOnline(); checkLicenseOnline(true); }catch(e){}
+}
+/* ---------- pull: ripristina il DB locale da un backup salvato online (coach loggato) ----------
+   Scarica lo stesso oggetto DB completo che upsertMyTeamBackup() carica ad ogni
+   "Sincronizza" (players, events, scoutHistory, attendance, trainings,
+   rotationStats, substitutions, settings...): stessa fedelta' del backup/import
+   manuale in JSON, a differenza di un pull ricostruito da player_packages (che
+   contiene solo il riepilogo derivato per la card del singolo giocatore, senza
+   scout dettagliato/allenamenti/rotazioni/sostituzioni). Nessuna conferma qui
+   dentro: chi chiama decide se e quando avvisare prima di sovrascrivere
+   (vedi importTeamFromServer per il bottone manuale). */
+async function pullTeamFromServer(){
+    if(typeof AiRIMSync==='undefined') return false;
+    try{
+        const res=await AiRIMSync.getMyTeamBackup();
+        if(!res||!res.backup) return false;
+        const data=stripDangerousKeys(res.backup);
+        if(!data.players||!data.events) return false;
+        DB=data; ensureDBDefaults();
+        // owner della verita' per teamId/teamCode resta la riga `teams`, non il
+        // blob di backup (che potrebbe portarsi dietro valori vecchi/di un altro
+        // device): stesso self-heal gia' usato dopo un import di backup manuale.
+        try{ await ensureTeamOnline(); }catch(e){}
+        save(); renderTeamName(); go('dashboard'); renderSyncSettings();
+        toast(`Squadra ripristinata dal server (${DB.players.length} giocatori)`);
+        return true;
+    }catch(e){ return false; }
+}
+/* ---------- bottone "Importa squadra dal server" (Impostazioni) ---------- */
+function importTeamFromServer(){
+    requireCoachAccount(async()=>{
+        const doPull=async()=>{
+            const btn=document.getElementById('import-server-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Importazione…'; }
+            const ok=await pullTeamFromServer();
+            if(!ok) toast('Nessun backup trovato sul server per questo account.','warning');
+            if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server'; }
+        };
+        if(DB.players.length){
+            confirmAction('Importare la squadra salvata online sovrascriverà TUTTI i dati locali di questo dispositivo (rosa, scout, calendario). Continuare?', doPull);
+        }else{
+            doPull();
+        }
+    });
+}
+/* ---------- vista "PIN squadra" + stato licenza in Impostazioni ---------- */
+function renderSyncSettings(){
+    const box=document.getElementById('sync-settings-card'); if(!box) return;
+    const sync=DB.settings.sync;
+    const pinRows=DB.players.length? DB.players.map(p=>
+        `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft)"><span>#${p.number} ${escapeHtml(p.name)}</span><b style="font-family:'Outfit',sans-serif">${escapeHtml(p.pin)}</b></div>`
+    ).join('') : '<p class="hint">Nessun giocatore in rosa.</p>';
+    const codeBlock = sync.teamCode
+        ? `<div class="pill" style="background:rgba(34,197,94,.14);color:var(--brand);display:inline-flex;align-items:center;gap:6px;padding:7px 12px;font-family:'Outfit',sans-serif;font-weight:800;letter-spacing:1px">${escapeHtml(sync.teamCode)}</div>
+           <span class="hint" style="margin-left:8px">codice squadra — il giocatore lo inserisce insieme al suo PIN</span>`
+        : `<p class="hint">Il codice squadra viene generato al primo "Sincronizza online" da una scheda giocatore.</p>`;
+    const accBlock = COACH_EMAIL
+        ? `<div class="hint" style="margin-top:10px"><i class="fa-solid fa-user-shield"></i> Account: <b>${COACH_EMAIL}</b> <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="coachSignOut()">Esci</button></div>`
+        : `<div class="hint" style="margin-top:10px">Nessun account collegato. <button class="btn btn-ghost btn-sm" onclick="openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Accedi / crea account</button></div>`;
+    /* ---------- Task 3 (Prompt17): vista "Termini accettati" ---------- */
+    const termsBlock = COACH_EMAIL
+        ? `<div class="hint" style="margin-top:6px"><i class="fa-solid fa-file-shield"></i> Termini: ${COACH_POLICY? `accettati (${COACH_POLICY.policy_version}) il ${new Date(COACH_POLICY.accepted_at).toLocaleDateString('it-IT')}` : 'in verifica…'} <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="openPolicyViewer()">Rileggi</button></div>`
+        : `<div class="hint" style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="openPolicyViewer()"><i class="fa-solid fa-file-shield"></i> Leggi Privacy Policy e Termini</button></div>`;
+    const licBlock = sync.hasEverSynced ? renderLicenseBadge() : '';
+    box.innerHTML = `${codeBlock}
+        <div style="margin-top:14px">${pinRows}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-ghost btn-sm" id="sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
+          <button class="btn btn-ghost btn-sm" id="import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server</button>
+        </div>
+        ${accBlock}
+        ${termsBlock}
+        ${licBlock}`;
+}
+function renderLicenseBadge(){
+    const lic=DB.settings.sync.license;
+    const recheckBtn=`<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla ora</button>`;
+    if(!lic) return `<p class="hint" style="margin-top:12px">Licenza non ancora verificata.</p>${recheckBtn}`;
+    const pro=isLicensePro();
+    const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleDateString('it-IT'):'—';
+    const label = lic.status==='active' ? 'attiva' : (lic.status==='unknown' ? 'nessuna licenza associata' : 'scaduta/non attiva');
+    return `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${pro?'rgba(34,197,94,.1)':'rgba(240,70,60,.1)'};border:1px solid ${pro?'rgba(34,197,94,.3)':'rgba(240,70,60,.3)'}">
+        <b style="color:${pro?'var(--brand)':'var(--flame)'}"><i class="fa-solid ${pro?'fa-circle-check':'fa-triangle-exclamation'}"></i> Licenza: ${label}</b>
+        <div class="hint" style="margin-top:2px">Ultimo controllo: ${when}</div>
+        ${recheckBtn}
+    </div>`;
+}
+/* ---------- controllo licenza: giornaliero, solo se la squadra ha già sincronizzato online almeno una volta ---------- */
+const LICENSE_CHECK_INTERVAL_MS = 24*3600*1000;
+const LICENSE_OFFLINE_GRACE_DAYS = 5;
+async function checkLicenseOnline(force){
+    const sync=DB.settings.sync;
+    if(!sync.hasEverSynced || !sync.teamId) return; // chi non usa il sync resta gestito dal flag locale come oggi
+    if(typeof AiRIMSync==='undefined') return;
+    const now=Date.now();
+    if(!force && sync.license && sync.license.checkedAt && (now-sync.license.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
+    try{
+        const res=await AiRIMSync.getLicenseStatus(sync.teamId, sync.clubId||null);
+        sync.license={status:res?res.status:'unknown', expiresAt:res?res.expires_at:null,
+            activatedAt:res?res.activated_at:(sync.license&&sync.license.activatedAt)||null, checkedAt:now, lastSuccessAt:now};
+        saveSystem();
+    }catch(e){
+        if(sync.license) sync.license.checkedAt=now; // riprova al prossimo check giornaliero, stato noto resta quello vecchio
+        saveSystem();
+    }
+    renderSyncSettings();
+    checkLicenseLock(); // Task Prompt18: sblocco/blocco immediato, senza reinstallare o ricaricare
+}
+/* Stato Pro/limitata: invariato rispetto a prima (vedi Prompt15/16), nessuna
+   modifica alla logica di verifica/tolleranza offline. */
+function isLicensePro(){
+    const sync=DB.settings.sync;
+    if(!sync.hasEverSynced) return true; // mai sincronizzato: nessuna restrizione, comportamento locale attuale
+    const lic=sync.license;
+    if(!lic) return true; // non ancora verificata: non blocchiamo preventivamente
+    const now=Date.now();
+    if(lic.lastSuccessAt && (now-lic.lastSuccessAt) > LICENSE_OFFLINE_GRACE_DAYS*86400000) return false; // tolleranza offline scaduta
+    return lic.status==='active' && (!lic.expiresAt || new Date(lic.expiresAt).getTime()>now);
+}
+/* =========================================================
+   PAYWALL REALE (Prompt18) — enforcement sopra isLicensePro(), che resta
+   il solo giudice di "attiva/scaduta": qui si decide solo COSA succede quando
+   non e' attiva, distinguendo due casi via activatedAt (mai azzerato lato DB,
+   vedi trigger licenses_set_activated_at in supabase_schema.sql):
+   - mai stata attiva -> blocco totale (nessuna licenza mai acquistata)
+   - stata attiva in passato, ora scaduta -> sola lettura (dati mai a rischio)
+   ========================================================= */
+function hasEverHadActiveLicense(){
+    const sync=DB.settings.sync;
+    return !!(sync.license && sync.license.activatedAt);
+}
+function licenseAccessLevel(){
+    // 'full' | 'readonly' | 'blocked'
+    if(isLicensePro()) return 'full';
+    return hasEverHadActiveLicense() ? 'readonly' : 'blocked';
+}
+/* Unico punto di applicazione (Implementazione, Prompt18): il resto dell'app
+   non controlla mai isLicensePro()/licenseAccessLevel() sparso ovunque, passa
+   sempre da qui (schermata di blocco in go()) o da guardWrite()/save() per le
+   scritture — cosi' un solo posto da aggiornare se la logica cambia. */
+function canWriteDB(){ return licenseAccessLevel()==='full'; }
+let _writeBlockedToastAt=0;
+function guardWrite(){
+    const lvl=licenseAccessLevel();
+    if(lvl==='full') return true;
+    const now=Date.now();
+    if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
+        toast(lvl==='blocked' ? 'Nessuna licenza attiva: azione non disponibile.' : 'Licenza scaduta: modifica disabilitata.', 'danger');
+    }
+    return false;
+}
+/* FIX: il canale file/codice (sharePlayer/downloadPlayerPkg) e' puro scambio locale
+   che non tocca mai Supabase — non passava mai da guardWrite(), quindi non veniva
+   mai intercettato dal paywall online (che scatta solo dopo un primo sync, vedi
+   isLicensePro). Chi non sincronizza mai online, o chi forza DEMO_BUILD=false /
+   supera il trial in una build demo, poteva continuare a generare pacchetti
+   completi per il Player all'infinito. guardShare() applica qui lo stesso gate:
+   licenza/trial online (stesso guardWrite(), stesso messaggio) PIU' il controllo
+   demo scaduta (che guardWrite() da solo non vede, essendo indipendente dal sync). */
+function guardShare(){
+    if(DEMO_BUILD && demoExpired()){
+        const now=Date.now();
+        if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
+            toast('Prova terminata: serve la versione completa per condividere nuovi dati con l\'app Player.','danger');
+        }
+        return false;
+    }
+    return guardWrite();
+}
+
 /* ---------- sync inverso: importa il codice "statistiche mentali" inviato dal giocatore (Mental Gym) ---------- */
-function decodeMentalPkg(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
+function decodeMentalPkg(code){ return stripDangerousKeys(JSON.parse(decodeURIComponent(escape(atob(code.trim()))))); }
 function openImportMental(){
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-brain" style="color:var(--brand)"></i> Importa statistiche mentali</h3>
@@ -3522,7 +5174,7 @@ function importMentalCode(){
 }
 
 /* ---------- sync inverso: importa lo storico "check-in benessere" inviato dal giocatore ---------- */
-function decodeWellnessPkg(code){ return JSON.parse(decodeURIComponent(escape(atob(code.trim())))); }
+function decodeWellnessPkg(code){ return stripDangerousKeys(JSON.parse(decodeURIComponent(escape(atob(code.trim()))))); }
 function openImportWellness(){
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-heart-pulse" style="color:var(--brand)"></i> Importa check-in benessere</h3>
@@ -3697,7 +5349,7 @@ function openExLibrary(){
       <p class="exlib-hint">Tocca <b>+</b> per aggiungere alla seduta, <b><i class="fa-solid fa-circle-info"></i></b> per i dettagli. Gli esercizi che scrivi a mano nella seduta finiscono qui in automatico.</p>
     </div>`, true);
   renderExLibCats(); renderExLibList();
-  const nc=document.getElementById('exlib-newcat'); if(nc) nc.innerHTML=catsFor(curSport()).map(c=>`<option>${c}</option>`).join('');
+  const nc=document.getElementById('exlib-newcat'); if(nc) nc.innerHTML=catsFor(curSport()).map(c=>`<option>${escapeHtml(c)}</option>`).join('');
   window.__exlibNewInt='';
 }
 function exlibNewSetIntensity(v){ window.__exlibNewInt=v; document.querySelectorAll('#exlib-newint-seg .seg-btn').forEach(b=>b.classList.toggle('on',b.dataset.v===v)); }
@@ -3725,7 +5377,7 @@ function renderExLibCats(){
   const box=document.getElementById('exlib-cats'); if(!box) return;
   const cats=catsFor(curSport());
   box.innerHTML=`<button class="exlib-chip${EXLIB_FILTER.cat===''?' on':''}" onclick="exLibSet('cat','')">Tutte</button>`+
-    cats.map(c=>`<button class="exlib-chip${EXLIB_FILTER.cat===c?' on':''}" style="--c:${CAT_COLOR[c]||'#8395B4'}" onclick="exLibSet('cat','${c.replace(/'/g,"\\'")}')">${c}</button>`).join('');
+    cats.map(c=>`<button class="exlib-chip${EXLIB_FILTER.cat===c?' on':''}" style="--c:${CAT_COLOR[c]||'#8395B4'}" onclick="exLibSet('cat','${escapeJsAttr(c)}')">${escapeHtml(c)}</button>`).join('');
 }
 function renderExLibList(){
   const box=document.getElementById('exlib-list'); if(!box) return;
@@ -3738,45 +5390,44 @@ function renderExLibList(){
     return `<div class="exlib-row">
       <span class="exlib-dot" style="background:${CAT_COLOR[e.cat]||'#8395B4'}"></span>
       <div class="exlib-main">
-        <span class="exlib-name">${e.name}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
+        <span class="exlib-name">${escapeHtml(e.name)}${e.custom?' <i class="exlib-custom">tuo</i>':''}</span>
         ${badges}
       </div>
-      <span class="exlib-cat">${e.cat}</span>
-      <button class="exlib-draw" title="Dettagli esercizio" onclick="openExDetail('${curSport()}','${e.cat.replace(/'/g,"\\'")}','${e.name.replace(/'/g,"\\'")}')"><i class="fa-solid fa-circle-info"></i></button>
-      <button class="exlib-draw${drawn?' has':''}" title="Disegna schema" onclick="openExerciseDraw('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-pen-ruler"></i></button>
-      <button class="exlib-add" onclick="addExFromLib('${e.name.replace(/'/g,"\\'")}','${e.cat.replace(/'/g,"\\'")}')"><i class="fa-solid fa-plus"></i></button>
+      <span class="exlib-cat">${escapeHtml(e.cat)}</span>
+      <button class="exlib-draw" title="Dettagli esercizio" onclick="openExDetail('${curSport()}','${escapeJsAttr(e.cat)}','${escapeJsAttr(e.name)}')"><i class="fa-solid fa-circle-info"></i></button>
+      <button class="exlib-draw${drawn?' has':''}" title="Disegna schema" onclick="openExerciseDraw('${escapeJsAttr(e.name)}','${escapeJsAttr(e.cat)}')"><i class="fa-solid fa-pen-ruler"></i></button>
+      <button class="exlib-add" onclick="addExFromLib('${escapeJsAttr(e.name)}','${escapeJsAttr(e.cat)}')"><i class="fa-solid fa-plus"></i></button>
     </div>`; }).join('');
 }
 function openExDetail(sport,cat,name){
   exLibCSS();
   const meta=getExMeta(sport,cat,name), custom=isCustomExercise(sport,cat,name), ic=intensityColor(meta.intensity);
-  const esc=s=>(s||'').replace(/"/g,'&quot;');
-  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-circle-info" style="color:var(--brand)"></i> ${name}</h3>
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-circle-info" style="color:var(--brand)"></i> ${escapeHtml(name)}</h3>
       <button class="modal-close" onclick="openExLibrary()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-        <span class="pill" style="background:${CAT_COLOR[cat]||'#8395B4'}22;color:${CAT_COLOR[cat]||'#8395B4'};border:1px solid ${CAT_COLOR[cat]||'#8395B4'}55">${cat}</span>
+        <span class="pill" style="background:${CAT_COLOR[cat]||'#8395B4'}22;color:${CAT_COLOR[cat]||'#8395B4'};border:1px solid ${CAT_COLOR[cat]||'#8395B4'}55">${escapeHtml(cat)}</span>
         ${custom?'<span class="pill" style="background:var(--brand)22;color:var(--brand);border:1px solid var(--brand)55">Tuo</span>':''}
         ${meta.dur?`<span class="pill"><i class="fa-solid fa-clock"></i> ${meta.dur} min</span>`:''}
         ${meta.intensity?`<span class="pill" style="background:${ic}22;color:${ic};border:1px solid ${ic}55"><i class="fa-solid fa-bolt"></i> ${intensityLabel(meta.intensity)}</span>`:''}
       </div>
-      ${meta.focus?`<p class="hint" style="margin-bottom:8px"><b>Obiettivo:</b> ${meta.focus}</p>`:''}
-      ${meta.desc?`<p style="margin-bottom:16px;line-height:1.5">${meta.desc}</p>`:'<p class="hint" style="margin-bottom:16px">Nessuna descrizione. Aggiungine una qui sotto.</p>'}
+      ${meta.focus?`<p class="hint" style="margin-bottom:8px"><b>Obiettivo:</b> ${escapeHtml(meta.focus)}</p>`:''}
+      ${meta.desc?`<p style="margin-bottom:16px;line-height:1.5">${escapeHtml(meta.desc)}</p>`:'<p class="hint" style="margin-bottom:16px">Nessuna descrizione. Aggiungine una qui sotto.</p>'}
       <h4 style="margin:0 0 8px;font-size:.8rem;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Modifica dettagli</h4>
       <div class="form-row">
         <div class="fg" style="max-width:140px"><label>Durata (min)</label><input type="number" min="0" id="exd-dur" value="${meta.dur||''}"></div>
-        <div class="fg"><label>Obiettivo</label><input id="exd-focus" placeholder="Es. Controllo orientato" value="${esc(meta.focus)}"></div>
+        <div class="fg"><label>Obiettivo</label><input id="exd-focus" placeholder="Es. Controllo orientato" value="${escapeHtml(meta.focus)}"></div>
       </div>
       <div class="fg"><label>Intensità</label>
         <div class="seg" id="exd-int-seg">
           ${['bassa','media','alta'].map(v=>`<button type="button" class="exlib-chip seg-btn${meta.intensity===v?' on':''}" data-v="${v}" style="--c:${intensityColor(v)}" onclick="exdSetIntensity('${v}')">${intensityLabel(v)}</button>`).join('')}
         </div>
       </div>
-      <div class="fg"><label>Descrizione</label><textarea id="exd-desc" rows="3" placeholder="Descrizione dell'esercizio…">${meta.desc||''}</textarea></div>
+      <div class="fg"><label>Descrizione</label><textarea id="exd-desc" rows="3" placeholder="Descrizione dell'esercizio…">${escapeHtml(meta.desc||'')}</textarea></div>
       <div class="modal-buttons">
         <button class="btn btn-ghost" onclick="openExLibrary()">‹ Torna alla libreria</button>
-        ${custom?`<button class="btn btn-ghost" style="color:#EF4444" onclick="confirmDeleteExercise('${sport}','${cat.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"><i class="fa-solid fa-trash-can"></i> Elimina</button>`:''}
-        <button class="btn btn-accent" onclick="saveExDetail('${sport}','${cat.replace(/'/g,"\\'")}','${name.replace(/'/g,"\\'")}')"><i class="fa-solid fa-check"></i> Salva</button>
+        ${custom?`<button class="btn btn-ghost" style="color:#EF4444" onclick="confirmDeleteExercise('${sport}','${escapeJsAttr(cat)}','${escapeJsAttr(name)}')"><i class="fa-solid fa-trash-can"></i> Elimina</button>`:''}
+        <button class="btn btn-accent" onclick="saveExDetail('${sport}','${escapeJsAttr(cat)}','${escapeJsAttr(name)}')"><i class="fa-solid fa-check"></i> Salva</button>
       </div>
     </div>`, true);
   window.__exdInt=meta.intensity||'';
@@ -3807,7 +5458,7 @@ function addExFromLib(name,cat){
 function refreshExCats(){
   const sel=document.getElementById('ex-cat'); if(!sel) return;
   const cur=sel.value, cats=catsFor(curSport());
-  sel.innerHTML=cats.map(c=>`<option${c===cur?' selected':''}>${c}</option>`).join('');
+  sel.innerHTML=cats.map(c=>`<option${c===cur?' selected':''}>${escapeHtml(c)}</option>`).join('');
 }
 function exLibCSS(){
   if(document.getElementById('exlib-css')) return;
@@ -3818,7 +5469,7 @@ function exLibCSS(){
   .exlib-cats{display:flex;flex-wrap:wrap;gap:6px;}
   .exlib-chip{border:1px solid var(--border,rgba(255,255,255,.16));background:transparent;color:var(--muted);border-radius:20px;padding:5px 11px;font-size:.78rem;font-weight:600;cursor:pointer;}
   .exlib-chip.on{border-color:var(--c,var(--brand));color:#fff;background:color-mix(in srgb,var(--c,var(--brand)) 22%,transparent);}
-  .exlib-list{overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;}
+  .exlib-list{overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px;flex:1 1 auto;min-height:160px;}
   .exlib-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border,rgba(255,255,255,.1));border-radius:11px;background:var(--surface-2,rgba(255,255,255,.03));}
   .exlib-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
   .exlib-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;}
@@ -3860,8 +5511,8 @@ function renderTraining(){
     else chips.innerHTML=c.tr.exercises.map(x=>{
         const ic=intensityColor(x.intensity);
         const tip=[x.dur?x.dur+' min':'',x.intensity?'Intensità '+intensityLabel(x.intensity):'',x.desc||''].filter(Boolean).join(' · ');
-        return `<span class="pill" title="${tip.replace(/"/g,'&quot;')}" style="background:${CAT_COLOR[x.cat]||'var(--surface-3)'}22;color:${CAT_COLOR[x.cat]||'var(--silver)'};border:1px solid ${CAT_COLOR[x.cat]||'var(--line)'}55;margin:0 6px 6px 0;padding:6px 10px;font-size:.8rem">
-        <b>${x.name}</b> · ${x.cat}${x.dur?` · ${x.dur}'`:''}${x.intensity?` <i class="fa-solid fa-bolt" style="color:${ic}"></i>`:''} <i class="fa-solid fa-xmark" style="margin-left:6px;cursor:pointer;opacity:.7" onclick="removeExercise(${x.id})"></i></span>`;
+        return `<span class="pill" title="${escapeHtml(tip)}" style="background:${CAT_COLOR[x.cat]||'var(--surface-3)'}22;color:${CAT_COLOR[x.cat]||'var(--silver)'};border:1px solid ${CAT_COLOR[x.cat]||'var(--line)'}55;margin:0 6px 6px 0;padding:6px 10px;font-size:.8rem">
+        <b>${escapeHtml(x.name)}</b> · ${escapeHtml(x.cat)}${x.dur?` · ${x.dur}'`:''}${x.intensity?` <i class="fa-solid fa-bolt" style="color:${ic}"></i>`:''} <i class="fa-solid fa-xmark" style="margin-left:6px;cursor:pointer;opacity:.7" onclick="removeExercise(${x.id})"></i></span>`;
     }).join('');
     renderGradeTable(c);
 }
@@ -3870,14 +5521,14 @@ function renderGradeTable(c){
     if(!c.tr.exercises.length){tbl.innerHTML=`<tbody><tr><td style="padding:1.4rem;color:var(--muted-2);font-style:italic">Aggiungi almeno un esercizio per iniziare a votare.</td></tr></tbody>`;return;}
     const roster=activePlayers();
     if(!roster.length){tbl.innerHTML=`<tbody><tr><td style="padding:1.4rem;color:var(--muted-2)">Nessun atleta disponibile.</td></tr></tbody>`;return;}
-    const head=`<thead><tr><th style="text-align:left">Giocatore</th>${c.tr.exercises.map(x=>`<th title="${x.cat}" style="max-width:120px"><span class="marquee">${x.name}</span></th>`).join('')}<th>Media</th><th>Nota</th></tr></thead>`;
+    const head=`<thead><tr><th style="text-align:left">Giocatore</th>${c.tr.exercises.map(x=>`<th title="${escapeHtml(x.cat)}" style="max-width:120px"><span class="marquee">${escapeHtml(x.name)}</span></th>`).join('')}<th>Media</th><th>Nota</th></tr></thead>`;
     const body=roster.map(p=>{
         const g=c.tr.grades[p.id]||{};
         const cells=c.tr.exercises.map(x=>`<td><input class="grade-inp" data-p="${p.id}" data-x="${x.id}" type="number" min="1" max="10" step="0.5" inputmode="decimal" value="${g[x.id]!=null?g[x.id]:''}" oninput="setGrade(${p.id},${x.id},this)"></td>`).join('');
         const avg=sessionAvg(c.tr,p.id);
         const hasNote=!!(c.tr.notes[p.id]);
         const pre=p.isCaptain?'👑 ':p.isViceCaptain?'🥈 ':'';
-        return `<tr data-row="${p.id}"><td style="text-align:left;font-weight:600">#${p.number} ${pre}${p.name}</td>${cells}
+        return `<tr data-row="${p.id}"><td style="text-align:left;font-weight:600">#${p.number} ${pre}${escapeHtml(p.name)}</td>${cells}
             <td class="voto num" id="tmedia-${p.id}" style="color:var(--brand)">${avg!=null?avg.toFixed(1):'—'}</td>
             <td><button class="btn ${hasNote?'btn-accent':'btn-ghost'} btn-icon" onclick="sessionNote(${p.id})" title="${hasNote?'Modifica nota':'Aggiungi nota'}"><i class="fa-solid fa-comment${hasNote?'':'-dots'}"></i></button></td></tr>`;
     }).join('');
@@ -3921,10 +5572,10 @@ function setGrade(pId,exId,el){
 }
 function sessionNote(pId){
     const c=currentTraining(); if(!c)return; const p=playerById(pId);
-    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-comment" style="color:var(--brand)"></i> Nota · ${p.name}</h3>
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-comment" style="color:var(--brand)"></i> Nota · ${escapeHtml(p.name)}</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
-        <div class="modal-body"><p style="color:var(--muted);font-size:.85rem;margin-bottom:.8rem">Commento sulla seduta "${c.ev.notes}". Lo vedrà il giocatore nella sua app.</p>
-        <textarea id="snote" style="width:100%;height:100px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font-size:.9rem">${c.tr.notes[pId]||''}</textarea>
+        <div class="modal-body"><p style="color:var(--muted);font-size:.85rem;margin-bottom:.8rem">Commento sulla seduta "${escapeHtml(c.ev.notes)}". Lo vedrà il giocatore nella sua app.</p>
+        <textarea id="snote" style="width:100%;height:100px;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px;font-size:.9rem">${escapeHtml(c.tr.notes[pId]||'')}</textarea>
         <div class="modal-buttons"><button class="btn btn-ghost" onclick="closeModal()">Annulla</button>
         <button class="btn btn-accent" onclick="saveSessionNote(${pId})"><i class="fa-solid fa-check"></i> Salva nota</button></div></div>`);
 }
@@ -4064,6 +5715,33 @@ checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
+setTimeout(()=>refreshCoachSession().then(session=>{
+    renderSyncSettings();
+    if(!session) return;
+    ensurePolicyAccepted(()=>{});
+    /* Coach loggato ma DB locale vuoto (cache/localStorage cancellati su questo
+       device, es. dopo un reset del telefono): pull automatico e silenzioso dal
+       backup online invece di lasciare la squadra vuota — nessuna conferma
+       richiesta, non c'e' nulla da perdere localmente. Fix del bug "squadra
+       vuota dopo login" segnalato dall'utente. */
+    if(!DB.players.length){
+        pullTeamFromServer().then(pulled=>{ if(pulled) renderSyncSettings(); });
+        return;
+    }
+    /* PROMPTFIXLITE: reclamo "self-heal" della squadra locale. Se il coach e' loggato
+       e la squadra locale ha gia' un team_code (sync avviato prima del login, o un
+       tentativo di reclamo precedente riuscito solo in apparenza — es. fallito per un
+       problema di rete transitorio subito dopo signup/signin, silenziosamente, senza
+       che owner_user_id venisse davvero popolato) ritenta qui il claim a ogni avvio.
+       ensureTeamOnline()->upsert_my_team e' idempotente: innocuo se gia' fatto, ma
+       garantisce che una squadra rimasta "orfana" (owner_user_id null nonostante un
+       account ora collegato) si autoripari alla prossima apertura dell'app, senza
+       richiedere un nuovo sync manuale del coach. */
+    if(DB.settings.sync && DB.settings.sync.teamCode){
+        ensureTeamOnline().then(()=>renderSyncSettings()).catch(()=>{});
+    }
+}), 2000);   /* Task 4 (Prompt16/17): sa gia' se il coach e' loggato prima che apra Impostazioni, e propone subito il re-consenso se la policy e' cambiata dall'ultimo accesso */
+setTimeout(()=>checkLicenseOnline(false), 2500);   /* check giornaliero (auto-throttlato), non ad ogni azione */
 
 /* =========================================================
    FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)
@@ -4075,6 +5753,9 @@ function cIdb(){ return new Promise((res,rej)=>{const r=indexedDB.open('pm-media
 async function cIdbGet(k){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img').objectStore('img').get(k); t.onsuccess=()=>res(t.result||null); t.onerror=()=>res(null);});}catch(e){return null;} }
 async function cIdbSet(k,v){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img','readwrite').objectStore('img').put(v,k); t.onsuccess=()=>res(true); t.onerror=()=>res(false);});}catch(e){return false;} }
 async function cIdbDel(k){ try{const db=await cIdb(); db.transaction('img','readwrite').objectStore('img').delete(k);}catch(e){} }
+/* Svuota l'intero store 'img' del DB IndexedDB 'pm-media' (foto giocatore + logo squadra, che
+   condividono lo stesso store). Usato al logout (vuln-0006) per non lasciare media sul device. */
+async function cIdbClearAll(){ try{const db=await cIdb(); return await new Promise(res=>{const t=db.transaction('img','readwrite').objectStore('img').clear(); t.onsuccess=()=>res(true); t.onerror=()=>res(false);});}catch(e){return false;} }
 /* ---- LOGO SQUADRA (PNG con alfa, sulla card sopra il numero + posizionabile nell'officina) ---- */
 var TEAM_LOGO=null, _logoLoaded=false;
 function ensureTeamLogo(cb){ if(_logoLoaded){ cb&&cb(); return; } cIdbGet('teamlogo').then(d=>{ TEAM_LOGO=d||null; _logoLoaded=true; cb&&cb(); }); }
@@ -4152,7 +5833,7 @@ function coachMediaCSS(){
 }
 function loadCoachPhoto(id){
   if(COACH_PHOTOS[id]!==undefined) return;
-  cIdbGet('p'+id).then(d=>{ COACH_PHOTOS[id]=d||null; const el=document.getElementById('cph-im-'+id); if(el&&d) el.innerHTML=`<img src="${d}">`; });
+  cIdbGet('p'+id).then(d=>{ COACH_PHOTOS[id]=d||null; const el=document.getElementById('cph-im-'+id); if(el&&d) el.innerHTML=`<img src="${escapeHtml(d)}">`; });
 }
 function pickPhotoCoach(id){
   const inp=document.createElement('input'); inp.type='file'; inp.accept='image/*';
@@ -4382,6 +6063,44 @@ function playerAttributes(id, sport){
   }
   return attrs;
 }
+/* ---- Radar comparativo (Modulo A, blocco Prompt7): stesso set di assi per TUTTI i ruoli,
+   nessuno switch portiere/movimento come nella card — un ruolo "debole" su un asse è
+   informazione valida e va mostrata, non nascosta. Riusa playerCatRatings/cphOverall,
+   nessuna nuova logica di calcolo.
+   Task 2 (Prompt19): settimo asse "Palleggio" per il radar pallavolo — un palleggiatore
+   forte ha attacco/ricezione bassi per natura del ruolo e non aveva modo di mostrare la
+   sua qualità specifica. Nessuna statistica "assist" esiste nello Scout Gara pallavolo
+   (SCOUT.pallavolo.groups: Battuta/Ricezione/Attacco/Muro, niente regia — verificato),
+   ma "Palleggio" è già una categoria di allenamento tracciata da tempo (CATS.pallavolo,
+   con esercizi dedicati come "Alzata di seconda linea"/"Alzata in transizione veloce"):
+   stessa identica fonte dati (playerCatRatings) già usata dagli altri 6 assi, non un
+   numero inventato. Aggiunta solo qui (non in ATTR_MAP.pallavolo) per non toccare la
+   tier card, che condivide ATTR_MAP ma resta a 6 attributi come da "Cosa NON fare". */
+function radarDefs(sport){
+  sport=sport||curSport();
+  const base=ATTR_MAP[sport]||ATTR_MAP.pallavolo;
+  if(sport==='pallavolo') return base.concat([['Palleggio','PAL',['Palleggio']]]);
+  return base;
+}
+function radarAttributes(id){
+  const cats=playerCatRatings(id);
+  const ovr=cphOverall(getSeasonStats(id).avgVoto)||60;
+  return radarDefs(curSport()).map(([label,short,src])=>{
+    const vals=src.map(c=>cats[c]).filter(v=>v!=null);
+    const rating = vals.length? Math.round(vals.reduce((a,b)=>a+b,0)/vals.length*10) : ovr;
+    return {label,short,rating:Math.max(1,Math.min(100,rating))};
+  });
+}
+function radarTeamAverage(){
+  const defs=radarDefs(curSport());
+  const players=activePlayers();
+  if(!players.length) return defs.map(([label])=>({label,rating:0}));
+  const allAttrs=players.map(p=>radarAttributes(p.id));
+  return defs.map((d,i)=>{
+    const vals=allAttrs.map(a=>a[i].rating);
+    return {label:d[0], rating:Math.round(vals.reduce((a,b)=>a+b,0)/vals.length)};
+  });
+}
 function renderCardAttrs(id, sport, el, width){
   if(!el||!el.show) return '';
   const cells=playerAttributes(id,sport).map(a=>`<div class="tc-attr"><b>${a.rating}</b><span>${a.short}</span></div>`).join('');
@@ -4397,9 +6116,9 @@ function renderTierCard(id, width){
   const photoSrc=(typeof COACH_PHOTOS!=='undefined'&&COACH_PHOTOS[id])?COACH_PHOTOS[id]:CARD_SILHOUETTE;
   const alignT=a=>a==='left'?'0':a==='right'?'-100%':'-50%';
   const txt=(key,val)=>{ const e=L[key]; if(!e||!e.show||val==null||val==='')return '';
-    return `<div class="tc-el" style="left:${e.x}%;top:${e.y}%;transform:translate(${alignT(e.align)},-50%);font-size:${(e.size/100*width).toFixed(1)}px;color:${e.color};text-align:${e.align}">${val}</div>`; };
-  const ph=L.photo; const photoEl = ph&&ph.show ? `<div class="tc-photo" style="left:${ph.x}%;top:${ph.y}%;width:${ph.w}%;height:${(ph.h/100*H/width*100).toFixed(2)}%"><img src="${photoSrc}"></div>`:'';
-  const lg=L.logo; const logoEl = (lg&&lg.show&&TEAM_LOGO) ? `<div class="tc-logo" style="left:${lg.x}%;top:${lg.y}%;width:${lg.w}%"><img src="${TEAM_LOGO}"></div>`:'';
+    return `<div class="tc-el" style="left:${e.x}%;top:${e.y}%;transform:translate(${alignT(e.align)},-50%);font-size:${(e.size/100*width).toFixed(1)}px;color:${e.color};text-align:${e.align}">${escapeHtml(val)}</div>`; };
+  const ph=L.photo; const photoEl = ph&&ph.show ? `<div class="tc-photo" style="left:${ph.x}%;top:${ph.y}%;width:${ph.w}%;height:${(ph.h/100*H/width*100).toFixed(2)}%"><img src="${escapeHtml(photoSrc)}"></div>`:'';
+  const lg=L.logo; const logoEl = (lg&&lg.show&&TEAM_LOGO) ? `<div class="tc-logo" style="left:${lg.x}%;top:${lg.y}%;width:${lg.w}%"><img src="${escapeHtml(TEAM_LOGO)}"></div>`:'';
   const cands=frameCandidates(tier);
   return `<div class="tiercard tier-${tier}" style="width:${width}px;height:${H}px">
     <img class="tc-frame" src="${cands[0]}" data-fb="${cands.slice(1).join('|')}" onerror="tcFrameFallback(this)" alt="">
@@ -4431,7 +6150,7 @@ function openTeamsMenu(){
   if(!profs.length){ profs=[{id:'',name:(DB.teamName||'Squadra 1'),pin:''}]; setProfiles(profs); }
   const act=activeProfile();
   const rows=profs.map(p=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px;border-radius:10px;border:1px solid var(--line,rgba(255,255,255,.12));margin-bottom:6px;${p.id===act?'border-color:var(--brand);background:color-mix(in srgb,var(--brand) 12%,transparent);':''}">
-      <span style="font-weight:600">${p.name}${p.pin?' <i class="fa-solid fa-lock" style="opacity:.5;font-size:.75em"></i>':''}</span>
+      <span style="font-weight:600">${escapeHtml(p.name)}${p.pin?' <i class="fa-solid fa-lock" style="opacity:.5;font-size:.75em"></i>':''}</span>
       ${p.id===act?'<span class="pill">attiva</span>':`<button class="btn btn-ghost btn-sm" onclick="switchTeam('${p.id}')">Entra</button>`}
     </div>`).join('');
   openModal(`<div class="modal-head"><h3><i class="fa-solid fa-people-group" style="color:var(--brand)"></i> Le mie squadre</h3>
@@ -4455,7 +6174,13 @@ function createTeam(){
 }
 function switchTeam(id){
   const p=getProfiles().find(x=>x.id===id); if(!p) return;
-  if(p.pin){ const e=prompt('PIN per '+p.name); if(e===null) return; if((e||'').trim()!==p.pin){ toast('PIN errato','info'); return; } }
+  if(p.pin){
+    promptModal({title:'Squadra protetta', text:'PIN per '+p.name, type:'password', okText:'Entra', onOk:(e)=>{
+      if((e||'').trim()!==p.pin){ toast('PIN errato','info'); return; }
+      localStorage.setItem(ACTIVE_KEY,id); location.reload();
+    }});
+    return;
+  }
   localStorage.setItem(ACTIVE_KEY,id); location.reload();
 }
 function openCardStudio(){
@@ -4564,7 +6289,7 @@ function openPlayerCard(id){
   coachMediaCSS(); cardStudioCSS(); ensureTeamLogo();
   const p=playerById(id), s=getSeasonStats(id), sport=curSport();
   const tier=playerTier(id);
-  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${p.name} <span class="pill" style="margin-left:6px">${TIER_LABEL[tier]}</span></h3>
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${escapeHtml(p.name)} <span class="pill" style="margin-left:6px">${TIER_LABEL[tier]}</span></h3>
       <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body fc-wrap">
       ${renderTierCard(id, 300)}
@@ -4579,16 +6304,16 @@ function _openPlayerCardOld(id){
   const pal={pallavolo:['#F6D365','#E2A13C'],calcio:['#7BE0A3','#34A853'],basket:['#FDBA74','#F97316']}[sport]||['#F6D365','#E2A13C'];
   const ic={pallavolo:'🏐',calcio:'⚽',basket:'🏀'}[sport]||'🏅';
   const cells=(s.cells||[]).slice(0,4);
-  const photo=COACH_PHOTOS[id]?`<img src="${COACH_PHOTOS[id]}">`:`<div class="ini">${cphInitials(p.name)}</div>`;
+  const photo=COACH_PHOTOS[id]?`<img src="${escapeHtml(COACH_PHOTOS[id])}">`:`<div class="ini">${escapeHtml(cphInitials(p.name))}</div>`;
   const stats=cells.length?cells.map(c=>`<div class="st"><span>${c[0]}</span> ${c[1]}${c[2]||''}</div>`).join(''):`<div class="st"><span>Media voto</span> ${s.avgVoto?s.avgVoto.toFixed(1):'—'}</div>`;
-  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${p.name}</h3>
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-id-badge" style="color:var(--brand)"></i> Card · ${escapeHtml(p.name)}</h3>
       <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body fc-wrap">
       <div class="fc" style="--fc-a:${pal[0]};--fc-b:${pal[1]}">
         <div class="top"><div class="ovr"><b>${ovr||'—'}</b><span>${cphAbbr(p.role)}</span></div><div class="sporticon">${ic}</div></div>
         <div class="photo">${photo}</div>
-        <div class="nm">${p.name} <span style="opacity:.55">#${p.number||''}</span></div>
-        <div class="tm">${DB.teamName||''}</div>
+        <div class="nm">${escapeHtml(p.name)} <span style="opacity:.55">#${p.number||''}</span></div>
+        <div class="tm">${escapeHtml(DB.teamName||'')}</div>
         <div class="stats">${stats}</div>
       </div>
       <button class="btn btn-accent" style="width:100%;margin-top:16px" onclick="pickPhotoCoach(${id})"><i class="fa-solid fa-camera"></i> ${COACH_PHOTOS[id]?'Cambia foto':'Aggiungi foto'}</button>
@@ -4611,13 +6336,13 @@ function getLineupCalcio(){ DB.settings=DB.settings||{}; DB.settings.lineup=DB.s
 function soccerLineup(){
   const L=getLineupCalcio(), mod=SOCCER_MODULES[L.module]||SOCCER_MODULES['4-3-3'];
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  const used=new Set(); Object.values(L.subs).forEach(pid=>{ if(pid!=null) used.add(pid); });
-  const pools={};
+  const preUsed=new Set(); Object.values(L.subs).forEach(pid=>{ if(pid!=null) preUsed.add(pid); });
+  const roleList=mod.map((s,i)=> L.subs[i]!=null ? null : s[0]);
+  const {picks,used}=assignRoleSlots(players,roleList,preUsed);
   const slots=mod.map((s,i)=>{
     const role=s[0]; let player=null;
     if(L.subs[i]!=null){ const f=players.find(z=>z.p.id===L.subs[i]); player=f?f.p:null; }
-    else { pools[role]=pools[role]||byRole(role).filter(z=>!used.has(z.p.id)); const pick=pools[role].shift(); if(pick){ used.add(pick.p.id); player=pick.p; } }
+    else { const pick=picks[i]; if(pick) player=pick.p; }
     const pos=L.pos[i]||[s[1],s[2]];
     return {i,role,x:pos[0],y:pos[1],player};
   });
@@ -4635,11 +6360,11 @@ function renderSoccerFormation(){
   const mods=Object.keys(SOCCER_MODULES).map(m=>`<button class="mod-chip${m===module?' on':''}" onclick="setLineupModule('${m}')">${m}</button>`).join('');
   const tokens=slots.map(s=>{
     const p=s.player;
-    const inner = p ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${(p.name||'').split(' ').slice(-1)[0]}</span>`
+    const inner = p ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${escapeHtml((p.name||'').split(' ').slice(-1)[0])}</span>`
                     : `<span class="ftk-num">+</span>`;
     return `<div class="ftk${p?'':' empty'}" style="left:${(s.x*100).toFixed(1)}%;top:${(s.y*100).toFixed(1)}%" data-i="${s.i}" onclick="soccerSlotTap(${s.i})">${inner}</div>`;
   }).join('');
-  const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+  const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${escapeHtml(b.p.name)} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
   document.getElementById('formazione-content').innerHTML=`
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
@@ -4688,8 +6413,8 @@ function soccerSlotTap(i){
   const tk=document.querySelector('.ftk[data-i="'+i+'"]'); if(tk&&tk._moved) return; // era un drag, non un tap
   const {slots,bench}=soccerLineup(); const slot=slots.find(s=>s.i===i); if(!slot) return;
   const cur=slot.player;
-  const opts=bench.map(b=>`<button class="sub-opt" onclick="setLineupSub(${i},${b.p.id});closeModal()"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</button>`).join('');
-  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Sostituisci ${cur?cur.name:'slot vuoto'}</h3>
+  const opts=bench.map(b=>`<button class="sub-opt" onclick="setLineupSub(${i},${b.p.id});closeModal()"><span class="fmz-num">#${b.p.number}</span> ${escapeHtml(b.p.name)} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</button>`).join('');
+  openModal(`<div class="modal-head"><h3><i class="fa-solid fa-right-left" style="color:var(--brand)"></i> Sostituisci ${cur?escapeHtml(cur.name):'slot vuoto'}</h3>
       <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
     <div class="modal-body"><p class="hint" style="margin-bottom:10px">Scegli chi mettere in questo slot (${slot.role}).</p>
       <div class="sub-list">${opts||'<p class="hint">Nessuna riserva disponibile.</p>'}</div>
@@ -4736,26 +6461,28 @@ function injectFmzCSS(){
   .voto-badge.hi{background:rgba(34,197,94,.18);color:#22C55E;} .voto-badge.md{background:rgba(245,179,1,.16);color:#f5b301;}
   .voto-badge.lo{background:rgba(240,70,60,.16);color:#F0463C;} .voto-badge.nd{background:var(--surface);color:var(--muted);}
   .fmz-bench .fmz-slot{border-bottom:1px solid var(--line);}
+  .libero-panel{margin-top:14px;padding:10px 14px;border:1px dashed var(--brand);border-radius:12px;background:color-mix(in srgb,var(--brand) 8%,transparent);}
+  .libero-tag{font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;font-weight:800;color:var(--brand);margin-bottom:6px;display:flex;align-items:center;gap:6px;}
+  .libero-row{display:flex;align-items:center;gap:10px;font-weight:700;}
+  .libero-name{flex:1;}
   `;
   document.head.appendChild(st);
 }
 /* ---- Formazione PALLAVOLO/BASKET visuale: campo disegnato (stesso stile del campo calcio) ---- */
 function pickLineupPallavolo(){
-  const roleMap=volleyZoneRoleMap(getLineupPallavolo().rotation);
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  return VOLLEY_ZONES.map(([z,x,y])=>{
-    const [role,idx]=roleMap[z]; const pick=byRole(role)[idx];
-    return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
-  });
+  const {picks,lib,useLib,roleList}=volleyLineupPicks(players);
+  const rows=VOLLEY_ZONES.map(([z,x,y],i)=>{ const pick=picks[i]; const role=roleList[i];
+    return {zone:z,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null}; });
+  if(useLib) rows.push({zone:'LIB',role:'Libero',x:VOLLEY_LIBERO_POS[0],y:VOLLEY_LIBERO_POS[1],player:lib?lib.p:null,v:lib?lib.v:null});
+  return rows;
 }
 function pickLineupBasket(){
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
-  const byRole=r=>players.filter(x=>x.p.role===r).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  return Object.keys(BASKET_POS).map(role=>{
-    const pick=byRole(role)[0]; const [x,y]=BASKET_POS[role];
-    return {zone:role,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null};
-  });
+  const roles=Object.keys(BASKET_POS);
+  const {picks}=assignRoleSlots(players,roles);
+  return roles.map((role,i)=>{ const pick=picks[i]; const [x,y]=BASKET_POS[role];
+    return {zone:role,role,x,y,player:pick?pick.p:null,v:pick?pick.v:null}; });
 }
 /* Riquadro basket inscritto nel viewBox 100x150 con le stesse proporzioni reali (28x15)
    usate da courtRect() nella Lavagnetta Tattica, cosi' il campo non appare piu' storpiato.
@@ -4784,36 +6511,49 @@ function courtZoneSVG(sport){
 }
 function renderCourtFormation(sport){
   injectFmzCSS(); soccerFieldCSS();
-  const rows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+  const allRows = sport==='pallavolo' ? pickLineupPallavolo() : pickLineupBasket();
+  const liberoRow = sport==='pallavolo' ? allRows.find(r=>r.role==='Libero') : null;
+  const rows = allRows.filter(r=>r.role!=='Libero');
   const showOv=showLineupOverall();
   const tokens=rows.map(r=>{
     const p=r.player;
     const inner = p
-      ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${(p.name||'').split(' ').slice(-1)[0]}</span>${showOv?`<span class="ftk-ov">${cphOverall(r.v)}</span>`:''}`
+      ? `<span class="ftk-num">${p.number}</span><span class="ftk-name">${escapeHtml((p.name||'').split(' ').slice(-1)[0])}</span>${showOv?`<span class="ftk-ov">${cphOverall(r.v)}</span>`:''}`
       : `<span class="ftk-num">${r.zone}</span>`;
     const leftPct = sport==='basket' ? (BASKET_VB.rx+r.x*BASKET_VB.rw) : (r.x*100);
     return `<div class="ftk${p?'':' empty'}" style="left:${leftPct.toFixed(1)}%;top:${(r.y*100).toFixed(1)}%" title="${r.role}">${inner}</div>`;
   }).join('');
-  const usedIds=new Set(rows.filter(r=>r.player).map(r=>r.player.id));
+  const usedIds=new Set(allRows.filter(r=>r.player).map(r=>r.player.id));
   const players=DB.players.map(p=>({p,v:getSeasonStats(p.id).avgVoto}));
   const bench=players.filter(x=>!usedIds.has(x.p.id)).sort((a,b)=>((b.v==null?-1:b.v)-(a.v==null?-1:a.v)));
-  const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${b.p.name} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
-  const rotHeader = sport==='pallavolo' ? (()=>{
+  const benchHtml = bench.length ? bench.map(b=>`<div class="fbench-chip"><span class="fmz-num">#${b.p.number}</span> ${escapeHtml(b.p.name)} <span class="fmz-role-tag">${b.p.role}</span> ${fmzBadge(b.v)}</div>`).join('') : '<p class="hint">Nessuna riserva.</p>';
+  const header = sport==='pallavolo' ? (()=>{
     const rot=getLineupPallavolo().rotation;
     const chips=[1,2,3,4,5,6].map(n=>`<button class="mod-chip${n===rot?' on':''}" onclick="setLineupRotation(${n})">P${n}</button>`).join('');
     return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
         <h3 style="margin:0"><i class="fa-solid fa-volleyball" style="color:var(--brand)"></i> Formazione in campo</h3>
-        <div class="mod-chips">${chips}</div>
+        ${iosToggle(!!liberoRow,'setVolleyUseLibero(this.checked)','Gioca con Libero')}
       </div>
-      <p class="hint" style="margin:-4px 0 12px">Rotazione di partenza: da che zona parte il palleggiatore.</p>`;
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <span class="hint" style="margin:0">Posizione di partenza: da che zona parte il palleggiatore.</span>
+        <div class="mod-chips">${chips}</div>
+      </div>`;
   })() : `<h3 style="margin:0 0 12px"><i class="fa-solid fa-basketball" style="color:var(--brand)"></i> Formazione in campo</h3>`;
+  const liberoHtml = liberoRow ? (()=>{
+    const p=liberoRow.player;
+    const inner = p
+      ? `<span class="fmz-num">#${p.number}</span><span class="libero-name">${escapeHtml(p.name)}</span>${showOv?fmzBadge(liberoRow.v):''}`
+      : `<span class="hint" style="margin:0">Nessun giocatore con ruolo Libero in rosa.</span>`;
+    return `<div class="libero-panel"><div class="libero-tag"><i class="fa-solid fa-shield-halved"></i> Libero</div><div class="libero-row">${inner}</div></div>`;
+  })() : '';
   document.getElementById('formazione-content').innerHTML=`
     <div class="card">
-      ${rotHeader}
+      ${header}
       <div class="fpitch-wrap"><div class="fpitch readonly${sport==='basket'?' fpitch-basket':''}">
         ${courtZoneSVG(sport)}
         ${tokens}
       </div></div>
+      ${liberoHtml}
       <p class="hint" style="margin-top:1rem">Scelti per media voto. Più registri partite nello Scout, più la formazione diventa precisa.</p>
     </div>
     <div class="card"><h3><i class="fa-solid fa-users" style="color:var(--muted)"></i> Panchina (per rendimento)</h3>

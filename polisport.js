@@ -28,6 +28,17 @@
     viola: { v: '#A855F7', deep: '#7E22CE', glow: 'rgba(168,85,247,.30)' }
   };
 
+  /* Nome squadra e nome allenatore sono testo libero digitato dal coach (o presenti in un backup
+     importato): finiscono dentro attributi value="..." dell'HTML di setup. Senza escaping un
+     valore con una " dentro chiuderebbe l'attributo in anticipo e inietterebbe markup arbitrario
+     (vuln-0004). Locale a questo file, non dipende dall'ordine di caricamento con app.js. */
+  function escHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
   function gDB(){ try { return (typeof DB !== 'undefined' && DB) ? DB : null; } catch (e) { return null; } }
   function readDB(){ const g = gDB(); if (g) return g; try { return JSON.parse(localStorage.getItem(LS)); } catch (e) { return null; } }
   function persist(){ if (typeof window.save === 'function') window.save(); else { const g = gDB(); if (g) localStorage.setItem(LS, JSON.stringify(g)); } }
@@ -98,11 +109,11 @@
         </div>
 
         <label style="display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:#8395B4;font-weight:700;margin:20px 0 8px;">Nome squadra</label>
-        <input id="ps-team" maxlength="20" value="${(d.teamName && d.teamName !== 'TEAM') ? d.teamName : ''}" placeholder="Es. Podere 173"
+        <input id="ps-team" maxlength="20" value="${escHtml((d.teamName && d.teamName !== 'TEAM') ? d.teamName : '')}" placeholder="Es. Podere 173"
           style="width:100%;background:#141D31;border:1px solid #22304E;color:#fff;padding:13px 14px;border-radius:12px;font-size:1rem;font-weight:600;">
 
         <label style="display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:#8395B4;font-weight:700;margin:16px 0 8px;">Nome allenatore</label>
-        <input id="ps-coach" maxlength="24" value="${d.coachName || ''}" placeholder="Es. Gem"
+        <input id="ps-coach" maxlength="24" value="${escHtml(d.coachName || '')}" placeholder="Es. Gem"
           style="width:100%;background:#141D31;border:1px solid #22304E;color:#fff;padding:13px 14px;border-radius:12px;font-size:1rem;font-weight:600;">
 
         <label style="display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:#8395B4;font-weight:700;margin:20px 0 8px;">Colore squadra</label>
@@ -154,8 +165,8 @@
   }
 
   /* ---- NAV IN BASSO (solo mobile; su desktop resta la sidebar) ---- */
-  const NAV_ORDER = ['dashboard', 'roster', 'calendario', 'allenamenti', 'scout', 'rotazioni', 'presenze', 'tattica', 'backup'];
-  const NAV_SHORT = { dashboard: 'Dash', roster: 'Roster', calendario: 'Calend.', allenamenti: 'Allen.', scout: 'Scout', rotazioni: 'Rotaz.', presenze: 'Presenze', tattica: 'Lavagn.', backup: 'Backup' };
+  const NAV_ORDER = ['dashboard', 'roster', 'calendario', 'scout', 'formazione', 'presenze', 'allenamenti', 'test-fisici', 'tattica', 'backup'];
+  const NAV_SHORT = { dashboard: 'Dash', roster: 'Roster', calendario: 'Calend.', allenamenti: 'Allen.', scout: 'Scout', formazione: 'Formaz.', 'test-fisici': 'Test Fis.', presenze: 'Presenze', tattica: 'Lavagn.', backup: 'Impostaz.' };
   function bnActive(sec) {
     document.querySelectorAll('#ps-bottomnav button').forEach(b => b.classList.toggle('active', b.dataset.sec === sec));
     const on = document.querySelector('#ps-bottomnav button.active');
