@@ -4911,6 +4911,21 @@ async function coachSignOut(){
         renderTeamName(); go('dashboard'); openOnboarding(true);
     });
 }
+/* ---------- estrae il dettaglio tecnico reale da un errore Supabase/fetch, per
+   non mostrare all'utente sempre lo stesso "verifica la connessione" qualunque
+   sia la vera causa (rete assente, RLS, payload troppo grande, colonna sbagliata…).
+   PostgrestError/AuthError espongono message/details/hint/code; un fetch fallito
+   offline e' di solito un TypeError con solo .message. ---------- */
+function syncErrorDetail(e){
+    if(!e) return '';
+    const parts=[];
+    if(e.message) parts.push(e.message);
+    if(e.details) parts.push(e.details);
+    if(e.hint) parts.push(e.hint);
+    const code=e.code||e.status;
+    if(code) parts.push(`(${code})`);
+    return parts.length? parts.join(' — ') : String(e);
+}
 async function syncPlayerOnline(id){
     if(!guardWrite()) return;
     const statusEl=document.getElementById('sync-online-status');
@@ -4927,15 +4942,20 @@ async function syncPlayerOnline(id){
         // coach loggato: aggiorna anche il backup completo, cosi' un pull da un
         // altro device ritrova sempre l'ultimo stato (scout/allenamenti inclusi),
         // non solo le card giocatore. Best-effort: non deve mai far fallire il
-        // sync PIN esistente se questa chiamata in piu' va storta.
-        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(()=>{});
+        // sync PIN esistente se questa chiamata in piu' va storta, ma l'utente
+        // deve comunque sapere se il backup non e' stato aggiornato e perche'.
+        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
+            const detail=syncErrorDetail(e);
+            toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
+        });
         if(statusEl) statusEl.innerHTML=`<span style="color:var(--brand)"><i class="fa-solid fa-circle-check"></i> Sincronizzato.</span> Codice squadra <b>${escapeHtml(sync.teamCode)}</b> · PIN di ${escapeHtml((p.name||'').split(' ')[0])}: <b>${escapeHtml(p.pin)}</b>`;
         toast('Profilo sincronizzato online');
         renderSyncSettings();
         checkLicenseOnline(true);
     }catch(e){
-        if(statusEl) statusEl.textContent='Sync non riuscita: verifica la connessione e riprova.';
-        toast('Sincronizzazione fallita','danger');
+        const detail=syncErrorDetail(e);
+        if(statusEl) statusEl.innerHTML=`Sync non riuscita: verifica la connessione e riprova.${detail?`<br><small style="opacity:.7">${escapeHtml(detail)}</small>`:''}`;
+        toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita','danger');
     }
     });
 }
@@ -4955,11 +4975,15 @@ async function syncAllPlayersOnline(){
             }catch(e){ fail++; }
         }
         sync.hasEverSynced=true; save();
-        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(()=>{});
+        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
+            const detail=syncErrorDetail(e);
+            toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
+        });
         toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
         checkLicenseOnline(true);
     }catch(e){
-        toast('Sincronizzazione fallita: verifica la connessione','danger');
+        const detail=syncErrorDetail(e);
+        toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita: verifica la connessione','danger');
     }
     renderSyncSettings();
     });
@@ -4983,32 +5007,42 @@ async function relinkTeamAfterImport(){
    contiene solo il riepilogo derivato per la card del singolo giocatore, senza
    scout dettagliato/allenamenti/rotazioni/sostituzioni). Nessuna conferma qui
    dentro: chi chiama decide se e quando avvisare prima di sovrascrivere
-   (vedi importTeamFromServer per il bottone manuale). */
+   (vedi importTeamFromServer per il bottone manuale).
+   Un errore vero (rete, RLS, ecc.) qui NON viene inghiottito: risale al
+   chiamante cosi' chi mostra l'esito (importTeamFromServer) puo' mostrare il
+   dettaglio tecnico reale invece di un generico "nessun backup trovato" —
+   solo l'assenza legittima di un backup restituisce false. I chiamanti in
+   background (login automatico, self-heal al boot) restano silenziosi di
+   proposito: sono loro a mettere un .catch(()=>false) quando lo invocano. */
 async function pullTeamFromServer(){
     if(typeof AiRIMSync==='undefined') return false;
-    try{
-        const res=await AiRIMSync.getMyTeamBackup();
-        if(!res||!res.backup) return false;
-        const data=stripDangerousKeys(res.backup);
-        if(!data.players||!data.events) return false;
-        DB=data; ensureDBDefaults();
-        // owner della verita' per teamId/teamCode resta la riga `teams`, non il
-        // blob di backup (che potrebbe portarsi dietro valori vecchi/di un altro
-        // device): stesso self-heal gia' usato dopo un import di backup manuale.
-        try{ await ensureTeamOnline(); }catch(e){}
-        save(); renderTeamName(); go('dashboard'); renderSyncSettings();
-        toast(`Squadra ripristinata dal server (${DB.players.length} giocatori)`);
-        return true;
-    }catch(e){ return false; }
+    const res=await AiRIMSync.getMyTeamBackup();
+    if(!res||!res.backup) return false;
+    const data=stripDangerousKeys(res.backup);
+    if(!data.players||!data.events) return false;
+    DB=data; ensureDBDefaults();
+    // owner della verita' per teamId/teamCode resta la riga `teams`, non il
+    // blob di backup (che potrebbe portarsi dietro valori vecchi/di un altro
+    // device): stesso self-heal gia' usato dopo un import di backup manuale.
+    try{ await ensureTeamOnline(); }catch(e){}
+    save(); renderTeamName(); go('dashboard'); renderSyncSettings();
+    toast(`Squadra ripristinata dal server (${DB.players.length} giocatori)`);
+    return true;
 }
 /* ---------- bottone "Importa squadra dal server" (Impostazioni) ---------- */
 function importTeamFromServer(){
     requireCoachAccount(async()=>{
         const doPull=async()=>{
             const btn=document.getElementById('import-server-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Importazione…'; }
-            const ok=await pullTeamFromServer();
-            if(!ok) toast('Nessun backup trovato sul server per questo account.','warning');
-            if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server'; }
+            try{
+                const ok=await pullTeamFromServer();
+                if(!ok) toast('Nessun backup trovato sul server per questo account.','warning');
+            }catch(e){
+                const detail=syncErrorDetail(e);
+                toast(detail?`Importazione fallita — ${detail}`:'Importazione fallita: verifica la connessione','danger');
+            }finally{
+                if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server'; }
+            }
         };
         if(DB.players.length){
             confirmAction('Importare la squadra salvata online sovrascriverà TUTTI i dati locali di questo dispositivo (rosa, scout, calendario). Continuare?', doPull);
@@ -5725,7 +5759,7 @@ setTimeout(()=>refreshCoachSession().then(session=>{
        richiesta, non c'e' nulla da perdere localmente. Fix del bug "squadra
        vuota dopo login" segnalato dall'utente. */
     if(!DB.players.length){
-        pullTeamFromServer().then(pulled=>{ if(pulled) renderSyncSettings(); });
+        pullTeamFromServer().then(pulled=>{ if(pulled) renderSyncSettings(); }).catch(()=>{});
         return;
     }
     /* PROMPTFIXLITE: reclamo "self-heal" della squadra locale. Se il coach e' loggato
