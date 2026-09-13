@@ -4613,29 +4613,44 @@ async function refreshCoachSession(){
         return session;
     }catch(e){ COACH_EMAIL=null; return null; }
 }
+/* Diagnosi prompt-diagnosi-sincronizza-tutti.md: piu' chiamanti indipendenti (self-heal
+   al boot, fine login, click manuale "Sincronizza online") possono invocare ensureTeamOnline()
+   nello stesso momento. Senza protezione, ognuno lanciava una upsert_my_team separata sulla
+   stessa riga teams: con Supabase rallentato le chiamate si accodavano sul row-lock fino allo
+   statement_timeout (57014). Mutex a livello di modulo: un solo giro di upsert per volta,
+   ogni chiamante concorrente attende lo stesso risultato invece di ripartire da zero. */
+let _ensureTeamOnlinePromise=null;
 async function ensureTeamOnline(){
-    const sync=DB.settings.sync;
-    const session=await refreshCoachSession();
-    let team;
-    if(session){
-        // Task 3/4: coach loggato -> sempre la SUA squadra (crea, reclama quella locale
-        // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
-        team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
-    }else{
-        /* Task 2 (Prompt20): un team_code ereditato da un backup importato (potenzialmente
-           di un altro coach) non va mai riusato alla cieca nel flusso anonimo, che — a
-           differenza di upsert_my_team sopra, protetto da owner_user_id — non ha alcun
-           controllo di ownership lato server: chiunque conosca quel codice puo' scrivere
-           sulla stessa riga. Senza login non possiamo verificare a chi appartiene davvero,
-           quindi lo scartiamo e ne generiamo uno nuovo: forza una squadra pulita invece di
-           rischiare di sovrascrivere i dati del coach originale. */
-        if(sync.importedTeamPending) sync.teamCode=null;
-        if(!sync.teamCode) sync.teamCode=genTeamCode();
-        team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
+    if(_ensureTeamOnlinePromise) return _ensureTeamOnlinePromise;
+    _ensureTeamOnlinePromise=(async()=>{
+        const sync=DB.settings.sync;
+        const session=await refreshCoachSession();
+        let team;
+        if(session){
+            // Task 3/4: coach loggato -> sempre la SUA squadra (crea, reclama quella locale
+            // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
+            team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
+        }else{
+            /* Task 2 (Prompt20): un team_code ereditato da un backup importato (potenzialmente
+               di un altro coach) non va mai riusato alla cieca nel flusso anonimo, che — a
+               differenza di upsert_my_team sopra, protetto da owner_user_id — non ha alcun
+               controllo di ownership lato server: chiunque conosca quel codice puo' scrivere
+               sulla stessa riga. Senza login non possiamo verificare a chi appartiene davvero,
+               quindi lo scartiamo e ne generiamo uno nuovo: forza una squadra pulita invece di
+               rischiare di sovrascrivere i dati del coach originale. */
+            if(sync.importedTeamPending) sync.teamCode=null;
+            if(!sync.teamCode) sync.teamCode=genTeamCode();
+            team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
+        }
+        if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
+        sync.teamId=team.id; sync.teamCode=team.team_code; sync.importedTeamPending=false; save();
+        return sync;
+    })();
+    try{
+        return await _ensureTeamOnlinePromise;
+    }finally{
+        _ensureTeamOnlinePromise=null;
     }
-    if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
-    sync.teamId=team.id; sync.teamCode=team.team_code; sync.importedTeamPending=false; save();
-    return sync;
 }
 /* =========================================================
    PRIVACY POLICY — clickwrap con log di accettazione (Prompt17).
@@ -4932,6 +4947,11 @@ async function syncPlayerOnline(id){
     if(typeof AiRIMSync==='undefined'){ if(statusEl) statusEl.textContent='Modulo sync non disponibile: ricarica la pagina e riprova.'; return; }
     const p=playerById(id); if(!p) return;
     requireCoachAccount(async()=>{
+    // doppio tap sullo stesso bottone -> due chiamate parallele a ensureTeamOnline()/upsert_my_team
+    // sulla stessa riga teams (vedi prompt-diagnosi-sincronizza-tutti.md): disabilitato per la
+    // durata della sync, stesso pattern gia' usato in syncAllPlayersOnline per sync-all-btn.
+    const btn=document.getElementById('sync-online-btn');
+    if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; }
     if(statusEl) statusEl.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione in corso…';
     try{
         const sync=await ensureTeamOnline();
@@ -4956,6 +4976,8 @@ async function syncPlayerOnline(id){
         const detail=syncErrorDetail(e);
         if(statusEl) statusEl.innerHTML=`Sync non riuscita: verifica la connessione e riprova.${detail?`<br><small style="opacity:.7">${escapeHtml(detail)}</small>`:''}`;
         toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita','danger');
+    }finally{
+        if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza online'; }
     }
     });
 }
