@@ -590,7 +590,21 @@ function onbRender(){
     <div class="onb-dots">${_onbList.map((_,i)=>`<span class="${i===_onbIdx?'on':''}"></span>`).join('')}</div>
     <button class="btn btn-accent" style="width:100%" onclick="onbNext()"><i class="fa-solid ${isDemoCta?'fa-play':'fa-arrow-right'}"></i> ${label}</button>
     ${last?'':'<button class="onb-skip" onclick="onbFinish()">Salta</button>'}
+    ${_onbIdx===0?'<button class="onb-skip" onclick="onbGoToLogin()">Hai già un account? Accedi</button>':''}
   </div>`;
+}
+/* Link secondario discreto sulla schermata di primo avvio (Prompt: accesso rapido):
+   chi migra da un altro dispositivo non deve navigare fino a Impostazioni per
+   accedere e ripristinare la squadra. Il percorso principale resta invariato
+   (crea squadra/prova); questo e' solo un accesso rapido al login gia' esistente.
+   Il tutorial (#onb-overlay, z-index 9998) copre sempre #ps-setup (z-index 200,
+   la vera schermata "Configura la squadra" di polisport.js) su un'installazione
+   nuova: va nascosto anche lui, altrimenti il modal di login (z-index 90) resta
+   aperto nel DOM ma invisibile, coperto da #ps-setup. */
+function onbGoToLogin(){
+    const o=document.getElementById('onb-overlay'); if(o) o.remove();
+    const ps=document.getElementById('ps-setup'); if(ps) ps.style.display='none';
+    openCoachAccountModal(null, ()=>{ if(ps) ps.style.display=''; openOnboarding(true); });
 }
 function onbNext(){
   if(_onbIdx>=_onbList.length-1){ onbFinish(); return; }
@@ -1882,6 +1896,20 @@ function renderDashboard(){
     let upcoming=up.length? `<ul class="mini-list">`+up.map(e=>`<li><span><span class="status-dot" style="background:${e.type==='Partita'?'var(--brand)':'var(--muted)'}"></span>${escapeHtml(e.notes)}</span><span style="color:var(--muted);font-size:.82rem">${fmtDate(e.date)}</span></li>`).join('')+`</ul>`
         : `<div class="empty-state" style="padding:1.5rem"><i class="fa-solid fa-calendar"></i>Nessun evento futuro</div>`;
 
+    /* Prompt: accesso rapido/sync dalla dashboard — stesse funzioni/protezioni gia'
+       usate in Impostazioni (mutex ensureTeamOnline, bottoni disabilitati durante
+       l'esecuzione via classe js-sync-all-btn/js-import-server-btn), non duplicata
+       logica. Visibile solo con licenza attiva, come il resto delle scritture. */
+    const syncCard = (canWriteDB() && typeof AiRIMSync!=='undefined') ? `
+        <div class="card" style="margin-top:1.2rem;display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:space-between">
+            <div><h3 style="margin:0 0 2px"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizzazione online</h3>
+                <span class="hint">Backup e ripristino della squadra su Supabase</span></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-ghost btn-sm js-sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
+                <button class="btn btn-ghost btn-sm js-import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server</button>
+            </div>
+        </div>` : '';
+
     brandCSS();
     document.getElementById('dash-content').innerHTML=`
         <div class="page-head dash-head">
@@ -1891,6 +1919,7 @@ function renderDashboard(){
         </div>
         <div class="hero">${court}<div class="hero-inner">${cd}</div></div>
         ${kpis}
+        ${syncCard}
         <div class="dash-cols">
             <div class="card"><h3><i class="fa-solid fa-ranking-star"></i> Migliori per rendimento</h3>${top}</div>
             <div class="card"><h3><i class="fa-solid fa-calendar-week"></i> Prossimi impegni</h3>${upcoming}</div>
@@ -4200,6 +4229,11 @@ function renderBackupStatus(){
             <i class="fa-solid ${late?'fa-triangle-exclamation':'fa-circle-check'}"></i> Ultimo backup: ${when} (${fmtDateLong(log.last.slice(0,10))})</div>
         <div style="color:var(--muted);font-size:.82rem;margin-top:6px">${log.count} backup effettuat${log.count===1?'o':'i'} in totale.${late?` Sono passati ${days} giorni: fanne uno nuovo.`:''}</div>`;
 }
+/* Prompt: backup fisico che sincronizza anche online — se il coach e' loggato e con
+   licenza attiva, ogni export locale (manuale o dal promemoria giornaliero, che
+   passa da qui) aggiorna anche team_backups, stessa chiamata gia' usata da
+   "Sincronizza tutti". Best-effort: il file scaricato non dipende mai dall'esito
+   di questa chiamata, solo un avviso se la copia online non si aggiorna. */
 function exportData(){
     const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob);const a=document.createElement('a');
@@ -4208,6 +4242,12 @@ function exportData(){
     a.href=url;a.download=`${teamSlug}-Airim-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
     logBackupDone(); renderBackupStatus();
     toast('Backup scaricato');
+    if(COACH_EMAIL && canWriteDB() && typeof AiRIMSync!=='undefined'){
+        AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
+            const detail=syncErrorDetail(e);
+            toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
+        });
+    }
 }
 function importData(e){
     if(!guardWrite()){ e.target.value=''; return; }
@@ -4981,10 +5021,17 @@ async function syncPlayerOnline(id){
     }
     });
 }
+/* I bottoni "Sincronizza tutti"/"Importa squadra dal server" compaiono ora sia in
+   Impostazioni sia in dashboard (Prompt: accesso rapido): identificati per classe
+   (non piu' id, che deve restare unico nel documento) cosi' ogni copia si
+   disabilita/riabilita insieme durante l'operazione, invece di lasciarne una
+   cliccabile mentre l'altra e' gia' in corso. */
+function syncAllBtns(){ return [...document.querySelectorAll('.js-sync-all-btn')]; }
+function importServerBtns(){ return [...document.querySelectorAll('.js-import-server-btn')]; }
 async function syncAllPlayersOnline(){
     if(!guardWrite()) return;
     requireCoachAccount(async()=>{
-    const btn=document.getElementById('sync-all-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; }
+    const btns=syncAllBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; });
     let ok=0, fail=0;
     try{
         const sync=await ensureTeamOnline();
@@ -5007,7 +5054,9 @@ async function syncAllPlayersOnline(){
         const detail=syncErrorDetail(e);
         toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita: verifica la connessione','danger');
     }
+    btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti'; });
     renderSyncSettings();
+    if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
     });
 }
 /* ---------- Task 3: dopo import backup, se il coach e' gia' loggato su questo
@@ -5055,7 +5104,7 @@ async function pullTeamFromServer(){
 function importTeamFromServer(){
     requireCoachAccount(async()=>{
         const doPull=async()=>{
-            const btn=document.getElementById('import-server-btn'); if(btn){ btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Importazione…'; }
+            const btns=importServerBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Importazione…'; });
             try{
                 const ok=await pullTeamFromServer();
                 if(!ok) toast('Nessun backup trovato sul server per questo account.','warning');
@@ -5063,7 +5112,8 @@ function importTeamFromServer(){
                 const detail=syncErrorDetail(e);
                 toast(detail?`Importazione fallita — ${detail}`:'Importazione fallita: verifica la connessione','danger');
             }finally{
-                if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server'; }
+                btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server'; });
+                if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
             }
         };
         if(DB.players.length){
@@ -5095,8 +5145,8 @@ function renderSyncSettings(){
     box.innerHTML = `${codeBlock}
         <div style="margin-top:14px">${pinRows}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <button class="btn btn-ghost btn-sm" id="sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
-          <button class="btn btn-ghost btn-sm" id="import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server</button>
+          <button class="btn btn-ghost btn-sm js-sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
+          <button class="btn btn-ghost btn-sm js-import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server</button>
         </div>
         ${accBlock}
         ${termsBlock}

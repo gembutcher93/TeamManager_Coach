@@ -127,8 +127,23 @@
           font-family:'Outfit',sans-serif;font-weight:800;font-size:1.05rem;background:var(--brand);color:#04140A;">
           ${existing && existing.sport ? 'Salva' : 'Entra nell\'app'}</button>
         ${existing && existing.sport ? `<button id="ps-cancel" style="width:100%;margin-top:10px;background:none;border:0;color:#8395B4;cursor:pointer;font-size:.9rem;">Annulla</button>` : ''}
+        ${!(existing && existing.sport) ? `<button id="ps-login" style="width:100%;margin-top:14px;background:none;border:0;color:#8395B4;cursor:pointer;font-size:.85rem;">Hai già un account? Accedi</button>` : ''}
       </div>`;
     document.body.appendChild(wrap);
+    /* Link secondario discreto (Prompt: accesso rapido): questa e' la schermata reale di
+       creazione squadra al primo avvio. Chi migra da un altro dispositivo non deve arrivare
+       fino a Impostazioni per accedere e ripristinare la squadra. Il tutorial di app.js
+       (#onb-overlay, z-index 9998) puo' ancora essere sopra a questa schermata (z-index 200)
+       quando entrambi partono al boot: va rimosso anche lui, altrimenti resta lui a coprire
+       il modal di login (z-index 90) invece di ps-setup. */
+    const loginBtn = wrap.querySelector('#ps-login');
+    if (loginBtn) loginBtn.onclick = () => {
+      const onb = document.getElementById('onb-overlay'); if (onb) onb.remove();
+      wrap.style.display = 'none';
+      if (typeof window.openCoachAccountModal === 'function') {
+        window.openCoachAccountModal(null, () => { wrap.style.display = ''; });
+      }
+    };
 
     let pick = { sport: curSport, accent: curAccent };
     wrap.querySelectorAll('.ps-sport').forEach(el => el.onclick = () => {
