@@ -492,15 +492,74 @@ let DB = loadDB();
    "rotazioni scomparse" era esattamente questo: DB.rotationStats mancante su un DB
    precedente all'introduzione del campo mandava rotData() in TypeError, lasciando
    #scout-rot vuoto senza errore visibile per l'utente. */
+/* PromptRitocchi: ogni campo mancante o del tipo sbagliato (backup vecchi, file
+   parziali, pull dal server) riceve un valore vuoto di default, fino al livello
+   dei singoli elementi usati dalle schermate (righe scout, sedute, cambi…), cosi'
+   un import non puo' mai rompere dashboard, roster o scout. */
+const isPlainObj = v => !!v && typeof v==='object' && !Array.isArray(v);
+const objOr = v => isPlainObj(v) ? v : {};
+const arrOr = v => Array.isArray(v) ? v : [];
+function normalizeDB(d){
+    d = isPlainObj(d) ? d : {};
+    d.teamName = (typeof d.teamName==='string' && d.teamName.trim()) ? d.teamName : 'TEAM';
+    let maxId = 0;
+    const seenIds = new Set();
+    const idOf = x => { const n=+x; return (Number.isFinite(n) && n>0) ? n : null; };
+    d.players = arrOr(d.players).filter(isPlainObj).map(p=>{
+        let id=idOf(p.id); if(id==null || seenIds.has(id)) id=null; if(id!=null) seenIds.add(id);
+        return Object.assign(p, {
+            id,
+            name: (typeof p.name==='string' && p.name.trim()) ? p.name : 'Giocatore',
+            number: Number.isFinite(+p.number) ? +p.number : 0,
+            role: typeof p.role==='string' ? p.role : '',
+            hand: p.hand==='Sx' ? 'Sx' : 'Dx',
+            height: Number.isFinite(+p.height) ? +p.height : 0,
+            status: ['active','injured','suspended'].includes(p.status) ? p.status : 'active',
+            secondaryRoles: arrOr(p.secondaryRoles).filter(r=>typeof r==='string'),
+            wellness: arrOr(p.wellness).filter(isPlainObj)
+        });
+    });
+    d.events = arrOr(d.events).filter(e=>isPlainObj(e) && typeof e.date==='string' && e.date).map(e=>{
+        let id=idOf(e.id); if(id==null || seenIds.has(id)) id=null; if(id!=null) seenIds.add(id);
+        return Object.assign(e, {
+            id,
+            type: e.type==='Partita' ? 'Partita' : 'Allenamento',
+            notes: typeof e.notes==='string' ? e.notes : '',
+            result: (isPlainObj(e.result) && Number.isFinite(+e.result.w) && Number.isFinite(+e.result.l)) ? {w:+e.result.w, l:+e.result.l} : null
+        });
+    });
+    d.scoutHistory = arrOr(d.scoutHistory).filter(isPlainObj).map(m=>Object.assign(m, {
+        rows: arrOr(m.rows).filter(r=>isPlainObj(r) && r.pId!=null),
+        date: typeof m.date==='string' ? m.date : '',
+        opponent: typeof m.opponent==='string' ? m.opponent : ''
+    }));
+    d.attendance = objOr(d.attendance);
+    Object.keys(d.attendance).forEach(k=>{ d.attendance[k]=objOr(d.attendance[k]); });
+    d.rotationStats = objOr(d.rotationStats);
+    d.trainings = objOr(d.trainings);
+    Object.keys(d.trainings).forEach(k=>{ const t=objOr(d.trainings[k]);
+        d.trainings[k] = Object.assign(t, {exercises:arrOr(t.exercises).filter(isPlainObj), grades:objOr(t.grades), notes:objOr(t.notes)}); });
+    d.substitutions = objOr(d.substitutions);
+    Object.keys(d.substitutions).forEach(k=>{ d.substitutions[k]=arrOr(d.substitutions[k]).filter(isPlainObj); });
+    const pt = objOr(d.physicalTests);
+    d.physicalTests = {sprint:arrOr(pt.sprint).filter(isPlainObj), jump:arrOr(pt.jump).filter(isPlainObj), height:arrOr(pt.height).filter(isPlainObj)};
+    d.settings = objOr(d.settings);
+    if(d.settings.sync!==undefined && !isPlainObj(d.settings.sync)) delete d.settings.sync;
+    if(d.settings.volleyWeights!==undefined && !(isPlainObj(d.settings.volleyWeights) && isPlainObj(d.settings.volleyWeights.roles))) delete d.settings.volleyWeights;
+    ['theme','lineup','customExercises','exMeta','cardLayouts'].forEach(k=>{ if(d.settings[k]!==undefined && !isPlainObj(d.settings[k])) delete d.settings[k]; });
+    /* id mancanti o duplicati: nuovi id sopra il massimo esistente */
+    seenIds.forEach(n=>{ if(n>maxId) maxId=n; });
+    let next = Math.max(idOf(d.nextId)||0, maxId+1);
+    d.players.forEach(p=>{ if(p.id==null) p.id=next++; });
+    d.events.forEach(e=>{ if(e.id==null) e.id=next++; });
+    d.nextId = next;
+    return d;
+}
 function ensureDBDefaults(){
-    if(!DB.trainings) DB.trainings = {};
-    if(!DB.substitutions) DB.substitutions = {};
-    if(!DB.rotationStats) DB.rotationStats = {};
-    if(!DB.physicalTests) DB.physicalTests = {sprint:[],jump:[],height:[]};
-    if(!DB.physicalTests.height) DB.physicalTests.height = [];
-    if(!DB.nextId) DB.nextId = Date.now();
-    if(!DB.settings) DB.settings = {};
+    DB = normalizeDB(DB);
     ensureSyncSettings();
+    /* PIN mancanti (backup vecchi): stesso backfill fatto al caricamento */
+    DB.players.forEach(p=>{ if(!p.pin) p.pin=genPlayerPin(); else p.pin=String(p.pin); });
 }
 ensureDBDefaults();
 /* Task 1 (Prompt16): PIN casuale invece che sequenziale — un PIN progressivo
@@ -4308,10 +4367,14 @@ function importData(e){
     reader.onload=()=>{
         try{
             const data=stripDangerousKeys(JSON.parse(reader.result));
-            if(!data.players||!data.events) throw new Error('formato');
+            /* e' un backup AiRIM se e' un oggetto con la rosa; tutti gli altri campi mancanti
+               ricevono un default vuoto in normalizeDB() (via ensureDBDefaults) */
+            if(!isPlainObj(data) || !Array.isArray(data.players)) throw new Error('formato');
             confirmAction('Importare questo backup? I dati attuali verranno sovrascritti.',()=>{
                 if(!canImport()) return;   // stato cambiato mentre il file era aperto
-                DB=data;ensureDBDefaults();
+                const prevDB=JSON.stringify(DB);
+                try{ DB=data; ensureDBDefaults(); }
+                catch(err){ DB=JSON.parse(prevDB); ensureDBDefaults(); toast('Backup non importato: file danneggiato. I dati attuali non sono stati toccati.','danger'); return; }
                 if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza non viaggia nei backup
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
@@ -4322,7 +4385,9 @@ function importData(e){
                    "pending" finche' ensureTeamOnline() non lo verifica/rigenera in modo
                    sicuro (vedi ensureTeamOnline), cosi' non viene mai riusato alla cieca. */
                 if(DB.settings.sync && DB.settings.sync.teamCode) DB.settings.sync.importedTeamPending=true;
-                save();renderTeamName();go('dashboard');toast('Backup importato con successo');
+                save();renderTeamName();
+                try{ go('dashboard'); }catch(err){ console.error('render dopo import',err); }
+                toast('Backup importato con successo');
                 relinkTeamAfterImport();
             });
         }catch(err){toast('File non valido o danneggiato','danger');}
@@ -5140,7 +5205,7 @@ async function pullTeamFromServer(){
     const res=await AiRIMSync.getMyTeamBackup();
     if(!res||!res.backup) return false;
     const data=stripDangerousKeys(res.backup);
-    if(!data.players||!data.events) return false;
+    if(!isPlainObj(data) || !Array.isArray(data.players)) return false;
     DB=data; ensureDBDefaults();
     if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza sta in LICENSE_KEY, non nel backup
     // owner della verita' per teamId/teamCode resta la riga `teams`, non il
