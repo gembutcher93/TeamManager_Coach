@@ -143,6 +143,16 @@
     return (data && data[0]) || null; // {status, expires_at, activated_at}
   }
 
+  /* ---- licenza dell'account autenticato (per utente o per la squadra che possiede).
+     RPC introdotta da Prompt/licenza_blindatura.sql: se non e' ancora installata
+     l'errore risale e app.js ripiega su getLicenseStatus(team_id). ---- */
+  async function getMyLicense() {
+    const sb = await getClient();
+    const { data, error } = await sb.rpc('get_my_license');
+    if (error) throw error;
+    return (data && data[0]) || null; // {status, expires_at, activated_at}
+  }
+
   /* ---- Task 2/3 (Prompt17): log clickwrap privacy policy — solo per utenti
      autenticati, una riga per ogni accettazione (mai sovrascritta) ---- */
   async function recordPolicyAcceptance(policyVersion, policyHash) {
@@ -157,6 +167,6 @@
     return (data && data[0]) || null; // {policy_version, policy_hash, accepted_at}
   }
 
-  window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, deletePlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus,
+  window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, deletePlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus, getMyLicense,
     signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance, upsertMyTeamBackup, getMyTeamBackup };
 })();

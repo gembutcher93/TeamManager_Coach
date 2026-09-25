@@ -597,8 +597,10 @@ function openOnboarding(force){
 function onbRender(){
   const o=document.getElementById('onb-overlay'); if(!o) return;
   const s=_onbList[_onbIdx]; const last=_onbIdx===_onbList.length-1;
-  const isDemoCta = last && DEMO_BUILD;
-  const label = isDemoCta ? 'Attiva versione di prova' : (last?'Inizia':'Avanti');
+  /* primo avvio senza scelta fatta: l'ultima scheda offre "Prova gratis" oppure "Accedi" */
+  const isTrialCta = last && licenseAccessLevel()==='none';
+  const isDemoCta = (last && DEMO_BUILD) || isTrialCta;
+  const label = isTrialCta ? `Prova gratis ${TRIAL_DAYS} giorni` : (last && DEMO_BUILD) ? 'Attiva versione di prova' : (last?'Inizia':'Avanti');
   o.innerHTML=`<div class="onb-card">
     <div class="onb-ic"><i class="fa-solid ${s.icon}"></i></div>
     <h3>${s.title}</h3>
@@ -606,9 +608,14 @@ function onbRender(){
     ${s.contact?`<div style="display:flex;flex-direction:column;gap:8px;margin:-.6rem 0 1.3rem">${contactButtonsHTML()}</div>`:''}
     <div class="onb-dots">${_onbList.map((_,i)=>`<span class="${i===_onbIdx?'on':''}"></span>`).join('')}</div>
     <button class="btn btn-accent" style="width:100%" onclick="onbNext()"><i class="fa-solid ${isDemoCta?'fa-play':'fa-arrow-right'}"></i> ${label}</button>
-    ${last?'':'<button class="onb-skip" onclick="onbFinish()">Salta</button>'}
-    ${_onbIdx===0?'<button class="onb-skip" onclick="onbGoToLogin()">Hai già un account? Accedi</button>':''}
+    ${last?'':'<button class="onb-skip" onclick="onbSkip()">Salta</button>'}
+    ${(_onbIdx===0||isTrialCta)?'<button class="onb-skip" onclick="onbGoToLogin()">Hai già un account? Accedi</button>':''}
   </div>`;
+}
+/* "Salta": al primo avvio porta alla scelta finale (prova o accesso) invece di chiudere */
+function onbSkip(){
+  if(licenseAccessLevel()==='none'){ _onbIdx=_onbList.length-1; onbRender(); return; }
+  onbFinish();
 }
 /* Link secondario discreto sulla schermata di primo avvio (Prompt: accesso rapido):
    chi migra da un altro dispositivo non deve navigare fino a Impostazioni per
@@ -630,8 +637,10 @@ function onbNext(){
 function onbFinish(){
   localStorage.setItem('vt_tutorial_done','1');
   if(DEMO_BUILD) activateDemo();
+  if(licenseAccessLevel()==='none') startTrial();   /* "Prova gratis": data di inizio solo sul dispositivo */
   const o=document.getElementById('onb-overlay'); if(o) o.remove();
-  updateDemoBadge(); checkDemoLock();
+  updateDemoBadge(); checkDemoLock(); updateTrialBadge(); checkLicenseLock();
+  if(document.getElementById('dashboard') && document.getElementById('dashboard').classList.contains('active')) renderDashboard();
 }
 
 /* =========================================================
@@ -815,19 +824,25 @@ function checkDemoLock(){
   document.body.appendChild(o);
 }
 function checkOnboardingAndDemo(){
-  updateDemoBadge();
+  migrateLegacyLicense();
+  /* Installazioni esistenti (dati o tutorial gia' presenti) senza licenza e senza
+     data di prova: la prova parte da ora, invece di restare "tutto libero". */
+  if(licenseAccessLevel()==='none' && (localStorage.getItem('vt_tutorial_done') || (DB.players&&DB.players.length) || (DB.events&&DB.events.length))) startTrial();
+  updateDemoBadge(); updateTrialBadge();
   checkLicenseLock();
   if(DEMO_BUILD && demoExpired()){ checkDemoLock(); return; }
   if(FRESH_INSTALL && !localStorage.getItem('vt_tutorial_done')) openOnboarding(false);
+  else if(licenseAccessLevel()==='none') openOnboarding(true);
 }
 /* =========================================================
-   PAYWALL REALE (Prompt18) — Caso 1: blocco totale a schermo intero (riusa lo
-   stile .dexp-card gia' definito sopra per la scadenza demo). Caso 2: banner
-   persistente ma non invasivo, il resto dell'app resta visitabile in sola
-   lettura (l'enforcement vero e proprio e' in save()/guardWrite(), qui c'e'
-   solo la UI che informa/blocca la navigazione). Chiamata da go() ad ogni
-   cambio schermata e da checkLicenseOnline() dopo ogni verifica, cosi' lo
-   sblocco e' immediato appena la licenza torna attiva su Supabase. */
+   SCHERMATE DI BLOCCO (Gestione_Trial_Licenze)
+   - 'pending': schermata a tutto schermo "in attesa di attivazione" con
+     Scarica backup, contatti, Ricontrolla, Esci.
+   - 'readonly': banner persistente (prova terminata o licenza scaduta), app
+     visitabile in sola lettura, Scarica backup sempre presente.
+   Chiamata da go() ad ogni cambio schermata e da checkLicenseOnline() dopo
+   ogni verifica, cosi' lo sblocco e' immediato appena la licenza e' attiva.
+   ========================================================= */
 function licReadonlyBannerCSS(){
   if(document.getElementById('lic-ro-css')) return;
   const st=document.createElement('style'); st.id='lic-ro-css';
@@ -843,31 +858,37 @@ function checkLicenseLock(){
   const lvl=licenseAccessLevel();
   const lockEl=document.getElementById('lic-lock-overlay');
   const bannerEl=document.getElementById('lic-ro-banner');
-  if(lvl!=='blocked' && lockEl) lockEl.remove();
-  if(lvl!=='readonly' && bannerEl) bannerEl.remove();
-  if(lvl==='blocked' && !lockEl){
+  const roKind = trialExpired() ? 'trial' : 'license';
+  if(lvl!=='pending' && lockEl) lockEl.remove();
+  if(bannerEl && (lvl!=='readonly' || bannerEl.dataset.kind!==roKind)) bannerEl.remove();
+  if(lvl==='pending' && !lockEl){
     dexpCSS();
-    const o=document.createElement('div'); o.id='lic-lock-overlay'; o.style.zIndex='99998';
-    o.className='';
-    o.style.cssText='position:fixed;inset:0;z-index:99998;display:flex;align-items:center;justify-content:center;padding:1.2rem;background:linear-gradient(170deg,#0A1020,#060A18);';
+    const o=document.createElement('div'); o.id='lic-lock-overlay';
+    o.style.cssText='position:fixed;inset:0;z-index:99998;display:flex;align-items:center;justify-content:center;padding:1.2rem;overflow-y:auto;background:linear-gradient(170deg,#0A1020,#060A18);';
     o.innerHTML=`<div class="dexp-card">
-      <div class="dexp-ic"><i class="fa-solid fa-lock"></i></div>
-      <h2>Nessuna licenza attiva</h2>
-      <p>Nessuna licenza attiva per questo account. Scrivici per attivare l'abbonamento annuale.</p>
+      <div class="dexp-ic"><i class="fa-solid fa-hourglass-half"></i></div>
+      <h2>In attesa di attivazione</h2>
+      <p>Il tuo profilo è stato creato ed è in attesa di attivazione. Finché non è attivo nessun dato di squadra o giocatori viene inviato online. Scrivici per attivare l'abbonamento annuale.</p>
+      <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button>
       <div class="dexp-acts">${contactButtonsHTML()}</div>
       <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
       <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="coachSignOut()"><i class="fa-solid fa-right-from-bracket"></i> Esci</button>
     </div>`;
     document.body.appendChild(o);
   }
-  if(lvl==='readonly' && !bannerEl){
+  if(lvl==='readonly' && !document.getElementById('lic-ro-banner')){
     licReadonlyBannerCSS();
-    const b=document.createElement('div'); b.id='lic-ro-banner';
-    b.innerHTML=`<span><i class="fa-solid fa-triangle-exclamation"></i></span>
-      <b>Licenza scaduta</b><span>— modifica e sync disabilitati, i tuoi dati restano visibili.</span>
-      <span>Per rinnovare scrivici:</span>
+    const b=document.createElement('div'); b.id='lic-ro-banner'; b.dataset.kind=roKind;
+    const head = roKind==='trial'
+      ? `<b>Prova gratuita terminata</b><span>— sola lettura, i tuoi dati restano visibili.</span><span>Per attivare AiRIM scrivici:</span>`
+      : `<b>Licenza scaduta</b><span>— modifica e sync disabilitati, i tuoi dati restano visibili.</span><span>Per rinnovare scrivici:</span>`;
+    const tail = roKind==='trial'
+      ? (COACH_EMAIL ? '' : `<button class="btn btn-ghost btn-sm" onclick="openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Accedi</button>`)
+      : `<button class="btn btn-ghost btn-sm" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
+    b.innerHTML=`<span><i class="fa-solid fa-triangle-exclamation"></i></span>${head}
       ${contactButtonsHTML(true)}
-      <button class="btn btn-ghost btn-sm" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
+      <button class="btn btn-ghost btn-sm" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button>
+      ${tail}`;
     document.body.appendChild(b);
   }
 }
@@ -1318,6 +1339,7 @@ function buildLayout(){
         <div class="page-head"><div><div class="eyebrow">Preparazione</div><h2>Test Fisici</h2>
             <p class="sub">Misura sprint, tempo di reazione e salto verticale da un video con telecamera ferma su cavalletto — calibrazione manuale, nessuna intelligenza artificiale.</p></div>
             <button class="ctx-help-btn" onclick="ctxStart('test-fisici')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
+        <div id="phys-lock-note"></div>
         <div class="phys-grid" id="phys-grid">
             <div class="card">
                 <h3><i class="fa-solid fa-person-running"></i> Sprint &amp; Reazione</h3>
@@ -1479,6 +1501,12 @@ function physCameraNoteHTML(){
 /* ---- rendering sezione + storico ---- */
 function renderPhysicalTests(){
     physCSS();
+    /* Test Fisici: visibili ma bloccati senza licenza attiva (prova, attesa, sola lettura) */
+    const note=document.getElementById('phys-lock-note');
+    if(note) note.innerHTML = canSync() ? '' : `<div class="card" style="border-color:rgba(240,70,60,.35)">
+        <h3 style="margin-bottom:.4rem"><i class="fa-solid fa-lock" style="color:var(--flame)"></i> Test Fisici non inclusi ${licenseAccessLevel()==='trial'?'nella prova gratuita':'senza abbonamento attivo'}</h3>
+        <p class="hint" style="margin:0 0 .8rem">Si sbloccano con l'abbonamento annuale. Scrivici per attivarlo.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">${contactButtonsHTML(true)}</div></div>`;
     const opts = DB.players.map(p=>`<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
     ['phys-sprint-player','phys-height-player','phys-jump-player','phys-hist-player'].forEach(id=>{
         const el=document.getElementById(id); if(!el) return;
@@ -1561,6 +1589,7 @@ function physInitVideo(onReady, opts){
 }
 /* ---- avvio test ---- */
 function openPhysTest(type){
+    if(!requireFull('Test Fisici')) return;
     const sel=document.getElementById('phys-'+type+'-player');
     const pid=parseInt(sel&&sel.value);
     if(!pid){ toast('Scegli un giocatore prima di avviare il test','info'); return; }
@@ -1809,7 +1838,7 @@ function go(sec){
     closeSidebar();
     window.scrollTo({top:0,behavior:'instant'});
     setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 100);
-    updateDemoBadge(); checkDemoLock(); checkLicenseLock();
+    updateDemoBadge(); checkDemoLock(); updateTrialBadge(); checkLicenseLock();
     if(CTX_TOURS[sec]) setTimeout(()=>ctxAutoShow(sec), 200);
 }
 function toggleSidebar(){const s=document.getElementById('sidebar'),b=document.getElementById('backdrop');const o=!s.classList.contains('open');s.classList.toggle('open',o);b.classList.toggle('show',o);}
@@ -1917,7 +1946,8 @@ function renderDashboard(){
        usate in Impostazioni (mutex ensureTeamOnline, bottoni disabilitati durante
        l'esecuzione via classe js-sync-all-btn/js-import-server-btn), non duplicata
        logica. Visibile solo con licenza attiva, come il resto delle scritture. */
-    const syncCard = (canWriteDB() && typeof AiRIMSync!=='undefined') ? `
+    /* Visibile in ogni stato: senza licenza attiva i bottoni aprono il modale di blocco (requireFull). */
+    const syncCard = (typeof AiRIMSync!=='undefined') ? `
         <div class="card" style="margin-top:1.2rem;display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:space-between">
             <div><h3 style="margin:0 0 2px"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizzazione online</h3>
                 <span class="hint">Backup e ripristino della squadra su Supabase</span></div>
@@ -1935,6 +1965,7 @@ function renderDashboard(){
                 <div style="color:var(--muted);font-size:.82rem">${TEAM_LOGO?'Tocca lo stemma per cambiarlo':'Tocca lo scudetto per caricare lo stemma della squadra'}</div></div>
         </div>
         <div class="hero">${court}<div class="hero-inner">${cd}</div></div>
+        ${trialDashboardCard()}
         ${kpis}
         ${syncCard}
         <div class="dash-cols">
@@ -2060,6 +2091,7 @@ function removePlayer(id){
 function deletePlayerPackageOnline(id){
     const sync=DB.settings.sync;
     if(!sync.hasEverSynced || !sync.teamId) return;
+    if(!canSync() || !COACH_EMAIL) return;   // nessuna scrittura online senza licenza attiva e account
     if(typeof AiRIMSync==='undefined') return;
     AiRIMSync.deletePlayerPackage(sync.teamId, id).catch(()=>{});
 }
@@ -4259,7 +4291,8 @@ function exportData(){
     a.href=url;a.download=`${teamSlug}-Airim-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
     logBackupDone(); renderBackupStatus();
     toast('Backup scaricato');
-    if(COACH_EMAIL && canWriteDB() && typeof AiRIMSync!=='undefined'){
+    /* copia online del backup SOLO con licenza attiva; il file locale si scarica sempre */
+    if(COACH_EMAIL && canSync() && DB.settings.sync && DB.settings.sync.teamId && typeof AiRIMSync!=='undefined'){
         AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
             const detail=syncErrorDetail(e);
             toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
@@ -4267,7 +4300,9 @@ function exportData(){
     }
 }
 function importData(e){
-    if(!guardWrite()){ e.target.value=''; return; }
+    /* Import consentito SOLO con licenza attiva: impedisce di reinstallare a fine prova
+       e ricaricare i dati per avere altri giorni. Controllo qui dentro, non solo sul bottone. */
+    if(!canImport()){ e.target.value=''; showLockedFeature('Importa backup'); return; }
     const file=e.target.files[0];if(!file)return;
     const reader=new FileReader();
     reader.onload=()=>{
@@ -4275,7 +4310,9 @@ function importData(e){
             const data=stripDangerousKeys(JSON.parse(reader.result));
             if(!data.players||!data.events) throw new Error('formato');
             confirmAction('Importare questo backup? I dati attuali verranno sovrascritti.',()=>{
+                if(!canImport()) return;   // stato cambiato mentre il file era aperto
                 DB=data;ensureDBDefaults();
+                if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza non viaggia nei backup
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
                    squadra importata al SUO account (owner_user_id) invece di lasciare che
@@ -4336,7 +4373,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v74';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v75';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4679,27 +4716,20 @@ async function refreshCoachSession(){
    ogni chiamante concorrente attende lo stesso risultato invece di ripartire da zero. */
 let _ensureTeamOnlinePromise=null;
 async function ensureTeamOnline(){
+    /* Gestione_Trial_Licenze: nessuna scrittura verso Supabase senza licenza attiva.
+       Unico punto da cui passano sync singolo/tutti, self-heal all'avvio, relink dopo
+       import e pull dal server: il controllo qui li copre tutti. */
+    if(!canSync()) throw new Error('Licenza non attiva: nessun dato viene inviato online.');
     if(_ensureTeamOnlinePromise) return _ensureTeamOnlinePromise;
     _ensureTeamOnlinePromise=(async()=>{
         const sync=DB.settings.sync;
         const session=await refreshCoachSession();
-        let team;
-        if(session){
-            // Task 3/4: coach loggato -> sempre la SUA squadra (crea, reclama quella locale
-            // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
-            team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
-        }else{
-            /* Task 2 (Prompt20): un team_code ereditato da un backup importato (potenzialmente
-               di un altro coach) non va mai riusato alla cieca nel flusso anonimo, che — a
-               differenza di upsert_my_team sopra, protetto da owner_user_id — non ha alcun
-               controllo di ownership lato server: chiunque conosca quel codice puo' scrivere
-               sulla stessa riga. Senza login non possiamo verificare a chi appartiene davvero,
-               quindi lo scartiamo e ne generiamo uno nuovo: forza una squadra pulita invece di
-               rischiare di sovrascrivere i dati del coach originale. */
-            if(sync.importedTeamPending) sync.teamCode=null;
-            if(!sync.teamCode) sync.teamCode=genTeamCode();
-            team=await AiRIMSync.upsertTeam(sync.teamCode, DB.teamName, curSport());
-        }
+        /* La scrittura anonima (upsert_team senza account) e' disattivata anche lato
+           server: serve sempre un account coach. */
+        if(!session) throw new Error('Serve un account coach: accedi da Impostazioni per sincronizzare.');
+        // Task 3/4: coach loggato -> sempre la SUA squadra (crea, reclama quella locale
+        // pre-esistente, o riusa quella gia' collegata), mai una nuova ogni volta.
+        const team=await AiRIMSync.upsertMyTeam(DB.teamName, curSport(), sync.teamCode||null);
         if(!team||!team.id) throw new Error('upsert_team: risposta vuota');
         sync.teamId=team.id; sync.teamCode=team.team_code; sync.importedTeamPending=false; save();
         return sync;
@@ -4826,10 +4856,7 @@ async function coachAcceptPolicyGate(){
 }
 /* ---------- Task 4: gate account coach al primo sync online ---------- */
 function requireCoachAccount(onReady,onCancel){
-    if(DB.settings.sync.hasEverSynced){
-        refreshCoachSession().then(session=>{ if(session) ensurePolicyAccepted(onReady); else onReady(); });
-        return;
-    } // sync gia' avviato in passato (anche senza account): non blocchiamo un flusso in corso, salvo l'eventuale gate versione policy se nel frattempo si e' loggato
+    /* la scrittura anonima e' disattivata: per sincronizzare serve sempre l'account */
     refreshCoachSession().then(session=>{
         if(session) ensurePolicyAccepted(onReady); else openCoachAccountModal(onReady,onCancel);
     });
@@ -4902,7 +4929,11 @@ function coachAccountBack(){
    3) altrimenti comportamento invariato: se la squadra locale ha gia' un
       team_code, la reclama sul nuovo account (self-heal PROMPTFIXLITE). ---------- */
 async function finishCoachLoginFlow(cb){
+    /* Prima di tutto lo stato licenza dell'account: senza licenza attiva compare la
+       schermata "in attesa di attivazione" e non parte nessuna scrittura online. */
+    await checkLicenseOnline(true);
     if(cb){ cb(); return; }
+    if(!canSync()) return;
     if(!DB.players.length){
         await pullTeamFromServer().catch(()=>false);
         return;
@@ -4978,6 +5009,7 @@ async function coachSignOut(){
         try{ Object.keys(localStorage).filter(k=>k.startsWith('sb-')).forEach(k=>localStorage.removeItem(k)); }catch(e){}
         try{ await cIdbClearAll(); }catch(e){}
         COACH_EMAIL=null; COACH_POLICY=null;
+        setLic(null);   // lo stato licenza e' dell'account: via con il logout (la data di prova resta)
         COACH_PHOTOS={}; TEAM_LOGO=null; _logoLoaded=false;
         DB=emptyDB();
         toast('Disconnesso: dati locali rimossi da questo dispositivo','info');
@@ -5000,7 +5032,7 @@ function syncErrorDetail(e){
     return parts.length? parts.join(' — ') : String(e);
 }
 async function syncPlayerOnline(id){
-    if(!guardWrite()) return;
+    if(!requireFull('Sincronizzazione online')) return;
     const statusEl=document.getElementById('sync-online-status');
     if(typeof AiRIMSync==='undefined'){ if(statusEl) statusEl.textContent='Modulo sync non disponibile: ricarica la pagina e riprova.'; return; }
     const p=playerById(id); if(!p) return;
@@ -5047,7 +5079,7 @@ async function syncPlayerOnline(id){
 function syncAllBtns(){ return [...document.querySelectorAll('.js-sync-all-btn')]; }
 function importServerBtns(){ return [...document.querySelectorAll('.js-import-server-btn')]; }
 async function syncAllPlayersOnline(){
-    if(!guardWrite()) return;
+    if(!requireFull('Sincronizzazione online')) return;
     requireCoachAccount(async()=>{
     const btns=syncAllBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; });
     let ok=0, fail=0;
@@ -5110,6 +5142,7 @@ async function pullTeamFromServer(){
     const data=stripDangerousKeys(res.backup);
     if(!data.players||!data.events) return false;
     DB=data; ensureDBDefaults();
+    if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza sta in LICENSE_KEY, non nel backup
     // owner della verita' per teamId/teamCode resta la riga `teams`, non il
     // blob di backup (che potrebbe portarsi dietro valori vecchi/di un altro
     // device): stesso self-heal gia' usato dopo un import di backup manuale.
@@ -5120,6 +5153,7 @@ async function pullTeamFromServer(){
 }
 /* ---------- bottone "Importa squadra dal server" (Impostazioni) ---------- */
 function importTeamFromServer(){
+    if(!requireFull('Importa squadra dal server')) return;
     requireCoachAccount(async()=>{
         const doPull=async()=>{
             const btns=importServerBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Importazione…'; });
@@ -5159,7 +5193,7 @@ function renderSyncSettings(){
     const termsBlock = COACH_EMAIL
         ? `<div class="hint" style="margin-top:6px"><i class="fa-solid fa-file-shield"></i> Termini: ${COACH_POLICY? `accettati (${COACH_POLICY.policy_version}) il ${new Date(COACH_POLICY.accepted_at).toLocaleDateString('it-IT')}` : 'in verifica…'} <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="openPolicyViewer()">Rileggi</button></div>`
         : `<div class="hint" style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="openPolicyViewer()"><i class="fa-solid fa-file-shield"></i> Leggi Privacy Policy e Termini</button></div>`;
-    const licBlock = sync.hasEverSynced ? renderLicenseBadge() : '';
+    const licBlock = renderLicenseBadge();
     box.innerHTML = `${codeBlock}
         <div style="margin-top:14px">${pinRows}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
@@ -5170,105 +5204,198 @@ function renderSyncSettings(){
         ${termsBlock}
         ${licBlock}`;
 }
+/* =========================================================
+   LICENZA E PROVA GRATUITA (Gestione_Trial_Licenze)
+   Stati (licenseAccessLevel):
+   - 'none'     primo avvio, nessuna scelta ancora fatta (nessun dato da proteggere)
+   - 'trial'    prova gratuita di TRIAL_DAYS giorni, tutto in locale: nessuna scrittura
+                su Supabase, niente sync/condivisione Player, niente Test Fisici, niente import
+   - 'pending'  account coach collegato ma licenza mai attivata: schermata di attesa
+   - 'full'     licenza attiva: tutto sbloccato
+   - 'readonly' prova terminata oppure licenza scaduta: sola lettura, esporta sempre
+   La data di inizio prova sta SOLO sul dispositivo (localStorage TRIAL_KEY).
+   Lo stato licenza dell'account sta in LICENSE_KEY, fuori da DB: un backup
+   importato o un pull dal server non possono portarsi dietro una licenza.
+   "Mai sincronizzato" non significa piu' "tutto libero".
+   ========================================================= */
+const TRIAL_DAYS = 20;
+const TRIAL_KEY = 'vt_trial_start';
+const LICENSE_KEY = 'vt_license';
+const LICENSE_CHECK_INTERVAL_MS = 24*3600*1000;
+const LICENSE_OFFLINE_GRACE_DAYS = 5;
+
+function trialStart(){ try{ return localStorage.getItem(TRIAL_KEY); }catch(e){ return null; } }
+function startTrial(){ try{ if(!localStorage.getItem(TRIAL_KEY)) localStorage.setItem(TRIAL_KEY, new Date().toISOString()); }catch(e){} }
+function trialDaysLeft(){
+    const raw=trialStart(); if(!raw) return TRIAL_DAYS;
+    const t=new Date(raw).getTime(); if(isNaN(t)) return 0;
+    return TRIAL_DAYS-Math.floor((Date.now()-t)/86400000);
+}
+function getLic(){ try{ return JSON.parse(localStorage.getItem(LICENSE_KEY))||null; }catch(e){ return null; } }
+function setLic(l){ try{ if(l) localStorage.setItem(LICENSE_KEY, JSON.stringify(l)); else localStorage.removeItem(LICENSE_KEY); }catch(e){} }
+/* Migrazione una tantum dalle versioni precedenti: la licenza stava in
+   DB.settings.sync.license (legata al team_id). Se c'era, la si sposta qui cosi'
+   una squadra gia' attiva resta sbloccata anche offline al primo avvio. */
+function migrateLegacyLicense(){
+    const sync=DB.settings&&DB.settings.sync;
+    if(!getLic() && sync && sync.license){
+        const o=sync.license;
+        setLic({email:null, legacy:true, status:o.status||'unknown', expiresAt:o.expiresAt||null,
+            activatedAt:o.activatedAt||null, checkedAt:o.checkedAt||null, lastSuccessAt:o.lastSuccessAt||null});
+    }
+    if(sync && sync.license){ delete sync.license; saveSystem(); }
+}
+function licIsActive(l){
+    if(!l || l.status!=='active') return false;
+    const now=Date.now();
+    if(l.lastSuccessAt && (now-l.lastSuccessAt) > LICENSE_OFFLINE_GRACE_DAYS*86400000) return false; // tolleranza offline scaduta
+    return !l.expiresAt || new Date(l.expiresAt).getTime()>now;
+}
+/* compatibilita' con i chiamanti esistenti */
+function isLicensePro(){ return licIsActive(getLic()); }
+function licenseAccessLevel(){
+    const l=getLic();
+    if(l){
+        if(licIsActive(l)) return 'full';
+        return l.activatedAt ? 'readonly' : 'pending';
+    }
+    if(!trialStart()) return 'none';
+    return trialDaysLeft()>0 ? 'trial' : 'readonly';
+}
+function trialExpired(){ return !getLic() && !!trialStart() && trialDaysLeft()<=0; }
+/* scritture LOCALI (localStorage): prova attiva o licenza attiva */
+function canWriteDB(){ const l=licenseAccessLevel(); return l==='full' || l==='trial' || l==='none'; }
+/* scritture sul SERVER, condivisione con AiRIM Player, Test Fisici, import: solo licenza attiva */
+function canSync(){ return licenseAccessLevel()==='full'; }
+function canImport(){ return licenseAccessLevel()==='full'; }
+
+/* Modale "funzione bloccata" con i bottoni di contatto gia' usati nell'app. */
+function showLockedFeature(feature){
+    const lvl=licenseAccessLevel();
+    let text;
+    const f=`<b style="color:var(--text)">${feature}</b>`;
+    if(lvl==='trial') text=`${f}: non disponibile nella prova gratuita. Scrivici per attivare l'abbonamento annuale e sbloccarla.`;
+    else if(lvl==='pending') text=`${f}: il tuo profilo è in attesa di attivazione, sarà disponibile appena l'abbonamento sarà attivo.`;
+    else if(trialExpired()) text=`${f}: la prova gratuita è terminata, serve l'abbonamento annuale.`;
+    else text=`${f}: licenza scaduta, non disponibile finché non rinnovi l'abbonamento.`;
+    const accBtn = COACH_EMAIL ? '' : `<button class="btn btn-ghost" style="width:100%" onclick="closeModal();openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Hai già un account? Accedi</button>`;
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-lock" style="color:var(--brand)"></i> Funzione non disponibile</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem;line-height:1.5">${text}</p>
+        <div style="display:flex;flex-direction:column;gap:8px">${contactButtonsHTML()}${accBtn}</div>
+      </div>`);
+}
+function requireFull(feature){
+    if(canSync()) return true;
+    showLockedFeature(feature);
+    return false;
+}
+
+/* ---------- controllo licenza online: solo per un account coach collegato ----------
+   Nuova RPC get_my_license() (licenza per utente o per la squadra che possiede);
+   se non e' ancora installata sul server si ripiega su get_license_status(team_id). */
+function isMissingRpc(e){ const m=((e&&(e.message||''))+' '+((e&&e.code)||'')).toLowerCase(); return m.includes('pgrst202') || m.includes('could not find the function') || m.includes('does not exist'); }
+let _licCheckPromise=null;
+async function checkLicenseOnline(force){
+    if(typeof AiRIMSync==='undefined') return;
+    if(_licCheckPromise) return _licCheckPromise;
+    _licCheckPromise=(async()=>{
+        const session=await refreshCoachSession();
+        let l=getLic();
+        if(!session && !(l && l.legacy)) return;           // nessun account: prova locale, nulla da verificare
+        if(session && (!l || l.email!==COACH_EMAIL)){ l={email:COACH_EMAIL, status:'unknown', expiresAt:null, activatedAt:null, checkedAt:null, lastSuccessAt:null}; setLic(l); force=true; }
+        const now=Date.now();
+        if(!force && l.checkedAt && (now-l.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
+        try{
+            let res;
+            if(session){
+                try{ res=await AiRIMSync.getMyLicense(); }
+                catch(e){ if(!isMissingRpc(e)) throw e; res=undefined; }
+            }
+            if(res===undefined){
+                const sync=DB.settings.sync;
+                res = sync.teamId ? await AiRIMSync.getLicenseStatus(sync.teamId, sync.clubId||null) : null;
+            }
+            setLic(Object.assign({}, l, {email:session?COACH_EMAIL:null, legacy:!session,
+                status:res?res.status:'unknown', expiresAt:res?res.expires_at:null,
+                activatedAt:res?res.activated_at:(l.activatedAt||null), checkedAt:now, lastSuccessAt:now}));
+        }catch(e){
+            setLic(Object.assign({}, l, {checkedAt:now}));   // stato noto resta quello precedente
+        }
+    })();
+    try{ await _licCheckPromise; } finally { _licCheckPromise=null; }
+    renderSyncSettings();
+    checkLicenseLock();
+    refreshLicenseDependentViews();
+}
+function refreshLicenseDependentViews(){
+    updateTrialBadge();
+    const cur=document.querySelector('.section.active');
+    if(cur && cur.id==='dashboard') renderDashboard();
+    if(cur && cur.id==='test-fisici') renderPhysicalTests();
+}
 function renderLicenseBadge(){
-    const lic=DB.settings.sync.license;
-    const recheckBtn=`<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla ora</button>`;
-    if(!lic) return `<p class="hint" style="margin-top:12px">Licenza non ancora verificata.</p>${recheckBtn}`;
-    const pro=isLicensePro();
+    const lic=getLic();
+    const recheckBtn=`<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla ora</button>`;
+    if(!lic){
+        const lvl=licenseAccessLevel();
+        if(lvl==='trial') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-hourglass-half"></i> Prova gratuita: ${trialDaysLeft()} giorni rimasti. La sincronizzazione online si attiva con l'abbonamento.</p>`;
+        if(lvl==='readonly') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-triangle-exclamation"></i> Prova gratuita terminata.</p>`;
+        return '';
+    }
+    const pro=licIsActive(lic);
     const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleDateString('it-IT'):'—';
-    const label = lic.status==='active' ? 'attiva' : (lic.status==='unknown' ? 'nessuna licenza associata' : 'scaduta/non attiva');
+    const label = pro ? 'attiva' : (lic.activatedAt ? 'scaduta' : 'in attesa di attivazione');
     return `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${pro?'rgba(34,197,94,.1)':'rgba(240,70,60,.1)'};border:1px solid ${pro?'rgba(34,197,94,.3)':'rgba(240,70,60,.3)'}">
         <b style="color:${pro?'var(--brand)':'var(--flame)'}"><i class="fa-solid ${pro?'fa-circle-check':'fa-triangle-exclamation'}"></i> Licenza: ${label}</b>
+        ${lic.expiresAt&&pro?`<div class="hint" style="margin-top:2px">Scadenza: ${new Date(lic.expiresAt).toLocaleDateString('it-IT')}</div>`:''}
         <div class="hint" style="margin-top:2px">Ultimo controllo: ${when}</div>
         ${recheckBtn}
     </div>`;
 }
-/* ---------- controllo licenza: giornaliero, solo se la squadra ha già sincronizzato online almeno una volta ---------- */
-const LICENSE_CHECK_INTERVAL_MS = 24*3600*1000;
-const LICENSE_OFFLINE_GRACE_DAYS = 5;
-async function checkLicenseOnline(force){
-    const sync=DB.settings.sync;
-    if(!sync.hasEverSynced || !sync.teamId) return; // chi non usa il sync resta gestito dal flag locale come oggi
-    if(typeof AiRIMSync==='undefined') return;
-    const now=Date.now();
-    if(!force && sync.license && sync.license.checkedAt && (now-sync.license.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
-    try{
-        const res=await AiRIMSync.getLicenseStatus(sync.teamId, sync.clubId||null);
-        sync.license={status:res?res.status:'unknown', expiresAt:res?res.expires_at:null,
-            activatedAt:res?res.activated_at:(sync.license&&sync.license.activatedAt)||null, checkedAt:now, lastSuccessAt:now};
-        saveSystem();
-    }catch(e){
-        if(sync.license) sync.license.checkedAt=now; // riprova al prossimo check giornaliero, stato noto resta quello vecchio
-        saveSystem();
-    }
-    renderSyncSettings();
-    checkLicenseLock(); // Task Prompt18: sblocco/blocco immediato, senza reinstallare o ricaricare
+/* Badge prova in sidebar (desktop) */
+function updateTrialBadge(){
+    const side=document.querySelector('.side-foot'); if(!side) return;
+    let el=document.getElementById('trial-badge');
+    const lvl=licenseAccessLevel();
+    const txt = lvl==='trial' ? `Prova gratuita · ${trialDaysLeft()} giorni rimasti` : (trialExpired() ? 'Prova terminata' : '');
+    if(!txt){ if(el) el.remove(); return; }
+    if(!el){ el=document.createElement('p'); el.id='trial-badge'; el.style.cssText='margin-top:6px;font-size:.72rem;font-weight:700;letter-spacing:.3px;color:var(--brand,#22C55E);'; side.appendChild(el); }
+    el.textContent=txt;
 }
-/* Stato Pro/limitata: invariato rispetto a prima (vedi Prompt15/16), nessuna
-   modifica alla logica di verifica/tolleranza offline. */
-function isLicensePro(){
-    const sync=DB.settings.sync;
-    if(!sync.hasEverSynced) return true; // mai sincronizzato: nessuna restrizione, comportamento locale attuale
-    const lic=sync.license;
-    if(!lic) return true; // non ancora verificata: non blocchiamo preventivamente
-    const now=Date.now();
-    if(lic.lastSuccessAt && (now-lic.lastSuccessAt) > LICENSE_OFFLINE_GRACE_DAYS*86400000) return false; // tolleranza offline scaduta
-    return lic.status==='active' && (!lic.expiresAt || new Date(lic.expiresAt).getTime()>now);
+/* Card prova in dashboard (visibile anche su mobile) */
+function trialDashboardCard(){
+    const lvl=licenseAccessLevel();
+    if(lvl!=='trial') return '';
+    const left=trialDaysLeft();
+    return `<div class="card" style="margin-bottom:1.2rem;border-color:rgba(34,197,94,.35);background:linear-gradient(135deg,rgba(34,197,94,.10),transparent)">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px">
+            <div><h3 style="margin:0 0 2px"><i class="fa-solid fa-hourglass-half"></i> Prova gratuita · ${left} ${left===1?'giorno rimasto':'giorni rimasti'}</h3>
+                <span class="hint">Tutto resta su questo dispositivo. Sincronizzazione con AiRIM Player e Test Fisici si sbloccano con l'abbonamento annuale.</span></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">${contactButtonsHTML(true)}</div>
+        </div>
+    </div>`;
 }
-/* =========================================================
-   PAYWALL REALE (Prompt18) — enforcement sopra isLicensePro(), che resta
-   il solo giudice di "attiva/scaduta": qui si decide solo COSA succede quando
-   non e' attiva, distinguendo due casi via activatedAt (mai azzerato lato DB,
-   vedi trigger licenses_set_activated_at in supabase_schema.sql):
-   - mai stata attiva -> blocco totale (nessuna licenza mai acquistata)
-   - stata attiva in passato, ora scaduta -> sola lettura (dati mai a rischio)
-   ========================================================= */
-function hasEverHadActiveLicense(){
-    const sync=DB.settings.sync;
-    return !!(sync.license && sync.license.activatedAt);
-}
-function licenseAccessLevel(){
-    // 'full' | 'readonly' | 'blocked'
-    if(isLicensePro()) return 'full';
-    return hasEverHadActiveLicense() ? 'readonly' : 'blocked';
-}
-/* Unico punto di applicazione (Implementazione, Prompt18): il resto dell'app
-   non controlla mai isLicensePro()/licenseAccessLevel() sparso ovunque, passa
-   sempre da qui (schermata di blocco in go()) o da guardWrite()/save() per le
-   scritture — cosi' un solo posto da aggiornare se la logica cambia. */
-function canWriteDB(){ return licenseAccessLevel()==='full'; }
+
 let _writeBlockedToastAt=0;
 function guardWrite(){
-    const lvl=licenseAccessLevel();
-    if(lvl==='full') return true;
+    if(canWriteDB()) return true;
     const now=Date.now();
     if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
-        toast(lvl==='blocked' ? 'Nessuna licenza attiva: azione non disponibile.' : 'Licenza scaduta: modifica disabilitata.', 'danger');
+        const lvl=licenseAccessLevel();
+        toast(lvl==='pending' ? 'Profilo in attesa di attivazione: modifica non disponibile.'
+            : (trialExpired() ? 'Prova terminata: sola lettura.' : 'Licenza scaduta: modifica disabilitata.'), 'danger');
     }
     return false;
 }
-/* FIX: il canale file/codice (sharePlayer/downloadPlayerPkg) e' puro scambio locale
-   che non tocca mai Supabase — non passava mai da guardWrite(), quindi non veniva
-   mai intercettato dal paywall online (che scatta solo dopo un primo sync, vedi
-   isLicensePro). Chi non sincronizza mai online, o chi forza DEMO_BUILD=false /
-   supera il trial in una build demo, poteva continuare a generare pacchetti
-   completi per il Player all'infinito. guardShare() applica qui lo stesso gate:
-   licenza/trial online (stesso guardWrite(), stesso messaggio) PIU' il controllo
-   demo scaduta (che guardWrite() da solo non vede, essendo indipendente dal sync). */
-function guardShare(){
-    if(DEMO_BUILD && demoExpired()){
-        const now=Date.now();
-        if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
-            toast('Prova terminata: serve la versione completa per condividere nuovi dati con l\'app Player.','danger');
-        }
-        return false;
-    }
-    return guardWrite();
-}
+/* Condivisione con AiRIM Player (file/codice): solo con licenza attiva. */
+function guardShare(){ return requireFull('Condivisione con AiRIM Player'); }
 
 /* ---------- sync inverso: importa il codice "statistiche mentali" inviato dal giocatore (Mental Gym) ---------- */
 function decodeMentalPkg(code){ return stripDangerousKeys(JSON.parse(decodeURIComponent(escape(atob(code.trim()))))); }
 function openImportMental(){
+    if(!requireFull('Importazione dati da AiRIM Player')) return;
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-brain" style="color:var(--brand)"></i> Importa statistiche mentali</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
@@ -5279,6 +5406,7 @@ function openImportMental(){
       </div>`);
 }
 function importMentalCode(){
+    if(!canSync()) return;
     const ta=document.getElementById('mental-code'); const raw=ta?ta.value:'';
     let pkg;
     try{ pkg=decodeMentalPkg(raw); }catch(e){ toast('Codice non valido','danger'); return; }
@@ -5300,6 +5428,7 @@ function importMentalCode(){
 /* ---------- sync inverso: importa lo storico "check-in benessere" inviato dal giocatore ---------- */
 function decodeWellnessPkg(code){ return stripDangerousKeys(JSON.parse(decodeURIComponent(escape(atob(code.trim()))))); }
 function openImportWellness(){
+    if(!requireFull('Importazione dati da AiRIM Player')) return;
     openModal(`
       <div class="modal-head"><h3><i class="fa-solid fa-heart-pulse" style="color:var(--brand)"></i> Importa check-in benessere</h3>
         <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
@@ -5310,6 +5439,7 @@ function openImportWellness(){
       </div>`);
 }
 function importWellnessCode(){
+    if(!canSync()) return;
     const ta=document.getElementById('wellness-code'); const raw=ta?ta.value:'';
     let pkg;
     try{ pkg=decodeWellnessPkg(raw); }catch(e){ toast('Codice non valido','danger'); return; }
@@ -5839,10 +5969,14 @@ checkOnboardingAndDemo();
 setTimeout(()=>{ if(window.Marquee){ window.Marquee.rescan(); window.Marquee.refresh(); } }, 150);
 ensureTeamLogo(()=>{ applyTeamLogo(); if(document.getElementById('dashboard').classList.contains('active')) renderDashboard(); });
 setTimeout(checkBackupReminder, 2000);   /* dopo l'animazione di apertura, mai durante */
-setTimeout(()=>refreshCoachSession().then(session=>{
+setTimeout(()=>refreshCoachSession().then(async session=>{
     renderSyncSettings();
+    /* Gestione_Trial_Licenze: prima si verifica la licenza (account o licenza legacy),
+       poi — solo se attiva — eventuale pull/self-heal verso il server. */
+    await checkLicenseOnline(false);
     if(!session) return;
     ensurePolicyAccepted(()=>{});
+    if(!canSync()) return;   // nessuna scrittura online senza licenza attiva
     /* Coach loggato ma DB locale vuoto (cache/localStorage cancellati su questo
        device, es. dopo un reset del telefono): pull automatico e silenzioso dal
        backup online invece di lasciare la squadra vuota — nessuna conferma
@@ -5852,20 +5986,12 @@ setTimeout(()=>refreshCoachSession().then(session=>{
         pullTeamFromServer().then(pulled=>{ if(pulled) renderSyncSettings(); }).catch(()=>{});
         return;
     }
-    /* PROMPTFIXLITE: reclamo "self-heal" della squadra locale. Se il coach e' loggato
-       e la squadra locale ha gia' un team_code (sync avviato prima del login, o un
-       tentativo di reclamo precedente riuscito solo in apparenza — es. fallito per un
-       problema di rete transitorio subito dopo signup/signin, silenziosamente, senza
-       che owner_user_id venisse davvero popolato) ritenta qui il claim a ogni avvio.
-       ensureTeamOnline()->upsert_my_team e' idempotente: innocuo se gia' fatto, ma
-       garantisce che una squadra rimasta "orfana" (owner_user_id null nonostante un
-       account ora collegato) si autoripari alla prossima apertura dell'app, senza
-       richiedere un nuovo sync manuale del coach. */
+    /* PROMPTFIXLITE: reclamo "self-heal" della squadra locale (upsert_my_team e'
+       idempotente). Ora solo con licenza attiva: ensureTeamOnline() lo ricontrolla. */
     if(DB.settings.sync && DB.settings.sync.teamCode){
         ensureTeamOnline().then(()=>renderSyncSettings()).catch(()=>{});
     }
 }), 2000);   /* Task 4 (Prompt16/17): sa gia' se il coach e' loggato prima che apra Impostazioni, e propone subito il re-consenso se la policy e' cambiata dall'ultimo accesso */
-setTimeout(()=>checkLicenseOnline(false), 2500);   /* check giornaliero (auto-throttlato), non ad ogni azione */
 
 /* =========================================================
    FOTO GIOCATORE (IndexedDB) + CARD stile FC  (lato coach)
