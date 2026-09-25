@@ -5,11 +5,27 @@ const DEMO_BUILD = false;                 // false = completa; true sul deploy d
 const DEMO_DAYS = 20;
 const DEMO_HARD_DEADLINE = '2026-10-31';  // oltre questa data la demo e' morta per tutti, comunque
 const CARD_STUDIO_ENABLED = false;        // officina card nascosta (si riattiva con true)
-const CONTACT_INFO = '+39 3498290606';    // mostrato nella schermata di scadenza
-const STRIPE_MONTHLY_URL = '';            // lasciare vuoto per ora (nessun bottone); si incolla dopo
-const STRIPE_ANNUAL_URL  = '';            // idem
+const CONTACT_WHATSAPP = '393498290606';  // unico canale d'acquisto (abbonamento annuale): nessun prezzo in app
+const CONTACT_INSTAGRAM_URL = 'https://ig.me/m/othibyte';
 const MULTITEAM_ENABLED = false;          // pannello multi-squadra/società = feature tier Club
 /* Tutta la logica demo (countdown, blocco a scadenza) si attiva SOLO se DEMO_BUILD===true. */
+
+/* ---------- CONTATTI: bottoni WhatsApp/Instagram al posto dei link di pagamento ----------
+   Usati in scadenza prova, licenza scaduta/mancante e ovunque si inviti ad acquistare.
+   Il nome squadra entra nel messaggio WhatsApp solo se impostato (non il default 'TEAM').
+   L'apice singolo viene codificato a mano (encodeURIComponent lo lascia) cosi' l'URL resta
+   sicuro dentro un attributo href anche con nomi squadra arbitrari. */
+function contactTeamName(){ try{ const n=((DB&&DB.teamName)||'').trim(); return (n && n!=='TEAM')? n : ''; }catch(e){ return ''; } }
+function whatsappContactURL(){
+  const team=contactTeamName();
+  const msg = team ? `Ciao! Vorrei attivare AiRIM per la mia squadra: ${team}` : 'Ciao! Vorrei attivare AiRIM per la mia squadra.';
+  return 'https://wa.me/'+CONTACT_WHATSAPP+'?text='+encodeURIComponent(msg).replace(/'/g,'%27');
+}
+function contactButtonsHTML(small){
+  const sz=small?' btn-sm':'', w=small?'':'width:100%;';
+  return `<a class="btn btn-accent${sz}" style="${w}text-decoration:none" href="${whatsappContactURL()}" target="_blank" rel="noopener">💬 Scrivici su WhatsApp</a>`+
+         `<a class="btn btn-ghost${sz}" style="${w}text-decoration:none" href="${CONTACT_INSTAGRAM_URL}" target="_blank" rel="noopener">📩 Scrivici su Instagram</a>`;
+}
 
 /* ---------- SICUREZZA: escaping per interpolazioni non fidate dentro innerHTML ----------
    Nomi giocatore, nome squadra, note, avversari ecc. arrivano da input utente (o da un pacchetto
@@ -541,7 +557,7 @@ const ONB_STEPS = [
 ];
 const ONB_DEMO_STEPS = [
   {icon:'fa-hourglass-half',title:`${DEMO_DAYS} giorni per provarla`,body:`Usa l'app con la tua squadra vera per ${DEMO_DAYS} giorni. Alla scadenza scarichi un backup dei dati: le foto restano sul telefono e le ricarichi nella versione completa.`},
-  {icon:'fa-mobile-screen-button',title:"L'app dei giocatori è a parte",body:"Statistiche in tempo reale e card personali per i giocatori sono incluse solo con l'acquisto: in prova usi solo la parte coach."},
+  {icon:'fa-mobile-screen-button',title:"L'app dei giocatori è a parte",body:"Statistiche in tempo reale e card personali per i giocatori sono incluse solo con l'acquisto: in prova usi solo la parte coach.",contact:true},
   {icon:'fa-play',title:'Pronto a iniziare?',body:'Da quando attivi la prova parte il conto alla rovescia. Puoi rivedere questa guida quando vuoi da Impostazioni.'}
 ];
 let _onbIdx=0, _onbList=[];
@@ -587,6 +603,7 @@ function onbRender(){
     <div class="onb-ic"><i class="fa-solid ${s.icon}"></i></div>
     <h3>${s.title}</h3>
     <p>${s.body}</p>
+    ${s.contact?`<div style="display:flex;flex-direction:column;gap:8px;margin:-.6rem 0 1.3rem">${contactButtonsHTML()}</div>`:''}
     <div class="onb-dots">${_onbList.map((_,i)=>`<span class="${i===_onbIdx?'on':''}"></span>`).join('')}</div>
     <button class="btn btn-accent" style="width:100%" onclick="onbNext()"><i class="fa-solid ${isDemoCta?'fa-play':'fa-arrow-right'}"></i> ${label}</button>
     ${last?'':'<button class="onb-skip" onclick="onbFinish()">Salta</button>'}
@@ -786,16 +803,14 @@ function checkDemoLock(){
   if(!DEMO_BUILD || !demoExpired()){ const o=document.getElementById('dexp-overlay'); if(o) o.remove(); return; }
   dexpCSS();
   if(document.getElementById('dexp-overlay')) return;
-  const stripeBtns = (STRIPE_MONTHLY_URL?`<button class="btn btn-accent" style="width:100%" onclick="window.open('${STRIPE_MONTHLY_URL}','_blank')"><i class="fa-solid fa-credit-card"></i> Abbonamento mensile</button>`:'')
-    + (STRIPE_ANNUAL_URL?`<button class="btn btn-ghost" style="width:100%" onclick="window.open('${STRIPE_ANNUAL_URL}','_blank')"><i class="fa-solid fa-credit-card"></i> Abbonamento annuale - risparmi</button>`:'');
   const o=document.createElement('div'); o.id='dexp-overlay';
   o.innerHTML=`<div class="dexp-card">
     <div class="dexp-ic"><i class="fa-solid fa-gear"></i></div>
     <h2>Impostazioni</h2>
     <p>Prova terminata. Scarica i tuoi dati; ti invieremo la versione completa dove importare il backup.</p>
     <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup dati</button>
-    <div class="dexp-contact">Per acquistare la versione completa contatta: <b>${CONTACT_INFO}</b></div>
-    ${stripeBtns?`<div class="dexp-acts">${stripeBtns}</div>`:''}
+    <div class="dexp-contact">Per attivare la versione completa scrivici:</div>
+    <div class="dexp-acts">${contactButtonsHTML()}</div>
   </div>`;
   document.body.appendChild(o);
 }
@@ -838,8 +853,9 @@ function checkLicenseLock(){
     o.innerHTML=`<div class="dexp-card">
       <div class="dexp-ic"><i class="fa-solid fa-lock"></i></div>
       <h2>Nessuna licenza attiva</h2>
-      <p>Nessuna licenza attiva per questo account. Contatta <b>${CONTACT_INFO}</b> per attivare l'abbonamento.</p>
-      <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
+      <p>Nessuna licenza attiva per questo account. Scrivici per attivare l'abbonamento annuale.</p>
+      <div class="dexp-acts">${contactButtonsHTML()}</div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
       <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="coachSignOut()"><i class="fa-solid fa-right-from-bracket"></i> Esci</button>
     </div>`;
     document.body.appendChild(o);
@@ -849,7 +865,8 @@ function checkLicenseLock(){
     const b=document.createElement('div'); b.id='lic-ro-banner';
     b.innerHTML=`<span><i class="fa-solid fa-triangle-exclamation"></i></span>
       <b>Licenza scaduta</b><span>— modifica e sync disabilitati, i tuoi dati restano visibili.</span>
-      <span>Contatta ${CONTACT_INFO} per rinnovare.</span>
+      <span>Per rinnovare scrivici:</span>
+      ${contactButtonsHTML(true)}
       <button class="btn btn-ghost btn-sm" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
     document.body.appendChild(b);
   }
@@ -4319,7 +4336,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v62';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v74';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4532,7 +4549,7 @@ function drawFormationCanvas(sport,slots,match){
     c.font='700 13px Arial,sans-serif'; c.fillText((s.playerName||'').split(' ').slice(-1)[0], x, y+16);
   });
   c.fillStyle='#8395B4'; c.font='500 18px Arial,sans-serif'; c.textAlign='center';
-  c.fillText('Generato con AIrim TeamManager', W/2, H-18);
+  c.fillText('Generato con AiRIM', W/2, H-18);
   return cv;
 }
 function downloadFormationImage(){
@@ -4613,7 +4630,8 @@ async function sharePlayer(id){
             <div id="sync-online-status" style="margin-top:8px;font-size:.82rem;color:var(--muted)"></div>
         </div>
         ${DEMO_BUILD?`
-        <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice di esempio, ma serve l'app Player per riceverlo.</p>`:''}
+        <p class="hint" style="margin-top:12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);line-height:1.5"><i class="fa-solid fa-circle-info"></i> La ricezione dei dati nell'app Player (statistiche, card, formazione consigliata) è disponibile solo con la versione completa. In prova puoi generare il codice di esempio, ma serve l'app Player per riceverlo.</p>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px">${contactButtonsHTML()}</div>`:''}
       </div>`);
 }
 function copyShare(){
@@ -4698,8 +4716,8 @@ async function ensureTeamOnline(){
    POLICY_VERSION (Task 4 — un bump forza una nuova accettazione esplicita
    ad ogni coach al prossimo accesso/sync online).
    ========================================================= */
-const POLICY_VERSION = 'v1.0 — 2026-09-03';
-const POLICY_TEXT = `PRIVACY POLICY E TERMINI DI SERVIZIO — AIrim Team Manager
+const POLICY_VERSION = 'v1.1 — 2026-09-25';
+const POLICY_TEXT = `PRIVACY POLICY E TERMINI DI SERVIZIO — AiRIM
 
 Accettando questa informativa (spunta "Accetto" in fase di registrazione), la Società Sportiva conferma di aver letto e compreso i termini sottostanti e stipula con lo Sviluppatore un accordo relativo al trattamento dei dati inseriti nell'applicazione.
 
@@ -4744,7 +4762,7 @@ Il/la sottoscritto/a, genitore/tutore legale dell'atleta ____________________,
 autorizza l'Associazione Sportiva [Nome Squadra] al trattamento dei dati
 personali del/della minore (nome, cognome, ruolo, altezza indicativa,
 statistiche di gara ed eventuale fotografia) tramite l'applicazione
-gestionale "AIrim Team Manager", che conserva i dati su infrastruttura
+gestionale "AiRIM", che conserva i dati su infrastruttura
 cloud Supabase, al solo fine di organizzare l'attività sportiva,
 gli allenamenti, le convocazioni e la valutazione tecnica dell'atleta.
 

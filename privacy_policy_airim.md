@@ -1,4 +1,4 @@
-# PRIVACY POLICY E TERMINI DI SERVIZIO — AIrim Team Manager
+# PRIVACY POLICY E TERMINI DI SERVIZIO — AiRIM
 
 **Accettando questa informativa (spunta "Accetto" in fase di registrazione), la Società Sportiva conferma di aver letto e compreso i termini sottostanti e stipula con lo Sviluppatore un accordo relativo al trattamento dei dati inseriti nell'applicazione.**
 
@@ -44,7 +44,7 @@ Il/la sottoscritto/a, genitore/tutore legale dell'atleta ____________________,
 autorizza l'Associazione Sportiva [Nome Squadra] al trattamento dei dati
 personali del/della minore (nome, cognome, ruolo, altezza indicativa,
 statistiche di gara ed eventuale fotografia) tramite l'applicazione
-gestionale "AIrim Team Manager", che conserva i dati su infrastruttura
+gestionale "AiRIM", che conserva i dati su infrastruttura
 cloud Supabase, al solo fine di organizzare l'attività sportiva,
 gli allenamenti, le convocazioni e la valutazione tecnica dell'atleta.
 
