@@ -1,14 +1,20 @@
 /* VolleyTeam Manager (Coach) - Service Worker
-   Aggiornamento controllato: il nuovo SW resta in attesa finché l'utente
-   non conferma (banner o pulsante in Impostazioni). skipWaiting solo su richiesta.
-   Bump CACHE_VERSION ad ogni rilascio. I dati utente (localStorage) non vengono mai toccati. */
-const CACHE_VERSION = 'volleyteam-v77';
+   Aggiornamento silenzioso: il nuovo SW si scarica e resta in attesa; la pagina lo
+   attiva (SKIP_WAITING) alla prossima apertura dell'app o se l'utente preme "Aggiorna ora".
+   Mai skipWaiting automatico: nessun cambio di versione mentre l'app e' in uso.
+   Bump CACHE_VERSION ad ogni rilascio. localStorage, IndexedDB e sessione non vengono mai toccati:
+   si cancellano solo le cache di QUESTA app (prefisso volleyteam-). */
+const CACHE_PREFIX = 'volleyteam-';
+const CACHE_VERSION = 'volleyteam-v78';
 const APP_SHELL = [
   './',
   './index.html',
   './app.js',
   './supabase.js',
   './soundkit.js',
+  './schemes.js',
+  './polisport.js',
+  './marquee.js',
   './manifest.json',
   './icons/logo-badge.png',
   './icons/icon-192.png',
@@ -17,10 +23,13 @@ const APP_SHELL = [
   './icons/favicon-32.png'
 ];
 
-// Installazione: pre-cache dell'app shell. NON attiva subito: aspetta conferma.
+// Installazione: pre-cache dell'app shell scaricata dalla rete (non dalla cache HTTP),
+// cosi' la versione in attesa e' completa. NON si attiva subito: aspetta la pagina.
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(CACHE_VERSION).then((cache) =>
+      cache.addAll(APP_SHELL.map((u) => new Request(u, { cache: 'reload' })))
+    )
   );
 });
 
@@ -28,7 +37,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE_VERSION).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });

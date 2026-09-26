@@ -4487,12 +4487,20 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
 
 
 /* =========================================================
-   AUTO-UPDATE PWA — banner di avviso + pannello in Impostazioni.
-   Il nuovo codice si scarica in background e resta in attesa;
-   l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
+   AUTO-UPDATE PWA — aggiornamento silenzioso + banner facoltativo.
+   Il nuovo codice si scarica in background e resta in attesa; si attiva da solo
+   alla PROSSIMA APERTURA dell'app (avvio, o rientro dopo 10+ minuti su una
+   schermata senza inserimenti), mai mentre l'utente la sta usando. Il banner
+   serve solo a chi vuole aggiornare subito: prima del reload il lavoro in corso
+   viene salvato e poi ripristinato. localStorage/IndexedDB/sessione restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v77';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v78';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
+let pwaReloadAllowed=false;           /* il reload su controllerchange avviene SOLO se l'abbiamo chiesto noi */
+let pwaLastInteraction=0, pwaHiddenAt=0, pwaLastCheckAt=0;
+const PWA_RESUME_MS=10*60*1000;
+const PWA_DRAFT_KEY='airim-update-draft', PWA_BOOT_KEY='airim-update-boot';
+['pointerdown','keydown','touchstart'].forEach(ev=>document.addEventListener(ev,()=>{ pwaLastInteraction=Date.now(); },{capture:true,passive:true}));
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
   const st=document.createElement('style'); st.id='pwa-css';
@@ -4514,22 +4522,106 @@ function pwaCSS(){
   document.head.appendChild(st);
 }
 function pwaShowBanner(){
+  pwaMarkSettings(true);
+  if(pwaBannerDismissed) return;                     /* "Più tardi": non si ripropone in questa sessione */
   pwaCSS();
   if(document.getElementById('pwa-banner')) return;
   const b=document.createElement('div'); b.id='pwa-banner';
-  b.innerHTML=`<span class="pwa-msg"><i class="fa-solid fa-arrows-rotate"></i> Nuova versione disponibile</span>
+  b.innerHTML=`<span class="pwa-msg"><i class="fa-solid fa-arrows-rotate"></i> Nuova versione pronta: si attiva alla prossima apertura</span>
     <div class="pwa-acts">
       <button class="pwa-later" onclick="pwaDismissBanner()">Più tardi</button>
       <button class="pwa-now" onclick="pwaApplyUpdate()">Aggiorna ora</button>
     </div>`;
   document.body.appendChild(b);
-  pwaMarkSettings(true);
 }
-function pwaDismissBanner(){ const b=document.getElementById('pwa-banner'); if(b)b.remove(); }
+let pwaBannerDismissed=false;
+function pwaDismissBanner(){ pwaBannerDismissed=true; const b=document.getElementById('pwa-banner'); if(b)b.remove(); }
+/* finestre aperte che contengono dati non ancora confermati (modali, editor esercizio, conferme) */
+function pwaOverlayOpen(){ return !!document.querySelector('#modal-overlay.show,#confirm-overlay.show,#fe-overlay'); }
+function pwaActiveSection(){ const s=document.querySelector('.section.active'); return s?s.id:null; }
+/* Schermate senza inserimento dati: solo qui l'aggiornamento puo' attivarsi da solo al rientro */
+const PWA_SAFE_SECTIONS=['dashboard','formazione'];
+function pwaSafeToAutoApply(){
+  const a=document.activeElement;
+  const typing=a && (a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT'||a.isContentEditable);
+  return !pwaOverlayOpen() && !typing && PWA_SAFE_SECTIONS.includes(pwaActiveSection());
+}
+/* Fotografia del lavoro in corso: schermata, campi compilati e sessione di scout non ancora
+   registrata. Va in sessionStorage (sopravvive al reload, non tocca il DB) e viene
+   ripristinata dopo l'aggiornamento. Le password non vengono mai copiate. */
+const PWA_TEXT_TYPES=['text','number','email','search','tel','url','date','time','datetime-local','month','week',''];
+function pwaSaveDraft(){
+  const a=document.activeElement;
+  if(a && a!==document.body && a.blur) a.blur();     /* fa scattare i onchange/onblur che salvano (voti, nome squadra…) */
+  const sec=pwaActiveSection(), secEl=sec&&document.getElementById(sec);
+  const fields=[];
+  if(secEl) secEl.querySelectorAll('input[id],select[id],textarea[id]').forEach(el=>{
+    if(el.tagName==='INPUT' && !PWA_TEXT_TYPES.includes((el.getAttribute('type')||'').toLowerCase())) return;
+    fields.push({id:el.id, tag:el.tagName, value:el.value});
+  });
+  let scout=null;
+  const sSel=document.getElementById('scout-select'), sPanel=document.getElementById('scout-panel');
+  const matchId=sSel?parseInt(sSel.value):NaN;
+  if(sec==='scout' && matchId && sPanel && sPanel.style.display!=='none'){
+    const pick=o=>(o && o.matchId===matchId) ? {events:o.events, override:o.override, min:o.min, minAuto:o.minAuto, seq:o.seq} : null;
+    scout={matchId, tap:pick(TAP), btap:pick(BTAP), ctap:pick(CTAP), numeric:null};
+    const nEl=document.getElementById('scout-numeric');
+    if(nEl && nEl.style.display!=='none'){
+      scout.numeric={};
+      document.querySelectorAll('#scout-body tr[data-pid]').forEach(tr=>{
+        const o={}; tr.querySelectorAll('input[data-k]').forEach(i=>o[i.dataset.k]=i.value); scout.numeric[tr.dataset.pid]=o;
+      });
+    }
+  }
+  try{ sessionStorage.setItem(PWA_DRAFT_KEY, JSON.stringify({at:Date.now(), sec, fields, scout})); }catch(e){}
+}
+function pwaRestoreScout(sc){
+  const sel=document.getElementById('scout-select'); if(!sel) return;
+  if(sel.value!==String(sc.matchId)){
+    if(![...sel.options].some(o=>o.value===String(sc.matchId))) return;
+    sel.value=String(sc.matchId); setupScout();
+  }
+  const put=(o,st)=>{ if(o && st && o.matchId===sc.matchId){ Object.assign(o,st); o.sel=null; return true; } return false; };
+  if(put(TAP,sc.tap)){ tapRenderPlayers(); tapRenderSel(); }
+  if(put(BTAP,sc.btap)){ bTapRenderPlayers(); bTapRenderSel(); }
+  if(put(CTAP,sc.ctap)){ cTapRenderPlayers(); cTapRenderSel(); }
+  if(sc.numeric) Object.keys(sc.numeric).forEach(pid=>{
+    const tr=document.querySelector(`#scout-body tr[data-pid="${pid}"]`); if(!tr) return;
+    tr.querySelectorAll('input[data-k]').forEach(i=>{ const v=sc.numeric[pid][i.dataset.k]; if(v!=null) i.value=v; });
+    try{ calcRow(+pid); }catch(e){}
+  });
+}
+function pwaRestoreDraft(){
+  let d=null;
+  try{ d=JSON.parse(sessionStorage.getItem(PWA_DRAFT_KEY)||'null'); sessionStorage.removeItem(PWA_DRAFT_KEY); }catch(e){ return; }
+  if(!d || Date.now()-d.at>30*60*1000) return;
+  try{
+    if(d.sec && d.sec!==pwaActiveSection() && document.getElementById(d.sec)) go(d.sec);
+    const fields=d.fields||[];
+    /* prima le tendine (ridisegnano i pannelli: partita, seduta…), poi i campi di testo */
+    fields.filter(f=>f.tag==='SELECT').forEach(f=>{
+      const el=document.getElementById(f.id);
+      if(el && el.value!==f.value && [...el.options].some(o=>o.value===f.value)){ el.value=f.value; el.dispatchEvent(new Event('change',{bubbles:true})); }
+    });
+    fields.filter(f=>f.tag!=='SELECT').forEach(f=>{ const el=document.getElementById(f.id); if(el && f.value!=='' && el.value!==f.value) el.value=f.value; });
+    if(d.scout) pwaRestoreScout(d.scout);
+    const work=d.scout || fields.some(f=>f.tag!=='SELECT' && f.value!=='');
+    toast(work ? 'App aggiornata: il lavoro in corso è stato ripristinato' : 'App aggiornata alla nuova versione','success');
+  }catch(e){ console.warn('Ripristino dopo aggiornamento non riuscito',e); }
+}
+function pwaReload(){ if(pwaRefreshing) return; pwaRefreshing=true; location.reload(); }
+/* Attiva il SW in attesa e ricarica. Unico punto che autorizza il reload. */
+function pwaActivateWaiting(reg){
+  pwaReloadAllowed=true;
+  const w=reg && reg.waiting;
+  if(w){ w.postMessage({type:'SKIP_WAITING'}); setTimeout(pwaReload,4000); }   /* controllerchange → reload; timeout di riserva */
+  else pwaReload();
+}
 function pwaApplyUpdate(){
-  const w = swReg && swReg.waiting;
-  if(w){ w.postMessage({type:'SKIP_WAITING'}); }   /* controllerchange → reload */
-  else { location.reload(); }
+  if(pwaOverlayOpen()){ toast('Completa o chiudi la finestra aperta, poi premi "Aggiorna ora": così non perdi nulla.','info'); return; }
+  const doIt=()=>{ pwaSaveDraft(); pwaActivateWaiting(swReg); };
+  if(pwaActiveSection()==='tattica'){ confirmAction('I disegni sulla lavagnetta non vengono salvati. Aggiornare comunque adesso?', doIt); return; }
+  doIt();
 }
 function pwaMarkSettings(available){
   const el=document.getElementById('pwa-settings-state'); if(!el) return;
@@ -4537,22 +4629,58 @@ function pwaMarkSettings(available){
     ? `<span class="pwa-badge-new">Aggiornamento pronto</span><button class="btn btn-accent" onclick="pwaApplyUpdate()"><i class="fa-solid fa-arrows-rotate"></i> Aggiorna adesso</button>`
     : `<span class="pwa-ok">Sei alla versione più recente (${APP_VERSION}).</span>`;
 }
+/* Controllo silenzioso: se c'e' una versione nuova il SW la scarica e la lascia in attesa. Offline: nessun errore. */
+function pwaCheckUpdate(){
+  if(!swReg || !navigator.onLine) return Promise.resolve();
+  pwaLastCheckAt=Date.now();
+  return swReg.update().catch(()=>{});
+}
 function pwaCheckNow(){
   if(!swReg){ toast('Aggiornamenti non disponibili in questa modalità','info'); return; }
   toast('Controllo aggiornamenti…');
   swReg.update().then(()=>setTimeout(()=>{
-    if(swReg.waiting){ pwaShowBanner(); pwaMarkSettings(true); toast('Aggiornamento trovato'); }
+    if(swReg.waiting){ pwaBannerDismissed=false; pwaShowBanner(); toast('Aggiornamento trovato'); }
     else { pwaMarkSettings(false); toast('Sei già aggiornato'); }
   },900)).catch(()=>toast('Controllo non riuscito','info'));
 }
+/* Apertura dell'app con una versione gia' scaricata e in attesa: si attiva subito, prima che
+   l'utente tocchi qualcosa. Il flag in sessionStorage evita cicli di reload se l'attivazione fallisce. */
+function pwaApplyOnOpening(reg){
+  if(!reg || !reg.waiting || !navigator.serviceWorker.controller) return false;
+  let last=0; try{ last=+sessionStorage.getItem(PWA_BOOT_KEY)||0; }catch(e){}
+  if(Date.now()-last<60*1000) return false;
+  try{ sessionStorage.setItem(PWA_BOOT_KEY,String(Date.now())); }catch(e){}
+  pwaActivateWaiting(reg);
+  return true;
+}
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.addEventListener('controllerchange',()=>{
-    if(pwaRefreshing) return; pwaRefreshing=true; location.reload();
+  /* Nessun reload automatico: solo se l'attivazione l'abbiamo chiesta noi (apertura o banner).
+     Un aggiornamento attivato da un'altra scheda non ricarica questa. */
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(pwaReloadAllowed) pwaReload(); });
+  /* Avvio: versione in attesa → attivala ora, a schermata appena aperta */
+  navigator.serviceWorker.getRegistration().then(reg=>{
+    if(reg && !pwaLastInteraction) pwaApplyOnOpening(reg);
+  }).catch(()=>{});
+  /* Rientro nell'app (Android/iOS la riprendono senza ricaricarla): dopo 10+ minuti
+     si controllano gli aggiornamenti; se una versione e' gia' pronta e la schermata non ha
+     inserimenti in corso, si attiva ora, prima che l'utente riprenda a usarla. */
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden'){ pwaHiddenAt=Date.now(); return; }
+    if(!pwaHiddenAt || Date.now()-pwaHiddenAt<PWA_RESUME_MS) return;
+    pwaHiddenAt=0;
+    if(!swReg) return;
+    if(swReg.waiting && pwaSafeToAutoApply()){ pwaSaveDraft(); if(pwaApplyOnOpening(swReg)) return; }
+    pwaCheckUpdate();
   });
   window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).then(reg=>{
+    setTimeout(pwaRestoreDraft,400);                  /* dopo un aggiornamento: rimette il lavoro in corso */
+    navigator.serviceWorker.register('sw.js',{updateViaCache:'none'}).catch(err=>{
+      console.warn('SW non registrato',err);
+      return navigator.serviceWorker.getRegistration();   /* offline: si usa la registrazione esistente */
+    }).then(reg=>{
+      if(!reg) return;
       swReg=reg;
-      if(reg.waiting) pwaShowBanner();                 /* update già pronto all'avvio */
+      if(reg.waiting) pwaShowBanner();                 /* versione pronta ma attivazione rimandata */
       reg.addEventListener('updatefound',()=>{
         const nw=reg.installing; if(!nw) return;
         nw.addEventListener('statechange',()=>{
@@ -4560,7 +4688,8 @@ if('serviceWorker' in navigator){
         });
       });
       pwaMarkSettings(!!reg.waiting);
-    }).catch(err=>console.warn('SW non registrato',err));
+      pwaCheckUpdate();                                /* controllo all'apertura */
+    });
   });
 }
 
