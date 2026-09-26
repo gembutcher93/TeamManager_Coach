@@ -928,7 +928,7 @@ function checkLicenseLock(){
   const roKind = trialExpired() ? 'trial' : 'license';
   /* Stato neutro: verifica in corso all'avvio (solo per stati della licenza, non per la
      prova) oppure account appena collegato senza risposta del server. */
-  const neutral = lvl==='checking' || (LIC_VERIFYING && (lvl==='pending' || (lvl==='readonly' && roKind==='license')));
+  const neutral = lvl==='checking' || (licAwaitingServer() && (lvl==='pending' || (lvl==='readonly' && roKind==='license')));
   const pillEl=document.getElementById('lic-check-pill');
   if(!neutral && pillEl) pillEl.remove();
   if(neutral){
@@ -937,7 +937,7 @@ function checkLicenseLock(){
     const verifying = LIC_VERIFYING || !!_licCheckPromise;
     const html = verifying
       ? `<i class="fa-solid fa-spinner fa-spin"></i> Verifica licenza…`
-      : `<i class="fa-solid fa-circle-info"></i> Licenza non ancora verificata <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Riprova</button>`;
+      : `<i class="fa-solid fa-circle-info"></i> Licenza non ancora verificata <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="recheckLicense()"><i class="fa-solid fa-arrows-rotate"></i> Riprova</button>`;
     let pill=pillEl;
     if(!pill){ pill=document.createElement('div'); pill.id='lic-check-pill';
       pill.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:9990;display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:30px;background:var(--surface-2,#141D31);border:1px solid var(--line,#22304E);color:var(--muted,#8395B4);font-size:.8rem;font-weight:600;box-shadow:0 8px 24px -10px rgba(0,0,0,.6);';
@@ -957,7 +957,7 @@ function checkLicenseLock(){
       <p>Il tuo profilo è stato creato ed è in attesa di attivazione. Finché non è attivo nessun dato di squadra o giocatori viene inviato online. Scrivici per attivare l'abbonamento annuale.</p>
       <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button>
       <div class="dexp-acts">${contactButtonsHTML()}</div>
-      <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="recheckLicense()"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>
       <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="coachSignOut()"><i class="fa-solid fa-right-from-bracket"></i> Esci</button>
     </div>`;
     document.body.appendChild(o);
@@ -970,7 +970,7 @@ function checkLicenseLock(){
       : `<b>Licenza scaduta</b><span>— modifica e sync disabilitati, i tuoi dati restano visibili.</span><span>Per rinnovare scrivici:</span>`;
     const tail = roKind==='trial'
       ? (COACH_EMAIL ? '' : `<button class="btn btn-ghost btn-sm" onclick="openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Accedi</button>`)
-      : `<button class="btn btn-ghost btn-sm" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
+      : `<button class="btn btn-ghost btn-sm" onclick="recheckLicense()"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla</button>`;
     b.innerHTML=`<span><i class="fa-solid fa-triangle-exclamation"></i></span>${head}
       ${contactButtonsHTML(true)}
       <button class="btn btn-ghost btn-sm" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button>
@@ -4491,7 +4491,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v76';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v77';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -5127,7 +5127,7 @@ async function coachSignOut(){
         try{ Object.keys(localStorage).filter(k=>k.startsWith('sb-')).forEach(k=>localStorage.removeItem(k)); }catch(e){}
         try{ await cIdbClearAll(); }catch(e){}
         COACH_EMAIL=null; COACH_POLICY=null;
-        setLic(null);   // lo stato licenza e' dell'account: via con il logout (la data di prova resta)
+        setLic(null); LIC_CONFIRMED=false; LIC_LAST_SERVER_AT=0;   // lo stato licenza e' dell'account: via con il logout (la data di prova resta)
         COACH_PHOTOS={}; TEAM_LOGO=null; _logoLoaded=false;
         DB=emptyDB();
         toast('Disconnesso: dati locali rimossi da questo dispositivo','info');
@@ -5347,7 +5347,53 @@ function trialDaysLeft(){
     const t=new Date(raw).getTime(); if(isNaN(t)) return 0;
     return TRIAL_DAYS-Math.floor((Date.now()-t)/86400000);
 }
-function getLic(){ try{ return JSON.parse(localStorage.getItem(LICENSE_KEY))||null; }catch(e){ return null; } }
+/* LicenzaStale: la risposta del server vince sempre sullo stato salvato. Lo stato
+   salvato serve solo all'avvio (in attesa della risposta) e offline, e vale solo se
+   appartiene all'account e alla squadra attuali. */
+let LIC_CONFIRMED = false;      // true quando il server ha risposto in questa sessione
+let LIC_LAST_SERVER_AT = 0;     // ora dell'ultima risposta del server (per il ricontrollo al rientro nell'app)
+let LIC_LAST_ERROR_AT = 0;      // ultimo tentativo fallito (per il testo "server non raggiungibile")
+/* Account attuale, noto anche prima della risposta del server e offline: la sessione
+   Supabase salvata dal client (sb-<progetto>-auth-token) contiene l'email. */
+function currentAccountEmail(){
+    if(COACH_EMAIL) return COACH_EMAIL;
+    try{
+        for(let i=0;i<localStorage.length;i++){
+            const k=localStorage.key(i);
+            if(!/^sb-.+-auth-token$/.test(k||'')) continue;
+            const s=JSON.parse(localStorage.getItem(k));
+            const u=s && (s.user || (s.currentSession&&s.currentSession.user));
+            if(u && u.email) return u.email;
+        }
+    }catch(e){}
+    return null;
+}
+function currentTeamId(){ const s=DB.settings&&DB.settings.sync; return (s&&s.teamId)||null; }
+function licBelongsHere(l){
+    if(!l) return false;
+    const email=currentAccountEmail();
+    if(l.email && email && l.email.toLowerCase()!==email.toLowerCase()) return false;
+    const team=currentTeamId();
+    if(l.teamId && team && l.teamId!==team) return false;
+    return true;
+}
+function readLic(){ try{ return JSON.parse(localStorage.getItem(LICENSE_KEY))||null; }catch(e){ return null; } }
+/* Stato salvato di un altro account o di un'altra squadra: ignorato, vale come
+   "verifica in corso" finche' il server non risponde per quelli attuali. */
+function getLic(){
+    const l=readLic();
+    if(!l || licBelongsHere(l)) return l;
+    return {email:currentAccountEmail(), status:'checking', expiresAt:null, activatedAt:null, checkedAt:null, lastSuccessAt:null, foreign:true};
+}
+/* Stato negativo (scaduta/in attesa) non ancora confermato dal server in questa
+   sessione: con la rete presente non si mostra, si mostra "verifica". Offline vale
+   l'ultimo stato salvato. */
+function licAwaitingServer(){
+    if(LIC_VERIFYING) return true;
+    if(LIC_CONFIRMED) return false;
+    const l=getLic();
+    return !!l && !licIsActive(l) && navigator.onLine!==false;
+}
 function setLic(l){ try{ if(l) localStorage.setItem(LICENSE_KEY, JSON.stringify(l)); else localStorage.removeItem(LICENSE_KEY); }catch(e){} }
 /* Migrazione una tantum dalle versioni precedenti: la licenza stava in
    DB.settings.sync.license (legata al team_id). Se c'era, la si sposta qui cosi'
@@ -5391,7 +5437,7 @@ function showLockedFeature(feature){
     const lvl=licenseAccessLevel();
     let text;
     const f=`<b style="color:var(--text)">${feature}</b>`;
-    if(lvl==='checking' || LIC_VERIFYING){ toast('Verifica della licenza in corso: riprova tra un istante.','info'); return; }
+    if(lvl==='checking' || licAwaitingServer()){ toast('Verifica della licenza in corso: riprova tra un istante.','info'); return; }
     if(lvl==='trial') text=`${f}: non disponibile nella prova gratuita. Scrivici per attivare l'abbonamento annuale e sbloccarla.`;
     else if(lvl==='pending') text=`${f}: il tuo profilo è in attesa di attivazione, sarà disponibile appena l'abbonamento sarà attivo.`;
     else if(trialExpired()) text=`${f}: la prova gratuita è terminata, serve l'abbonamento annuale.`;
@@ -5413,44 +5459,92 @@ function requireFull(feature){
 /* ---------- controllo licenza online: solo per un account coach collegato ----------
    Nuova RPC get_my_license() (licenza per utente o per la squadra che possiede);
    se non e' ancora installata sul server si ripiega su get_license_status(team_id). */
-function isMissingRpc(e){ const m=((e&&(e.message||''))+' '+((e&&e.code)||'')).toLowerCase(); return m.includes('pgrst202') || m.includes('could not find the function') || m.includes('does not exist'); }
-let _licCheckPromise=null;
+/* Solo "funzione RPC non installata" fa ripiegare sul vecchio controllo per team_id:
+   un errore interno alla funzione (es. 'relation ... does not exist') non deve far
+   leggere la licenza di una squadra salvata sul dispositivo al posto di quella dell'account. */
+function isMissingRpc(e){ const m=((e&&(e.message||''))+' '+((e&&e.code)||'')).toLowerCase(); return m.includes('pgrst202') || m.includes('could not find the function') || m.includes('42883'); }
+function isAuthError(e){ const m=((e&&(e.message||''))+' '+((e&&e.code)||'')+' '+((e&&e.status)||'')).toLowerCase(); return m.includes('pgrst301') || m.includes('pgrst303') || m.includes('jwt') || m.includes('401'); }
+async function refreshAuthToken(){
+    try{ const sb=await AiRIMSync.getClient(); const r=await sb.auth.refreshSession(); return !!(r && r.data && r.data.session); }catch(e){ return false; }
+}
+let _licCheckPromise=null, _licCheckForced=false;
+/* Ritorna 'ok' (il server ha risposto e lo stato salvato e' stato sostituito),
+   'error' (server non raggiungibile: resta lo stato salvato, NON segnato come controllato)
+   oppure 'skip' (nessun account da verificare o controllo recente). */
 async function checkLicenseOnline(force){
-    if(typeof AiRIMSync==='undefined'){ if(LIC_VERIFYING){ LIC_VERIFYING=false; checkLicenseLock(); } return; }
-    if(_licCheckPromise) return _licCheckPromise;
+    if(typeof AiRIMSync==='undefined'){ if(LIC_VERIFYING){ LIC_VERIFYING=false; checkLicenseLock(); } return 'skip'; }
+    if(_licCheckPromise){
+        /* Una richiesta esplicita (bottone, login, avvio) non viene assorbita da un
+           controllo non forzato gia' in corso che potrebbe non interrogare il server. */
+        if(!force || _licCheckForced) return _licCheckPromise;
+        try{ await _licCheckPromise; }catch(e){}
+        return checkLicenseOnline(true);
+    }
+    _licCheckForced=!!force;
     _licCheckPromise=(async()=>{
         const session=await refreshCoachSession();
-        let l=getLic();
-        if(!session && !(l && l.legacy)) return;           // nessun account: prova locale, nulla da verificare
-        if(session && (!l || l.email!==COACH_EMAIL)){
-            if(l && !l.email){ l=Object.assign({}, l, {email:COACH_EMAIL, legacy:false}); }   // licenza migrata: si collega all'account senza perdere lo stato
-            else { l={email:COACH_EMAIL, status:'checking', expiresAt:null, activatedAt:null, checkedAt:null, lastSuccessAt:null}; }
+        let l=readLic();
+        if(!session && !(l && l.legacy)) return 'skip';     // nessun account: prova locale, nulla da verificare
+        if(session && (!l || !licBelongsHere(l) || l.email!==COACH_EMAIL)){
+            if(l && !l.email && licBelongsHere(l)){ l=Object.assign({}, l, {email:COACH_EMAIL, legacy:false}); }   // licenza migrata: si collega all'account
+            else { l={email:COACH_EMAIL, status:'checking', expiresAt:null, activatedAt:null, checkedAt:null, lastSuccessAt:null}; }   // altro account/squadra: stato salvato ignorato
             setLic(l); force=true;
         }
         const now=Date.now();
-        if(!force && l.checkedAt && (now-l.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
+        if(!force && LIC_CONFIRMED && l.checkedAt && (now-l.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return 'skip';
         try{
             let res;
             if(session){
                 try{ res=await AiRIMSync.getMyLicense(); }
-                catch(e){ if(!isMissingRpc(e)) throw e; res=undefined; }
+                catch(e){
+                    if(isMissingRpc(e)) res=undefined;
+                    else if(isAuthError(e) && await refreshAuthToken()) res=await AiRIMSync.getMyLicense();   // token scaduto: si rinnova e si riprova una volta
+                    else throw e;
+                }
             }
             if(res===undefined){
                 const sync=DB.settings.sync;
                 res = sync.teamId ? await AiRIMSync.getLicenseStatus(sync.teamId, sync.clubId||null) : null;
             }
-            setLic(Object.assign({}, l, {email:session?COACH_EMAIL:null, legacy:!session,
+            /* La risposta del server sostituisce TUTTO lo stato salvato (niente campi ereditati). */
+            setLic({email:session?COACH_EMAIL:null, legacy:!session, teamId:currentTeamId(),
                 status:res?res.status:'unknown', expiresAt:res?res.expires_at:null,
-                activatedAt:res?res.activated_at:(l.activatedAt||null), checkedAt:now, lastSuccessAt:now}));
+                activatedAt:res?res.activated_at:null, checkedAt:now, lastSuccessAt:now});
+            LIC_CONFIRMED=true; LIC_LAST_SERVER_AT=now; LIC_LAST_ERROR_AT=0;
+            return 'ok';
         }catch(e){
-            setLic(Object.assign({}, l, {checkedAt:now}));   // stato noto resta quello precedente
+            console.warn('[licenza] verifica non riuscita, resta lo stato salvato:', e&&(e.message||e));
+            LIC_LAST_ERROR_AT=Date.now();
+            return 'error';   // stato salvato invariato e NON marcato come appena controllato
         }
     })();
-    try{ await _licCheckPromise; } finally { _licCheckPromise=null; LIC_VERIFYING=false; }
+    renderSyncSettings(); checkLicenseLock();   // subito "verifica in corso…" nel riquadro e nella pillola
+    let outcome='error';
+    try{ outcome=await _licCheckPromise; } finally { _licCheckPromise=null; _licCheckForced=false; LIC_VERIFYING=false; }
     renderSyncSettings();
     checkLicenseLock();
     refreshLicenseDependentViews();
+    return outcome;
 }
+/* Bottone "Ricontrolla licenza" (Impostazioni e schermate di blocco): chiede di nuovo
+   lo stato al server e sostituisce quello salvato, senza reinstallare l'app. */
+async function recheckLicense(){
+    toast('Verifica in corso…','info');
+    const r=await checkLicenseOnline(true);
+    const l=getLic();
+    if(r==='ok'){
+        if(licIsActive(l)) toast(`Licenza attiva${l.expiresAt?' fino al '+new Date(l.expiresAt).toLocaleDateString('it-IT'):''}.`,'success');
+        else toast(l&&l.activatedAt ? 'Il server conferma: licenza scaduta.' : 'Il server conferma: licenza non ancora attiva.','danger');
+    }else if(r==='error') toast('Server non raggiungibile: controlla la connessione e riprova.','danger');
+    else if(!COACH_EMAIL) toast('Accedi con il tuo account per verificare la licenza.','info');
+}
+/* Android/iOS riprendono l'app installata senza ricaricarla: al rientro (dopo 10
+   minuti) e al ritorno della rete si richiede di nuovo lo stato al server. */
+document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible' && readLic() && Date.now()-LIC_LAST_SERVER_AT>10*60*1000) checkLicenseOnline(true);
+});
+window.addEventListener('online',()=>{ if(readLic()) checkLicenseOnline(true); else checkLicenseLock(); });
+window.addEventListener('offline',()=>{ checkLicenseLock(); renderSyncSettings(); });
 function refreshLicenseDependentViews(){
     updateTrialBadge();
     const cur=document.querySelector('.section.active');
@@ -5460,18 +5554,20 @@ function refreshLicenseDependentViews(){
 }
 function renderLicenseBadge(){
     const lic=getLic();
-    const recheckBtn=`<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla ora</button>`;
+    const recheckBtn=`<button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="recheckLicense()"><i class="fa-solid fa-arrows-rotate"></i> Ricontrolla licenza</button>`;
     if(!lic){
         const lvl=licenseAccessLevel();
-        if(lvl==='trial') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-hourglass-half"></i> Prova gratuita: ${trialDaysLeft()} giorni rimasti. La sincronizzazione online si attiva con l'abbonamento.</p>`;
-        if(lvl==='readonly') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-triangle-exclamation"></i> Prova gratuita terminata.</p>`;
-        return '';
+        const accBtn = COACH_EMAIL ? recheckBtn : '';   // account collegato senza stato salvato: si puo' chiedere al server
+        if(lvl==='trial') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-hourglass-half"></i> Prova gratuita: ${trialDaysLeft()} giorni rimasti. La sincronizzazione online si attiva con l'abbonamento.</p>${accBtn}`;
+        if(lvl==='readonly') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-triangle-exclamation"></i> Prova gratuita terminata.</p>${accBtn}`;
+        return accBtn ? `<div style="margin-top:12px">${accBtn}</div>` : '';
     }
-    if(LIC_VERIFYING || lic.status==='checking'){
-        return `<div class="hint" style="margin-top:12px"><i class="fa-solid fa-spinner fa-spin"></i> Licenza: verifica in corso…</div>${recheckBtn}`;
+    if(lic.status==='checking' || licAwaitingServer()){
+        const busy = LIC_VERIFYING || !!_licCheckPromise;
+        return `<div class="hint" style="margin-top:12px"><i class="fa-solid ${busy?'fa-spinner fa-spin':'fa-circle-info'}"></i> Licenza: ${busy?'verifica in corso…':('non ancora verificata'+(LIC_LAST_ERROR_AT?' (server non raggiungibile)':''))}</div>${recheckBtn}`;
     }
     const pro=licIsActive(lic);
-    const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleDateString('it-IT'):'—';
+    const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
     const label = pro ? 'attiva' : (lic.activatedAt ? 'scaduta' : 'in attesa di attivazione');
     return `<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${pro?'rgba(34,197,94,.1)':'rgba(240,70,60,.1)'};border:1px solid ${pro?'rgba(34,197,94,.3)':'rgba(240,70,60,.3)'}">
         <b style="color:${pro?'var(--brand)':'var(--flame)'}"><i class="fa-solid ${pro?'fa-circle-check':'fa-triangle-exclamation'}"></i> Licenza: ${label}</b>
@@ -5510,7 +5606,7 @@ function guardWrite(){
     const now=Date.now();
     if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
         const lvl=licenseAccessLevel();
-        if(lvl==='checking' || LIC_VERIFYING){ toast('Verifica della licenza in corso: riprova tra un istante.','info'); return false; }
+        if(lvl==='checking' || licAwaitingServer()){ toast('Verifica della licenza in corso: riprova tra un istante.','info'); return false; }
         toast(lvl==='pending' ? 'Profilo in attesa di attivazione: modifica non disponibile.'
             : (trialExpired() ? 'Prova terminata: sola lettura.' : 'Licenza scaduta: modifica disabilitata.'), 'danger');
     }
@@ -6100,7 +6196,7 @@ setTimeout(()=>refreshCoachSession().then(async session=>{
     renderSyncSettings();
     /* Gestione_Trial_Licenze: prima si verifica la licenza (account o licenza legacy),
        poi — solo se attiva — eventuale pull/self-heal verso il server. */
-    await checkLicenseOnline(licenseAccessLevel()!=='full');
+    await checkLicenseOnline(true);   /* LicenzaStale: all'avvio si chiede SEMPRE al server, anche se il salvato dice "attiva" */
     if(!session) return;
     ensurePolicyAccepted(()=>{});
     if(!canSync()) return;   // nessuna scrittura online senza licenza attiva
