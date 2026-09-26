@@ -610,9 +610,9 @@ const ONB_STEPS = [
   {icon:'fa-id-badge',title:'Guarda le card',body:'Ogni giocatore ottiene una card a tier — GOAT, Mythic, Diamond, Gold, Silver — in base al rendimento stagionale.'},
   {icon:'fa-chalkboard',title:'Spiega gli schemi in spogliatoio',body:'La Lavagnetta Tattica parte già dalla formazione consigliata: trascina i gettoni e disegna schemi e traiettorie sul campo.'},
   {icon:'fa-stopwatch',title:'Misura sprint e salto da un video',body:'In Test Fisici calcoli tempo di reazione, velocità e salto verticale da un video con la telecamera ferma — calibrazione manuale, nessuna intelligenza artificiale.'},
-  {icon:'fa-share-nodes',title:'Condividi con il Player',body:"Da Roster apri un giocatore e tocca Condividi: gli mandi file o codice con card, statistiche e formazione consigliata. Aggiorna e reinvia dopo ogni partita o allenamento. Il giocatore può a sua volta rimandarti le sue statistiche mentali (Mental Gym) da reimportare."},
+  {icon:'fa-share-nodes',title:'Condividi con il Player',body:"Da Roster apri un giocatore e tocca Condividi: gli mandi file o codice con card, statistiche e formazione consigliata. Aggiorna e reinvia dopo ogni partita o allenamento, oppure — con l'abbonamento — usa «Sincronizza» in Impostazioni → Salvataggio online. Il giocatore può a sua volta rimandarti le sue statistiche mentali (Mental Gym) da reimportare."},
   {icon:'fa-wand-magic-sparkles',title:"C'è altro da scoprire",body:"Dentro la scheda di ogni giocatore trovi anche il radar comparativo e l'export PDF \"Scheda Crescita\"; in Impostazioni ci sono l'Officina Card e il motore voto avanzato (protetto da password)."},
-  {icon:'fa-database',title:"L'app funziona offline",body:"Tutti i dati restano sul tuo dispositivo, non in un cloud. Fai backup regolari da Impostazioni per non perderli se cambi telefono o disinstalli l'app."}
+  {icon:'fa-database',title:"L'app funziona offline",body:"Tutti i dati restano sul tuo dispositivo. Usa «Scarica backup» in Impostazioni → Backup sul dispositivo per non perderli se cambi telefono o disinstalli l'app; con l'abbonamento puoi anche salvarne una copia online con «Sincronizza»."}
 ];
 const ONB_DEMO_STEPS = [
   {icon:'fa-hourglass-half',title:`${DEMO_DAYS} giorni per provarla`,body:`Usa l'app con la tua squadra vera per ${DEMO_DAYS} giorni. Alla scadenza scarichi un backup dei dati: le foto restano sul telefono e le ricarichi nella versione completa.`},
@@ -730,8 +730,9 @@ const CTX_TOURS = {
     {sel:'#cal-day', title:'Eventi del giorno', text:"Qui gestisci l'evento selezionato, incluso il risultato a set delle partite."}
   ],
   backup: [
-    {sel:'#ctx-backup-export', title:'Backup dei dati', text:"Scarica qui un file con tutti i dati: rosa, calendario, statistiche, presenze. Fallo regolarmente — l'app è offline, i dati vivono solo su questo dispositivo."},
-    {sel:'#ctx-backup-import', title:'Ripristina o trasferisci', text:'Carica un backup per ripristinare i dati o spostarli su un altro dispositivo.'},
+    {sel:'#ctx-backup-export', title:'Backup sul dispositivo', text:"«Scarica backup» salva un file con tutti i dati: rosa, calendario, statistiche, presenze. Fallo regolarmente — senza salvataggio online i dati vivono solo su questo dispositivo."},
+    {sel:'#ctx-backup-import', title:'Ripristina backup', text:"Ricarica un file di backup per recuperare i dati o spostarli su un altro dispositivo. Disponibile con l'abbonamento attivo."},
+    {sel:'#ctx-sync', title:'Salvataggio online', text:"«Sincronizza» salva una copia sul server e aggiorna l'app dei giocatori. Disponibile con l'abbonamento attivo."},
     {sel:'#ctx-backup-guide', title:'Rivedi la guida', text:'Puoi riaprire il tutorial introduttivo in qualsiasi momento da qui.'}
   ],
   presenze: [
@@ -876,7 +877,7 @@ function checkDemoLock(){
     <div class="dexp-ic"><i class="fa-solid fa-gear"></i></div>
     <h2>Impostazioni</h2>
     <p>Prova terminata. Scarica i tuoi dati; ti invieremo la versione completa dove importare il backup.</p>
-    <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup dati</button>
+    <button class="btn btn-accent" style="width:100%;margin-top:1.2rem" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button>
     <div class="dexp-contact">Per attivare la versione completa scrivici:</div>
     <div class="dexp-acts">${contactButtonsHTML()}</div>
   </div>`;
@@ -884,6 +885,13 @@ function checkDemoLock(){
 }
 function checkOnboardingAndDemo(){
   migrateLegacyLicense();
+  /* FixBackup: con un account/licenza salvati, finche' il server non risponde si
+     mostra solo "Verifica licenza…" (mai uno stato negativo non confermato).
+     Rete di sicurezza: dopo 12 s si torna comunque all'ultimo stato salvato. */
+  if(getLic() && licenseAccessLevel()!=='full'){
+    LIC_VERIFYING=true;
+    setTimeout(()=>{ if(LIC_VERIFYING){ LIC_VERIFYING=false; checkLicenseLock(); renderSyncSettings(); } }, 12000);
+  }
   /* Installazioni esistenti (dati o tutorial gia' presenti) senza licenza e senza
      data di prova: la prova parte da ora, invece di restare "tutto libero". */
   if(licenseAccessLevel()==='none' && (localStorage.getItem('vt_tutorial_done') || (DB.players&&DB.players.length) || (DB.events&&DB.events.length))) startTrial();
@@ -918,6 +926,25 @@ function checkLicenseLock(){
   const lockEl=document.getElementById('lic-lock-overlay');
   const bannerEl=document.getElementById('lic-ro-banner');
   const roKind = trialExpired() ? 'trial' : 'license';
+  /* Stato neutro: verifica in corso all'avvio (solo per stati della licenza, non per la
+     prova) oppure account appena collegato senza risposta del server. */
+  const neutral = lvl==='checking' || (LIC_VERIFYING && (lvl==='pending' || (lvl==='readonly' && roKind==='license')));
+  const pillEl=document.getElementById('lic-check-pill');
+  if(!neutral && pillEl) pillEl.remove();
+  if(neutral){
+    if(lockEl) lockEl.remove();
+    if(bannerEl) bannerEl.remove();
+    const verifying = LIC_VERIFYING || !!_licCheckPromise;
+    const html = verifying
+      ? `<i class="fa-solid fa-spinner fa-spin"></i> Verifica licenza…`
+      : `<i class="fa-solid fa-circle-info"></i> Licenza non ancora verificata <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="toast('Verifica in corso…','info');checkLicenseOnline(true)"><i class="fa-solid fa-arrows-rotate"></i> Riprova</button>`;
+    let pill=pillEl;
+    if(!pill){ pill=document.createElement('div'); pill.id='lic-check-pill';
+      pill.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom));z-index:9990;display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:30px;background:var(--surface-2,#141D31);border:1px solid var(--line,#22304E);color:var(--muted,#8395B4);font-size:.8rem;font-weight:600;box-shadow:0 8px 24px -10px rgba(0,0,0,.6);';
+      document.body.appendChild(pill); }
+    if(pill.dataset.html!==html){ pill.innerHTML=html; pill.dataset.html=html; }
+    return;
+  }
   if(lvl!=='pending' && lockEl) lockEl.remove();
   if(bannerEl && (lvl!=='readonly' || bannerEl.dataset.kind!==roKind)) bannerEl.remove();
   if(lvl==='pending' && !lockEl){
@@ -1462,18 +1489,17 @@ function buildLayout(){
     <!-- BACKUP -->
     <section id="backup" class="section">
         <div class="page-head"><div><div class="eyebrow">Configurazione</div><h2><i class="fa-solid fa-gear" style="font-size:1.4rem;color:var(--brand);margin-right:8px"></i>Impostazioni</h2>
-            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — esporta un backup per non perderli e per spostarli su un altro dispositivo.</p></div>
+            <p class="sub">Squadra, aspetto, aggiornamenti e dati: qui trovi tutti i comandi dell'app. I dati vivono in questo browser — usa «Scarica backup» per non perderli e per spostarli su un altro dispositivo.</p></div>
             <button class="ctx-help-btn" onclick="ctxStart('backup')" title="Guida rapida"><i class="fa-solid fa-question"></i></button></div>
-        <div class="card" id="ctx-backup-export"><h3><i class="fa-solid fa-file-export"></i> Esporta</h3>
-            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Scarica tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) in un unico file JSON. Salva i dati, non le foto: quelle restano sul dispositivo.</p>
-            <div id="backup-status" style="margin-bottom:1rem"></div>
-            <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button></div>
-        ${DEMO_BUILD?'':`<div class="card" id="ctx-backup-import"><h3><i class="fa-solid fa-file-import"></i> Importa</h3>
-            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Carica un file di backup. Attenzione: sovrascrive i dati attuali.</p>
+        <div class="card" id="ctx-backup-export"><h3>📱 Backup sul dispositivo</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">«Scarica backup» salva in un unico file tutti i dati (rosa, calendario, statistiche, presenze, rotazioni) — non le foto, che restano sul dispositivo. «Ripristina backup» ricarica un file e sovrascrive i dati attuali.</p>
             <input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">
-            <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()"><i class="fa-solid fa-upload"></i> Carica backup</button></div>`}
-        <div class="card"><h3><i class="fa-solid fa-cloud"></i> Sincronizza online</h3>
-            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Codice squadra e PIN dei giocatori sincronizzati: il giocatore li usa nella sua app per accedere senza file da inviare. Sincronizza un giocatore dalla sua scheda (Condividi → Sincronizza online).</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem">
+                <button class="btn btn-accent" onclick="exportData()"><i class="fa-solid fa-download"></i> Scarica backup</button>
+                ${DEMO_BUILD?'':`<button class="btn btn-ghost" id="ctx-backup-import" onclick="restoreBackupClick()"><i class="fa-solid fa-upload"></i> Ripristina backup</button>`}
+            </div>
+            <div id="backup-status"></div></div>
+        <div class="card" id="ctx-sync"><h3>☁️ Salvataggio online</h3>
             <div id="sync-settings-card"></div></div>
         <div class="card"><h3><i class="fa-solid fa-brain"></i> Statistiche mentali</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Mental Gym → "Invia al mister") per aggiornare i suoi valori Riflessi/Percezione sulla card.</p>
@@ -2008,11 +2034,12 @@ function renderDashboard(){
     /* Visibile in ogni stato: senza licenza attiva i bottoni aprono il modale di blocco (requireFull). */
     const syncCard = (typeof AiRIMSync!=='undefined') ? `
         <div class="card" style="margin-top:1.2rem;display:flex;flex-wrap:wrap;align-items:center;gap:12px;justify-content:space-between">
-            <div><h3 style="margin:0 0 2px"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizzazione online</h3>
-                <span class="hint">Backup e ripristino della squadra su Supabase</span></div>
+            <div><h3 style="margin:0 0 2px">☁️ Salvataggio online</h3>
+                <span class="hint">Salva una copia sul server e aggiorna l'app dei giocatori</span>
+                <div class="hint" style="margin-top:2px">${lastOnlineSaveText()}</div></div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-ghost btn-sm js-sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
-                <button class="btn btn-ghost btn-sm js-import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server</button>
+                <button class="btn btn-accent btn-sm js-sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza</button>
+                <button class="btn btn-ghost btn-sm js-import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Ripristina dal server</button>
             </div>
         </div>` : '';
 
@@ -4321,8 +4348,21 @@ function logBackupDone(){
     log.count=(log.count||0)+1;
     try{ localStorage.setItem(BACKUP_LOG_KEY, JSON.stringify(log)); }catch(e){}
 }
+/* "Ripristina backup": lucchetto senza licenza attiva; il tocco spiega che serve
+   l'abbonamento (stessi bottoni di contatto), altrimenti apre la scelta del file. */
+function restoreBackupClick(){
+    if(!canImport()){ showLockedFeature('Ripristina backup'); return; }
+    document.getElementById('import-file').click();
+}
+function renderRestoreButton(){
+    const b=document.getElementById('ctx-backup-import'); if(!b) return;
+    const locked=!canImport();
+    b.innerHTML=`<i class="fa-solid ${locked?'fa-lock':'fa-upload'}"></i> Ripristina backup`;
+    b.title=locked?"Disponibile con l'abbonamento attivo":'';
+}
 function renderBackupStatus(){
     const box=document.getElementById('backup-status'); if(!box) return;
+    renderRestoreButton();
     const log=getBackupLog();
     if(!log.last){
         box.innerHTML=`<div class="pill" style="background:rgba(240,70,60,.16);color:var(--flame);display:inline-flex;align-items:center;gap:6px;padding:7px 12px">
@@ -4337,11 +4377,10 @@ function renderBackupStatus(){
             <i class="fa-solid ${late?'fa-triangle-exclamation':'fa-circle-check'}"></i> Ultimo backup: ${when} (${fmtDateLong(log.last.slice(0,10))})</div>
         <div style="color:var(--muted);font-size:.82rem;margin-top:6px">${log.count} backup effettuat${log.count===1?'o':'i'} in totale.${late?` Sono passati ${days} giorni: fanne uno nuovo.`:''}</div>`;
 }
-/* Prompt: backup fisico che sincronizza anche online — se il coach e' loggato e con
-   licenza attiva, ogni export locale (manuale o dal promemoria giornaliero, che
-   passa da qui) aggiorna anche team_backups, stessa chiamata gia' usata da
-   "Sincronizza tutti". Best-effort: il file scaricato non dipende mai dall'esito
-   di questa chiamata, solo un avviso se la copia online non si aggiorna. */
+/* FixBackup: "Scarica backup" salva SOLO il file sul dispositivo, con un unico
+   messaggio. Il caricamento online partiva subito dopo il download e su iPad
+   (Safari) veniva interrotto dal download stesso ("TypeError: Load failed").
+   La copia completa sul server resta dentro "Sincronizza" (uploadTeamBackupOnline). */
 function exportData(){
     const blob=new Blob([JSON.stringify(DB,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob);const a=document.createElement('a');
@@ -4350,18 +4389,32 @@ function exportData(){
     a.href=url;a.download=`${teamSlug}-Airim-backup-${d}.json`;a.click();URL.revokeObjectURL(url);
     logBackupDone(); renderBackupStatus();
     toast('Backup scaricato');
-    /* copia online del backup SOLO con licenza attiva; il file locale si scarica sempre */
-    if(COACH_EMAIL && canSync() && DB.settings.sync && DB.settings.sync.teamId && typeof AiRIMSync!=='undefined'){
-        AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
-            const detail=syncErrorDetail(e);
-            toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
-        });
-    }
+}
+/* Copia completa del DB sul server (team_backups): solo dentro la sincronizzazione.
+   Best-effort: un errore qui non annulla la sync dei giocatori, ma viene segnalato. */
+function uploadTeamBackupOnline(){
+    if(!COACH_EMAIL || !canSync() || typeof AiRIMSync==='undefined') return Promise.resolve(false);
+    return AiRIMSync.upsertMyTeamBackup(DB).then(()=>{
+        DB.settings.sync.lastOnlineSaveAt=new Date().toISOString(); saveSystem();
+        renderSyncSettings();
+        const d=document.getElementById('dashboard'); if(d && d.classList.contains('active')) renderDashboard();
+        return true;
+    }).catch(e=>{
+        const detail=syncErrorDetail(e);
+        toast(detail?`Copia online non aggiornata — ${detail}`:'Copia online non aggiornata: verifica la connessione','warning');
+        return false;
+    });
+}
+function lastOnlineSaveText(){
+    const t=DB.settings.sync && DB.settings.sync.lastOnlineSaveAt;
+    if(!t) return 'Ultimo salvataggio online: mai';
+    const d=new Date(t);
+    return `Ultimo salvataggio online: ${d.toLocaleDateString('it-IT')} alle ${d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`;
 }
 function importData(e){
     /* Import consentito SOLO con licenza attiva: impedisce di reinstallare a fine prova
        e ricaricare i dati per avere altri giorni. Controllo qui dentro, non solo sul bottone. */
-    if(!canImport()){ e.target.value=''; showLockedFeature('Importa backup'); return; }
+    if(!canImport()){ e.target.value=''; showLockedFeature('Ripristina backup'); return; }
     const file=e.target.files[0];if(!file)return;
     const reader=new FileReader();
     reader.onload=()=>{
@@ -4370,11 +4423,11 @@ function importData(e){
             /* e' un backup AiRIM se e' un oggetto con la rosa; tutti gli altri campi mancanti
                ricevono un default vuoto in normalizeDB() (via ensureDBDefaults) */
             if(!isPlainObj(data) || !Array.isArray(data.players)) throw new Error('formato');
-            confirmAction('Importare questo backup? I dati attuali verranno sovrascritti.',()=>{
+            confirmAction('Ripristinare questo backup? I dati attuali verranno sovrascritti.',()=>{
                 if(!canImport()) return;   // stato cambiato mentre il file era aperto
                 const prevDB=JSON.stringify(DB);
                 try{ DB=data; ensureDBDefaults(); }
-                catch(err){ DB=JSON.parse(prevDB); ensureDBDefaults(); toast('Backup non importato: file danneggiato. I dati attuali non sono stati toccati.','danger'); return; }
+                catch(err){ DB=JSON.parse(prevDB); ensureDBDefaults(); toast('Backup non ripristinato: file danneggiato. I dati attuali non sono stati toccati.','danger'); return; }
                 if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza non viaggia nei backup
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
@@ -4387,7 +4440,7 @@ function importData(e){
                 if(DB.settings.sync && DB.settings.sync.teamCode) DB.settings.sync.importedTeamPending=true;
                 save();renderTeamName();
                 try{ go('dashboard'); }catch(err){ console.error('render dopo import',err); }
-                toast('Backup importato con successo');
+                toast('Backup ripristinato');
                 relinkTeamAfterImport();
             });
         }catch(err){toast('File non valido o danneggiato','danger');}
@@ -4424,7 +4477,7 @@ function showBackupReminder(){
     <div class="modal-body">
       <p class="hint">Se cancelli i dati del telefono o disinstalli l'app, perderai tutto ciò che non hai salvato.</p>
       <div style="display:flex;gap:8px;margin-top:1.2rem;flex-wrap:wrap">
-        <button class="btn btn-accent" style="flex:1" onclick="backupReminderNow()"><i class="fa-solid fa-download"></i> Fai backup ora</button>
+        <button class="btn btn-accent" style="flex:1" onclick="backupReminderNow()"><i class="fa-solid fa-download"></i> Scarica backup</button>
         <button class="btn btn-ghost" style="flex:1" onclick="dismissBackupReminder()">Non oggi</button>
       </div>
     </div>`);
@@ -4438,7 +4491,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    Il nuovo codice si scarica in background e resta in attesa;
    l'utente decide QUANDO applicarlo. I dati (localStorage) restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v75';   /* combacia col CACHE_VERSION di sw.js */
+const APP_VERSION='volleyteam-v76';   /* combacia col CACHE_VERSION di sw.js */
 let swReg=null, pwaRefreshing=false;
 function pwaCSS(){
   if(document.getElementById('pwa-css')) return;
@@ -4726,9 +4779,9 @@ async function sharePlayer(id){
         <textarea id="share-code" readonly style="width:100%;height:90px;margin-top:6px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:10px;font-size:.72rem;resize:none;font-family:monospace">${code}</textarea>
         <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="copyShare()"><i class="fa-solid fa-copy"></i> Copia codice</button>
         <div style="border-top:1px solid var(--line,rgba(255,255,255,.12));margin-top:14px;padding-top:14px">
-            <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">Oppure sincronizza online</label>
-            <p class="hint" style="margin:4px 0 8px">Il giocatore accede da solo dalla sua app con il codice squadra e il suo PIN — nessun file da inviare.</p>
-            <button class="btn btn-ghost" style="width:100%" id="sync-online-btn" onclick="syncPlayerOnline(${id})"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza online</button>
+            <label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600">☁️ Oppure salvataggio online</label>
+            <p class="hint" style="margin:4px 0 8px">Aggiorna online solo questo giocatore: accede dalla sua app con il codice squadra e il suo PIN — nessun file da inviare. Per tutta la squadra usa «Sincronizza» in Impostazioni → Salvataggio online.</p>
+            <button class="btn btn-ghost" style="width:100%" id="sync-online-btn" onclick="syncPlayerOnline(${id})"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza solo questo giocatore</button>
             <div id="sync-online-status" style="margin-top:8px;font-size:.82rem;color:var(--muted)"></div>
         </div>
         ${DEMO_BUILD?`
@@ -5119,10 +5172,7 @@ async function syncPlayerOnline(id){
         // non solo le card giocatore. Best-effort: non deve mai far fallire il
         // sync PIN esistente se questa chiamata in piu' va storta, ma l'utente
         // deve comunque sapere se il backup non e' stato aggiornato e perche'.
-        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
-            const detail=syncErrorDetail(e);
-            toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
-        });
+        uploadTeamBackupOnline();
         if(statusEl) statusEl.innerHTML=`<span style="color:var(--brand)"><i class="fa-solid fa-circle-check"></i> Sincronizzato.</span> Codice squadra <b>${escapeHtml(sync.teamCode)}</b> · PIN di ${escapeHtml((p.name||'').split(' ')[0])}: <b>${escapeHtml(p.pin)}</b>`;
         toast('Profilo sincronizzato online');
         renderSyncSettings();
@@ -5132,7 +5182,7 @@ async function syncPlayerOnline(id){
         if(statusEl) statusEl.innerHTML=`Sync non riuscita: verifica la connessione e riprova.${detail?`<br><small style="opacity:.7">${escapeHtml(detail)}</small>`:''}`;
         toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita','danger');
     }finally{
-        if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza online'; }
+        if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza solo questo giocatore'; }
     }
     });
 }
@@ -5159,17 +5209,14 @@ async function syncAllPlayersOnline(){
             }catch(e){ fail++; }
         }
         sync.hasEverSynced=true; save();
-        if(COACH_EMAIL) AiRIMSync.upsertMyTeamBackup(DB).catch(e=>{
-            const detail=syncErrorDetail(e);
-            toast(detail?`Backup online non aggiornato — ${detail}`:'Backup online non aggiornato: verifica la connessione','warning');
-        });
+        uploadTeamBackupOnline();
         toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
         checkLicenseOnline(true);
     }catch(e){
         const detail=syncErrorDetail(e);
         toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita: verifica la connessione','danger');
     }
-    btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti'; });
+    btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza'; });
     renderSyncSettings();
     if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
     });
@@ -5218,23 +5265,23 @@ async function pullTeamFromServer(){
 }
 /* ---------- bottone "Importa squadra dal server" (Impostazioni) ---------- */
 function importTeamFromServer(){
-    if(!requireFull('Importa squadra dal server')) return;
+    if(!requireFull('Ripristina dal server')) return;
     requireCoachAccount(async()=>{
         const doPull=async()=>{
-            const btns=importServerBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Importazione…'; });
+            const btns=importServerBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Ripristino…'; });
             try{
                 const ok=await pullTeamFromServer();
-                if(!ok) toast('Nessun backup trovato sul server per questo account.','warning');
+                if(!ok) toast('Nessuna copia trovata sul server per questo account.','warning');
             }catch(e){
                 const detail=syncErrorDetail(e);
-                toast(detail?`Importazione fallita — ${detail}`:'Importazione fallita: verifica la connessione','danger');
+                toast(detail?`Ripristino fallito — ${detail}`:'Ripristino fallito: verifica la connessione','danger');
             }finally{
-                btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server'; });
+                btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-down"></i> Ripristina dal server'; });
                 if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
             }
         };
         if(DB.players.length){
-            confirmAction('Importare la squadra salvata online sovrascriverà TUTTI i dati locali di questo dispositivo (rosa, scout, calendario). Continuare?', doPull);
+            confirmAction('Ripristinare la copia salvata online sovrascriverà TUTTI i dati locali di questo dispositivo (rosa, scout, calendario). Continuare?', doPull);
         }else{
             doPull();
         }
@@ -5250,7 +5297,7 @@ function renderSyncSettings(){
     const codeBlock = sync.teamCode
         ? `<div class="pill" style="background:rgba(34,197,94,.14);color:var(--brand);display:inline-flex;align-items:center;gap:6px;padding:7px 12px;font-family:'Outfit',sans-serif;font-weight:800;letter-spacing:1px">${escapeHtml(sync.teamCode)}</div>
            <span class="hint" style="margin-left:8px">codice squadra — il giocatore lo inserisce insieme al suo PIN</span>`
-        : `<p class="hint">Il codice squadra viene generato al primo "Sincronizza online" da una scheda giocatore.</p>`;
+        : `<p class="hint">Il codice squadra viene generato al primo «Sincronizza».</p>`;
     const accBlock = COACH_EMAIL
         ? `<div class="hint" style="margin-top:10px"><i class="fa-solid fa-user-shield"></i> Account: <b>${COACH_EMAIL}</b> <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="coachSignOut()">Esci</button></div>`
         : `<div class="hint" style="margin-top:10px">Nessun account collegato. <button class="btn btn-ghost btn-sm" onclick="openCoachAccountModal()"><i class="fa-solid fa-user-shield"></i> Accedi / crea account</button></div>`;
@@ -5259,12 +5306,14 @@ function renderSyncSettings(){
         ? `<div class="hint" style="margin-top:6px"><i class="fa-solid fa-file-shield"></i> Termini: ${COACH_POLICY? `accettati (${COACH_POLICY.policy_version}) il ${new Date(COACH_POLICY.accepted_at).toLocaleDateString('it-IT')}` : 'in verifica…'} <button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="openPolicyViewer()">Rileggi</button></div>`
         : `<div class="hint" style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="openPolicyViewer()"><i class="fa-solid fa-file-shield"></i> Leggi Privacy Policy e Termini</button></div>`;
     const licBlock = renderLicenseBadge();
-    box.innerHTML = `${codeBlock}
-        <div style="margin-top:14px">${pinRows}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <button class="btn btn-ghost btn-sm js-sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza tutti</button>
-          <button class="btn btn-ghost btn-sm js-import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Importa squadra dal server</button>
-        </div>
+    box.innerHTML = `
+        <button class="btn btn-accent js-sync-all-btn" onclick="syncAllPlayersOnline()"><i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza</button>
+        <p class="hint" style="margin:8px 0 2px">Salva una copia sul server e aggiorna l'app dei giocatori</p>
+        <p class="hint" style="margin:0 0 12px"><i class="fa-solid fa-clock-rotate-left"></i> ${lastOnlineSaveText()}</p>
+        <button class="btn btn-ghost btn-sm js-import-server-btn" onclick="importTeamFromServer()"><i class="fa-solid fa-cloud-arrow-down"></i> Ripristina dal server</button>
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--line-soft)">${codeBlock}
+          <p class="hint" style="margin-top:6px">Il giocatore usa codice squadra e PIN nella sua app per accedere senza file da inviare. Per aggiornare un solo giocatore: Roster → Condividi.</p>
+          <div style="margin-top:10px">${pinRows}</div></div>
         ${accBlock}
         ${termsBlock}
         ${licBlock}`;
@@ -5287,7 +5336,9 @@ const TRIAL_DAYS = 20;
 const TRIAL_KEY = 'vt_trial_start';
 const LICENSE_KEY = 'vt_license';
 const LICENSE_CHECK_INTERVAL_MS = 24*3600*1000;
-const LICENSE_OFFLINE_GRACE_DAYS = 5;
+/* FixBackup: true dall'avvio finche' il primo controllo licenza non e' concluso.
+   In questa finestra nessuno stato negativo viene mostrato (solo "Verifica licenza…"). */
+let LIC_VERIFYING = false;
 
 function trialStart(){ try{ return localStorage.getItem(TRIAL_KEY); }catch(e){ return null; } }
 function startTrial(){ try{ if(!localStorage.getItem(TRIAL_KEY)) localStorage.setItem(TRIAL_KEY, new Date().toISOString()); }catch(e){} }
@@ -5311,10 +5362,10 @@ function migrateLegacyLicense(){
     if(sync && sync.license){ delete sync.license; saveSystem(); }
 }
 function licIsActive(l){
+    /* Ultimo stato confermato dal server: se era "attiva" e la scadenza salvata non
+       e' passata, l'app resta sbloccata anche offline (niente piu' tolleranza a giorni). */
     if(!l || l.status!=='active') return false;
-    const now=Date.now();
-    if(l.lastSuccessAt && (now-l.lastSuccessAt) > LICENSE_OFFLINE_GRACE_DAYS*86400000) return false; // tolleranza offline scaduta
-    return !l.expiresAt || new Date(l.expiresAt).getTime()>now;
+    return !l.expiresAt || new Date(l.expiresAt).getTime()>Date.now();
 }
 /* compatibilita' con i chiamanti esistenti */
 function isLicensePro(){ return licIsActive(getLic()); }
@@ -5322,6 +5373,7 @@ function licenseAccessLevel(){
     const l=getLic();
     if(l){
         if(licIsActive(l)) return 'full';
+        if(l.status==='checking') return 'checking';   // account appena collegato, risposta del server non ancora arrivata
         return l.activatedAt ? 'readonly' : 'pending';
     }
     if(!trialStart()) return 'none';
@@ -5339,6 +5391,7 @@ function showLockedFeature(feature){
     const lvl=licenseAccessLevel();
     let text;
     const f=`<b style="color:var(--text)">${feature}</b>`;
+    if(lvl==='checking' || LIC_VERIFYING){ toast('Verifica della licenza in corso: riprova tra un istante.','info'); return; }
     if(lvl==='trial') text=`${f}: non disponibile nella prova gratuita. Scrivici per attivare l'abbonamento annuale e sbloccarla.`;
     else if(lvl==='pending') text=`${f}: il tuo profilo è in attesa di attivazione, sarà disponibile appena l'abbonamento sarà attivo.`;
     else if(trialExpired()) text=`${f}: la prova gratuita è terminata, serve l'abbonamento annuale.`;
@@ -5363,13 +5416,17 @@ function requireFull(feature){
 function isMissingRpc(e){ const m=((e&&(e.message||''))+' '+((e&&e.code)||'')).toLowerCase(); return m.includes('pgrst202') || m.includes('could not find the function') || m.includes('does not exist'); }
 let _licCheckPromise=null;
 async function checkLicenseOnline(force){
-    if(typeof AiRIMSync==='undefined') return;
+    if(typeof AiRIMSync==='undefined'){ if(LIC_VERIFYING){ LIC_VERIFYING=false; checkLicenseLock(); } return; }
     if(_licCheckPromise) return _licCheckPromise;
     _licCheckPromise=(async()=>{
         const session=await refreshCoachSession();
         let l=getLic();
         if(!session && !(l && l.legacy)) return;           // nessun account: prova locale, nulla da verificare
-        if(session && (!l || l.email!==COACH_EMAIL)){ l={email:COACH_EMAIL, status:'unknown', expiresAt:null, activatedAt:null, checkedAt:null, lastSuccessAt:null}; setLic(l); force=true; }
+        if(session && (!l || l.email!==COACH_EMAIL)){
+            if(l && !l.email){ l=Object.assign({}, l, {email:COACH_EMAIL, legacy:false}); }   // licenza migrata: si collega all'account senza perdere lo stato
+            else { l={email:COACH_EMAIL, status:'checking', expiresAt:null, activatedAt:null, checkedAt:null, lastSuccessAt:null}; }
+            setLic(l); force=true;
+        }
         const now=Date.now();
         if(!force && l.checkedAt && (now-l.checkedAt)<LICENSE_CHECK_INTERVAL_MS) return;
         try{
@@ -5389,7 +5446,7 @@ async function checkLicenseOnline(force){
             setLic(Object.assign({}, l, {checkedAt:now}));   // stato noto resta quello precedente
         }
     })();
-    try{ await _licCheckPromise; } finally { _licCheckPromise=null; }
+    try{ await _licCheckPromise; } finally { _licCheckPromise=null; LIC_VERIFYING=false; }
     renderSyncSettings();
     checkLicenseLock();
     refreshLicenseDependentViews();
@@ -5399,6 +5456,7 @@ function refreshLicenseDependentViews(){
     const cur=document.querySelector('.section.active');
     if(cur && cur.id==='dashboard') renderDashboard();
     if(cur && cur.id==='test-fisici') renderPhysicalTests();
+    renderRestoreButton();
 }
 function renderLicenseBadge(){
     const lic=getLic();
@@ -5408,6 +5466,9 @@ function renderLicenseBadge(){
         if(lvl==='trial') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-hourglass-half"></i> Prova gratuita: ${trialDaysLeft()} giorni rimasti. La sincronizzazione online si attiva con l'abbonamento.</p>`;
         if(lvl==='readonly') return `<p class="hint" style="margin-top:12px"><i class="fa-solid fa-triangle-exclamation"></i> Prova gratuita terminata.</p>`;
         return '';
+    }
+    if(LIC_VERIFYING || lic.status==='checking'){
+        return `<div class="hint" style="margin-top:12px"><i class="fa-solid fa-spinner fa-spin"></i> Licenza: verifica in corso…</div>${recheckBtn}`;
     }
     const pro=licIsActive(lic);
     const when=lic.checkedAt? new Date(lic.checkedAt).toLocaleDateString('it-IT'):'—';
@@ -5449,6 +5510,7 @@ function guardWrite(){
     const now=Date.now();
     if(now-_writeBlockedToastAt>4000){ _writeBlockedToastAt=now;
         const lvl=licenseAccessLevel();
+        if(lvl==='checking' || LIC_VERIFYING){ toast('Verifica della licenza in corso: riprova tra un istante.','info'); return false; }
         toast(lvl==='pending' ? 'Profilo in attesa di attivazione: modifica non disponibile.'
             : (trialExpired() ? 'Prova terminata: sola lettura.' : 'Licenza scaduta: modifica disabilitata.'), 'danger');
     }
@@ -6038,7 +6100,7 @@ setTimeout(()=>refreshCoachSession().then(async session=>{
     renderSyncSettings();
     /* Gestione_Trial_Licenze: prima si verifica la licenza (account o licenza legacy),
        poi — solo se attiva — eventuale pull/self-heal verso il server. */
-    await checkLicenseOnline(false);
+    await checkLicenseOnline(licenseAccessLevel()!=='full');
     if(!session) return;
     ensurePolicyAccepted(()=>{});
     if(!canSync()) return;   // nessuna scrittura online senza licenza attiva
