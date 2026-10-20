@@ -5383,13 +5383,15 @@ function openOrphansModal(){
     const pinOf=pin=>DB.players.find(p=>String(p.pin)===String(pin));
     const rows=ORPHANS.map((o,i)=>{
         const same=pinOf(o.pin);
+        const when=o.updated_at?new Date(o.updated_at).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'n.d.';
         return `<div style="padding:10px 0;border-bottom:1px solid var(--line-soft)">
-            <div><b>${escapeHtml(o.player_name||'Senza nome')}</b> · PIN <b>${escapeHtml(o.pin)}</b></div>
-            <div class="hint">Ultimo aggiornamento: ${o.updated_at?new Date(o.updated_at).toLocaleString('it-IT'):'n.d.'}</div>
+            <div>Sul server c'è <b>${escapeHtml(o.player_name||'un giocatore senza nome')}</b> (aggiornato il ${when}) ma non è nella tua rosa.</div>
+            <div class="hint">PIN ${escapeHtml(o.pin)}</div>
             ${same?`<div class="hint" style="color:var(--warn)">Stesso PIN di ${escapeHtml(same.name)} in rosa</div>`:''}
-            <div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn btn-accent btn-sm" style="flex:1" onclick="recoverOrphan(${i})"><i class="fa-solid fa-user-plus"></i> Recupera nella rosa</button>
-              <button class="btn btn-danger btn-sm" style="flex:1" onclick="deleteOrphan(${i})"><i class="fa-solid fa-trash-can"></i> Elimina</button>
+            <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <button class="btn btn-accent btn-sm" style="flex:1" onclick="recoverOrphan(${i})"><i class="fa-solid fa-user-plus"></i> Recupera in rosa</button>
+              <button class="btn btn-ghost btn-sm" style="flex:1" onclick="skipOrphan(${i})">Non ora</button>
+              <button class="btn btn-danger btn-sm" style="flex:1" onclick="deleteOrphan(${i})"><i class="fa-solid fa-trash-can"></i> Elimina dal server</button>
             </div></div>`;
     }).join('');
     openModal(`<div class="modal-head"><h3><i class="fa-solid fa-user-clock" style="color:var(--brand)"></i> Giocatori non in rosa</h3>
@@ -5433,13 +5435,20 @@ async function recoverOrphan(i){
         else toast(detail?`Recupero non riuscito — ${detail}`:'Recupero non riuscito','danger');
     }
 }
+/* "Non ora": nessuna modifica, lo richiede al prossimo Sincronizza / Carica dal server */
+function skipOrphan(i){ const o=ORPHANS[i]; if(!o) return; ORPHANS.splice(i,1); openOrphansModal(); }
 function deleteOrphan(i){
     const o=ORPHANS[i]; if(!o) return;
-    confirmAction(`Eliminare dal server il profilo di ${o.player_name||'questo giocatore'}? Non potrà più entrare nel Player con il PIN ${o.pin}. Non si può annullare.`, async()=>{
-        try{
-            await AiRIMSync.deletePlayerPackage(DB.settings.sync.teamId, o.player_id);
-            ORPHANS.splice(ORPHANS.indexOf(o),1); openOrphansModal(); toast('Profilo eliminato dal server','info');
-        }catch(e){ toast(`Eliminazione non riuscita — ${syncErrorDetail(e)}`,'danger'); }
+    const name=o.player_name||'questo giocatore';
+    confirmAction(`Eliminare dal server il profilo di ${name}? Non potrà più entrare nel Player con il PIN ${o.pin}.`, ()=>{
+        /* seconda conferma: aperta dopo che il click sul primo "Sì" ha chiuso il dialogo */
+        setTimeout(()=>confirmAction(`Sicuro? Il profilo di ${name} sul server verrà cancellato per sempre. Non si può annullare.`, async()=>{
+            try{
+                await AiRIMSync.deletePlayerPackage(DB.settings.sync.teamId, o.player_id);
+                const k=ORPHANS.indexOf(o); if(k>=0) ORPHANS.splice(k,1);
+                openOrphansModal(); toast('Profilo eliminato dal server','info');
+            }catch(e){ toast(`Eliminazione non riuscita — ${syncErrorDetail(e)}`,'danger'); }
+        }),0);
     });
 }
 /* ---------- Task 3: dopo import backup, se il coach e' gia' loggato su questo
@@ -5482,6 +5491,7 @@ async function pullTeamFromServer(){
     try{ await ensureTeamOnline(); }catch(e){}
     save(); renderTeamName(); go('dashboard'); renderSyncSettings();
     toast(`Squadra ripristinata dal server (${DB.players.length} giocatori)`);
+    if(DB.settings.sync.teamId) checkOrphanPackages(DB.settings.sync);   // pacchetti che il backup non ha
     return true;
 }
 /* ---------- bottone "Importa squadra dal server" (Impostazioni) ---------- */
