@@ -601,31 +601,38 @@ function syncTrack(){
     const cur=syncFlat(DB), meta=syncMeta(DB), now=Date.now();
     // DB sostituito (import, ripristino, unione): nuova base, nessuna data inventata
     if(_syncPrev && _syncPrevDB===DB){
+        let changed=false;
         cur.leaves.forEach((v,p)=>{
             if(_syncPrev.leaves.get(p)===v) return;
-            meta.m[p]=now;
+            meta.m[p]=now; changed=true;
             const s=p.split(SYNC_SEP); for(let i=1;i<=s.length;i++) delete meta.del[s.slice(0,i).join(SYNC_SEP)];
         });
         _syncPrev.leaves.forEach((v,p)=>{
             if(cur.leaves.has(p)) return;
             const s=p.split(SYNC_SEP);
             for(let i=1;i<=s.length;i++){ const top=s.slice(0,i).join(SYNC_SEP);
-                if(!cur.nodes.has(top)){ meta.del[top]=now; Object.keys(meta.m).forEach(k=>{ if(syncUnder(k,top)) delete meta.m[k]; }); break; } }
+                if(!cur.nodes.has(top)){ meta.del[top]=now; changed=true; Object.keys(meta.m).forEach(k=>{ if(syncUnder(k,top)) delete meta.m[k]; }); break; } }
         });
+        // modifica locale da caricare: segnata qui, il caricamento automatico parte dopo 30 s senza tocchi
+        if(changed && isPlainObj(DB.settings) && isPlainObj(DB.settings.sync)){ DB.settings.sync.dirtyAt=now; autoScheduleUpload(); }
     }
     _syncPrev=cur; _syncPrevDB=DB;
 }
 /* modifiche locali non ancora caricate sul server */
 function syncDirty(){
-    const t=(DB.settings.sync&&DB.settings.sync.baseAt)||0, s=DB._sync;
-    if(!isPlainObj(s)) return false;
-    return Object.values(objOr(s.m)).some(x=>x>t) || Object.values(objOr(s.del)).some(x=>x>t);
+    const s=DB.settings && DB.settings.sync;
+    return !!(s && s.dirtyAt);
+}
+/* stato sync di QUESTO dispositivo dopo aver sostituito il DB (ripristino dal
+   server o da file): quello arrivato nel backup e' del dispositivo che l'ha caricato */
+function syncResetDeviceState(s, dirty){
+    s.pendingDel=[]; s.delDecided={}; s.pkgSig={}; s.dirtyAt=dirty?Date.now():0;
 }
 /* unione elemento per elemento: loc = questo dispositivo, srv = copia sul server,
    baseAt = ora dell'ultima sincronizzazione di questo dispositivo */
 function syncMerge(loc, srv, baseAt){
     const Lm=syncMeta(loc).m, Ld=loc._sync.del, Sm=syncMeta(srv).m;
-    const Sd=srv._sync.del, rep={added:[], conflicts:[], restored:[], ask:[], removed:[], kept:[]};
+    const Sd=srv._sync.del, rep={added:[], updated:[], conflicts:[], restored:[], ask:[], removed:[], kept:[]};
     const newest=(m,p)=>{ let t=0; for(const k in m) if(syncUnder(k,p) && m[k]>t) t=m[k]; return t; };
     const node=(a,b,p)=>{
         if(a===undefined && b===undefined) return undefined;
@@ -657,7 +664,8 @@ function syncMerge(loc, srv, baseAt){
         if(JSON.stringify(a)===JSON.stringify(b)) return a;
         const ta=Lm[p]||0, tb=Sm[p]||0;
         if(ta>baseAt && tb>baseAt) rep.conflicts.push(p);  // modificato su entrambi dall'ultima sincronizzazione
-        return ta>tb ? a : b;                               // vince la modifica piu' recente; senza date vince il server
+        if(ta>tb) return a;                                 // vince la modifica piu' recente; senza date vince il server
+        rep.updated.push(p); return b;
     };
     return {db:node(loc,srv,''), rep};
 }
@@ -718,13 +726,22 @@ function syncLabel(p, ...dbs){
 const SYNC_PLURAL={giocatore:'giocatori', 'dato giocatore':'dati giocatore', evento:'eventi', 'dato evento':'dati evento', 'scout partita':'scout partite',
     allenamento:'allenamenti', voto:'voti', nota:'note', esercizio:'esercizi', presenze:'presenze', presenza:'presenze', 'test fisico':'test fisici',
     cambio:'cambi', rotazioni:'rotazioni', impostazione:'impostazioni', dato:'dati'};
+function syncGroup(paths, withNames, dbs){
+    const by=new Map();
+    paths.forEach(p=>{ const {cat,label}=syncLabel(p,...dbs); if(!by.has(cat)) by.set(cat,new Set()); by.get(cat).add(label); });
+    return [...by].map(([cat,ls])=>{ const n=withNames?ls.size:paths.filter(p=>syncLabel(p,...dbs).cat===cat).length;
+        return `${n} ${n===1?cat:(SYNC_PLURAL[cat]||cat)}${cat==='giocatore'||withNames?` (${[...ls].join(', ')})`:''}`; }).join(', ');
+}
+/* avviso breve della sincronizzazione automatica (null se non e' arrivato niente) */
+function syncAutoText(rep, ...dbs){
+    const parts=[];
+    if(rep.added.length) parts.push(syncGroup(rep.added,false,dbs));
+    if(rep.updated.length) parts.push(`${rep.updated.length} ${rep.updated.length===1?'modifica':'modifiche'}`);
+    if(rep.restored.length) parts.push(syncGroup(rep.restored,true,dbs));
+    return parts.length ? `Aggiornato da un altro dispositivo: ${parts.join(', ')}` : null;
+}
 function syncSummaryLines(rep, ...dbs){
-    const group=(paths,withNames)=>{
-        const by=new Map();
-        paths.forEach(p=>{ const {cat,label}=syncLabel(p,...dbs); if(!by.has(cat)) by.set(cat,new Set()); by.get(cat).add(label); });
-        return [...by].map(([cat,ls])=>{ const n=withNames?ls.size:paths.filter(p=>syncLabel(p,...dbs).cat===cat).length;
-            return `${n} ${n===1?cat:(SYNC_PLURAL[cat]||cat)}${cat==='giocatore'||withNames?` (${[...ls].join(', ')})`:''}`; }).join(', ');
-    };
+    const group=(paths,withNames)=>syncGroup(paths,withNames,dbs);
     const out=[];
     if(rep.added.length) out.push(`Aggiunti da un altro dispositivo: ${group(rep.added,false)}.`);
     if(rep.conflicts.length){ const ls=new Set(rep.conflicts.map(p=>syncLabel(p,...dbs).label)); out.push(`Conflitti risolti con la modifica più recente: ${ls.size} (${[...ls].join(', ')}).`); }
@@ -4587,46 +4604,78 @@ function exportData(){
    Restituisce il resoconto dell'unione (null se non c'era niente da unire), false se
    non riuscito; {cancelled:true} se il coach ha annullato. Un errore viene segnalato
    ma non annulla la sync dei giocatori. */
-let _backupSyncPromise=null;
-function uploadTeamBackupOnline(){
+var _backupSyncPromise=null;
+/* opts.auto: sincronizzazione automatica (niente finestre bloccanti, niente toast di
+   errore: le cancellazioni altrui restano in sospeso e si carica solo se ci sono
+   modifiche locali). Senza opts: Sincronizza manuale, come prima. */
+function uploadTeamBackupOnline(opts={}){
     if(!COACH_EMAIL || !canSync() || typeof AiRIMSync==='undefined') return Promise.resolve(false);
-    if(_backupSyncPromise) return _backupSyncPromise;
-    _backupSyncPromise=mergeAndUploadBackup().then(rep=>{
-        DB.settings.sync.lastOnlineSaveAt=new Date().toISOString(); saveSystem();
+    if(_backupSyncPromise){
+        if(opts.auto) return Promise.resolve(false);   // ne sta gia' girando una
+        return _backupSyncPromise.catch(()=>{}).then(()=>uploadTeamBackupOnline(opts));
+    }
+    _backupSyncPromise=mergeAndUploadBackup(opts).then(rep=>{
+        if(!rep || !rep.downloadOnly){ DB.settings.sync.lastOnlineSaveAt=new Date().toISOString(); saveSystem(); }
+        syncOfflineBar(false); syncDelBar();
         renderSyncSettings();
-        const d=document.getElementById('dashboard'); if(d && d.classList.contains('active')) renderDashboard();
+        const d=document.getElementById('dashboard'); if(d && d.classList.contains('active') && !autoSyncBusy()) renderDashboard();
         return rep;
     }).catch(e=>{
         if(e && e.cancelled){ toast('Sincronizzazione annullata: niente è stato caricato.','info'); return {cancelled:true}; }
+        if(syncIsNetErr(e)) syncOfflineBar(true);
+        if(opts.auto){ console.warn('Sincronizzazione automatica non riuscita:', syncErrorDetail(e)); return false; }
         const detail=syncErrorDetail(e);
         toast(detail?`Copia online non aggiornata — ${detail}`:'Copia online non aggiornata: verifica la connessione','warning');
         return false;
     }).finally(()=>{ _backupSyncPromise=null; });
     return _backupSyncPromise;
 }
-async function mergeAndUploadBackup(){
-    const decided={};   // scelte del coach sulle cancellazioni, tenute se si deve riunire
+function syncIsNetErr(e){
+    return navigator.onLine===false || e instanceof TypeError || /fetch|network|load failed|timeout|offline/i.test(syncErrorDetail(e));
+}
+/* copia da caricare: senza gli elementi tolti altrove su cui il coach non ha ancora
+   deciso (restano qui, ma il server resta com'e' per loro, cancellazione compresa) */
+function syncPayload(db){
+    const pend=arrOr(db.settings.sync && db.settings.sync.pendingDel);
+    if(!pend.length) return db;
+    const c=JSON.parse(JSON.stringify(db)); syncMeta(c);
+    pend.forEach(x=>{ syncRemoveAt(c, x.p); if(x.at) c._sync.del[x.p]=x.at; });
+    return c;
+}
+async function mergeAndUploadBackup(opts={}){
+    const auto=!!opts.auto, S=()=>DB.settings.sync;
+    // manuale: prima si decidono le cancellazioni rimaste in sospeso dalla sincronizzazione automatica
+    if(!auto && arrOr(S().pendingDel).length) await resolvePendingDeletions();
+    const decided={...objOr(S().delDecided)};   // scelte del coach, valide anche se si deve riunire
     let rep=null;
     for(let tries=0; tries<4; tries++){
         const row=await AiRIMSync.getMyTeamBackupV();
         const ver=row ? Number(row.version) : 0;
-        if(row && row.backup && ver!==DB.settings.sync.baseVersion){
+        if(row && row.backup && ver!==S().baseVersion){
             const srv=stripDangerousKeys(row.backup);
             if(isPlainObj(srv) && Array.isArray(srv.players)){
                 normalizeDB(srv);
-                const loc=DB, r=syncMerge(loc, srv, DB.settings.sync.baseAt||0);
+                const loc=DB, r=syncMerge(loc, srv, S().baseAt||0);
                 const asks=r.rep.ask.filter(p=>!(p in decided));
-                if(asks.length) Object.assign(decided, await askRemoteDeletions(asks.map(p=>({p, label:syncLabel(p, loc, srv).label}))));
-                r.rep.ask.filter(p=>!(p in decided)).forEach(p=>{ decided[p]=false; });
-                const db=syncFinalize(r, loc, srv, decided);
-                DB=db; ensureDBDefaults(); save();
+                if(asks.length && !auto) Object.assign(decided, await askRemoteDeletions(asks.map(p=>({p, label:syncLabel(p, loc, srv).label}))));
+                const dec={}; r.rep.ask.forEach(p=>{ if(p in decided) dec[p]=decided[p]; });
+                const pending=r.rep.ask.filter(p=>!(p in decided)).map(p=>({p, label:syncLabel(p, loc, srv).label, at:srv._sync.del[p]||Date.now()}));
+                const db=syncFinalize(r, loc, srv, dec);
+                DB=db; ensureDBDefaults();
+                const s=S(); s.pendingDel=pending; s.baseVersion=ver; s.baseAt=Date.now();
+                if(r.rep.kept.length) s.dirtyAt=Date.now();   // "Tieni": va rimesso anche sul server
+                save();
                 rep=r.rep; rep.dbs=[loc, srv];
-                rerenderCurrentSection();
+                if(!autoSyncBusy()) rerenderCurrentSection();
             }
         }
+        if(auto && !S().dirtyAt){ if(rep) rep.downloadOnly=true; else rep={downloadOnly:true}; return rep; }
+        const started=Date.now();
         try{
-            const v=await AiRIMSync.upsertMyTeamBackupV(DB, ver);
-            const sync=DB.settings.sync; sync.baseVersion=Number(v); sync.baseAt=Date.now(); saveSystem();
+            const v=await AiRIMSync.upsertMyTeamBackupV(syncPayload(DB), ver);
+            const s=S(); s.baseVersion=Number(v); s.baseAt=Date.now(); s.delDecided={};
+            if((s.dirtyAt||0)<=started) s.dirtyAt=0;   // modifiche fatte durante il caricamento: restano da caricare
+            saveSystem();
             return rep;
         }catch(e){
             // un altro dispositivo ha caricato nel frattempo: si riparte da scarica -> unisci
@@ -4634,6 +4683,19 @@ async function mergeAndUploadBackup(){
         }
     }
     throw new Error('troppi caricamenti contemporanei da altri dispositivi, riprova tra poco');
+}
+/* cancellazioni altrui rimaste in sospeso: il coach decide (dalla striscia o da Sincronizza) */
+async function resolvePendingDeletions(){
+    const s=DB.settings.sync, items=arrOr(s.pendingDel); if(!items.length) return;
+    const dec=await askRemoteDeletions(items);   // se chiude la finestra: annullata, restano in sospeso
+    const now=Date.now(), meta=syncMeta(DB), flat=syncFlat(DB);
+    items.forEach(it=>{
+        if(dec[it.p]) syncRemoveAt(DB, it.p);
+        else flat.leaves.forEach((v,k)=>{ if(syncUnder(k,it.p)) meta.m[k]=now; });   // "Tieni": piu' recente della cancellazione
+    });
+    s.delDecided={...objOr(s.delDecided), ...dec}; s.pendingDel=[]; s.dirtyAt=now;
+    save(); syncDelBar();
+    if(!autoSyncBusy()) rerenderCurrentSection();
 }
 function rerenderCurrentSection(){
     const s=document.querySelector('.section.active');
@@ -4674,6 +4736,96 @@ function showSyncSummary(rep, then){
         <button class="btn btn-accent" style="width:100%;margin-top:6px" onclick="closeModal()">OK</button></div>`);
     _modalOnClose=then||null;
 }
+/* pacchetti Player: all=true (Sincronizza) li aggiorna tutti; altrimenti solo quelli
+   il cui contenuto e' cambiato dall'ultimo invio (firma salvata per giocatore) */
+function pkgSig(pkg, pin){
+    const c={...pkg}; delete c.gen; if(c.photo) c.photo=c.photo.length;
+    const s=JSON.stringify(c)+'|'+pin; let h=5381;
+    for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0;
+    return s.length+':'+h;
+}
+async function uploadPlayerPackages(all){
+    const sync=DB.settings.sync; sync.pkgSig=objOr(sync.pkgSig);
+    let ok=0, fail=0;
+    for(const p of DB.players.slice()){
+        try{
+            const photo=await cIdbGet('p'+p.id), pkg=buildPlayerPackage(p.id,photo), sig=pkgSig(pkg,p.pin);
+            if(!all && sync.pkgSig[p.id]===sig) continue;
+            await AiRIMSync.upsertPlayerPackage(sync.teamId, p.id, p.name, p.pin, pkg);
+            sync.pkgSig[p.id]=sig; ok++;
+        }catch(e){ fail++; }
+    }
+    saveSystem();
+    return {ok, fail};
+}
+/* =========================================================
+   SINCRONIZZAZIONE AUTOMATICA — solo account con licenza attiva (in prova tutto
+   resta in locale). Scarica e unisce all'apertura, al rientro dopo 10 minuti e al
+   ritorno della rete; dopo una modifica carica quando l'app resta ferma 30 secondi
+   o va in background. Mai durante uno scout o un inserimento: aspetta che finisca.
+   Il bottone Sincronizza resta la sincronizzazione completa.
+   ========================================================= */
+var AUTO_IDLE_MS=30000, AUTO_RESUME_MS=10*60*1000, AUTO_BUSY_RETRY_MS=5000;
+var _autoIdleTimer=null, _autoRetryTimer=null, _autoHiddenAt=0;
+function autoSyncEnabled(){
+    const s=DB.settings && DB.settings.sync;
+    return typeof AiRIMSync!=='undefined' && !!(s && s.teamId) && !!(COACH_EMAIL || currentAccountEmail()) && canSync();
+}
+/* scout aperto, finestra aperta o un campo in scrittura: non e' il momento */
+function autoSyncBusy(){
+    const a=document.activeElement;
+    const typing=a && (a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT'||a.isContentEditable);
+    const sp=document.getElementById('scout-panel');
+    const scouting=pwaActiveSection()==='scout' && !!sp && sp.style.display!=='none';
+    return pwaOverlayOpen() || !!typing || scouting;
+}
+function autoScheduleUpload(){
+    if(!autoSyncEnabled()) return;
+    clearTimeout(_autoIdleTimer);
+    _autoIdleTimer=setTimeout(()=>{ _autoIdleTimer=null; autoSync('modifica'); }, AUTO_IDLE_MS);
+}
+async function autoSync(reason){
+    if(!autoSyncEnabled()) return;
+    clearTimeout(_autoRetryTimer);
+    if(autoSyncBusy()){ _autoRetryTimer=setTimeout(()=>autoSync(reason), AUTO_BUSY_RETRY_MS); return; }
+    if(!COACH_EMAIL) await refreshCoachSession();
+    // c'e' un account salvato ma la sessione non si legge: quasi sempre manca la rete
+    if(!COACH_EMAIL){ syncOfflineBar(true); return; }
+    const wasDirty=syncDirty();
+    const rep=await uploadTeamBackupOnline({auto:true});
+    if(rep===false) return;   // errore gia' gestito (striscia senza rete): si riprova al prossimo evento
+    if(rep && rep.dbs){ const t=syncAutoText(rep, ...rep.dbs); if(t) toast(t,'info'); }
+    if(wasDirty || (rep && rep.dbs)) await uploadPlayerPackages(false).catch(()=>{});
+    if(syncDirty() && !_autoIdleTimer) autoScheduleUpload();   // modifiche arrivate durante il caricamento
+}
+/* strisce discrete in basso: senza rete / cancellazioni da verificare */
+function syncBar(id, bottom, html, onclick){
+    let b=document.getElementById(id);
+    if(!html){ if(b) b.remove(); return; }
+    if(!b){
+        b=document.createElement('div'); b.id=id;
+        b.style.cssText=`position:fixed;left:50%;transform:translateX(-50%);bottom:calc(${bottom}px + env(safe-area-inset-bottom));z-index:900;max-width:calc(100% - 32px);padding:8px 14px;border-radius:999px;font-size:.8rem;line-height:1.3;text-align:center;background:var(--surface-2,#1e293b);color:var(--text,#fff);border:1px solid var(--line,rgba(255,255,255,.15));box-shadow:0 4px 14px rgba(0,0,0,.25)`;
+        document.body.appendChild(b);
+    }
+    b.innerHTML=html; b.style.cursor=onclick?'pointer':'default'; b.onclick=onclick||null;
+}
+function syncOfflineBar(on){
+    syncBar('sync-offline-bar', 76, on?`<i class="fa-solid fa-cloud"></i> Non hai l'ultimo aggiornamento: riproverà appena c'è connessione`:null);
+}
+function syncDelBar(){
+    const n=arrOr(DB.settings.sync && DB.settings.sync.pendingDel).length;
+    syncBar('sync-del-bar', 118, n?`<i class="fa-solid fa-triangle-exclamation" style="color:var(--warn)"></i> ${n} ${n===1?'elemento tolto':'elementi tolti'} su un altro dispositivo: verifica`:null,
+        ()=>resolvePendingDeletions().then(()=>autoSync('decisione')).catch(()=>{}));
+}
+['pointerdown','keydown','input','touchstart'].forEach(ev=>document.addEventListener(ev,()=>{ if(_autoIdleTimer) autoScheduleUpload(); },{capture:true, passive:true}));
+document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden'){ _autoHiddenAt=Date.now(); if(syncDirty()) autoSync('background'); return; }
+    const away=_autoHiddenAt && Date.now()-_autoHiddenAt>AUTO_RESUME_MS; _autoHiddenAt=0;
+    if(away || document.getElementById('sync-offline-bar') || syncDirty()) autoSync('rientro');
+});
+window.addEventListener('pagehide',()=>{ if(syncDirty()) autoSync('chiusura'); });
+window.addEventListener('online',()=>autoSync('rete'));
+window.addEventListener('load',()=>setTimeout(()=>{ syncDelBar(); autoSync('apertura'); }, 2500));
 function lastOnlineSaveText(){
     const t=DB.settings.sync && DB.settings.sync.lastOnlineSaveAt;
     if(!t) return 'Ultimo salvataggio online: mai';
@@ -4699,7 +4851,7 @@ function importData(e){
                 catch(err){ DB=JSON.parse(prevDB); ensureDBDefaults(); toast('Backup non ripristinato: file danneggiato. I dati attuali non sono stati toccati.','danger'); return; }
                 if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza non viaggia nei backup
                 // un file non dice quale versione c'e' sul server: il prossimo Sincronizza unisce, mai sovrascrive
-                if(DB.settings.sync){ delete DB.settings.sync.baseVersion; delete DB.settings.sync.baseAt; }
+                if(DB.settings.sync){ delete DB.settings.sync.baseVersion; delete DB.settings.sync.baseAt; syncResetDeviceState(DB.settings.sync, true); }
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
                    squadra importata al SUO account (owner_user_id) invece di lasciare che
@@ -5616,14 +5768,7 @@ async function syncAllPlayersOnline(){
         const rep=await uploadTeamBackupOnline();
         if(rep && rep.cancelled) throw Object.assign(new Error('annullata'),{cancelled:true});
         const sync=DB.settings.sync;
-        for(const p of DB.players){
-            try{
-                const photo=await cIdbGet('p'+p.id);
-                const pkg=buildPlayerPackage(p.id,photo);
-                await AiRIMSync.upsertPlayerPackage(sync.teamId, p.id, p.name, p.pin, pkg);
-                ok++;
-            }catch(e){ fail++; }
-        }
+        ({ok, fail}=await uploadPlayerPackages(true));
         sync.hasEverSynced=true; save();
         toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
         checkLicenseOnline(true);
@@ -5761,6 +5906,7 @@ async function pullTeamFromServer(){
     if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza sta in LICENSE_KEY, non nel backup
     // da qui questo dispositivo conosce esattamente la versione del server (lo stato sync del backup e' di chi l'ha caricato)
     DB.settings.sync.baseVersion=Number(res.version); DB.settings.sync.baseAt=Date.now();
+    syncResetDeviceState(DB.settings.sync, false); syncDelBar();
     // owner della verita' per teamId/teamCode resta la riga `teams`, non il
     // blob di backup (che potrebbe portarsi dietro valori vecchi/di un altro
     // device): stesso self-heal gia' usato dopo un import di backup manuale.

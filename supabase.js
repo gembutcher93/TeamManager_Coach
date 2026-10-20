@@ -20,7 +20,9 @@
   function getClient() {
     if (_clientPromise) return _clientPromise;
     _clientPromise = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')
-      .then(m => m.createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+      .then(m => m.createClient(SUPABASE_URL, SUPABASE_ANON_KEY))
+      // senza rete il caricamento fallisce: si riprova alla prossima chiamata invece di restare bloccati
+      .catch(e => { _clientPromise = null; throw e; });
     return _clientPromise;
   }
 
