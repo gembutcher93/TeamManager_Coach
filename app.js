@@ -503,10 +503,14 @@ function normalizeDB(d){
     d = isPlainObj(d) ? d : {};
     d.teamName = (typeof d.teamName==='string' && d.teamName.trim()) ? d.teamName : 'TEAM';
     let maxId = 0;
-    const seenIds = new Set();
+    /* giocatori ed eventi hanno id separati: un evento con lo stesso numero di un
+       giocatore non e' un doppione (prima perdeva presenze/allenamenti collegati).
+       Un giocatore non viene MAI scartato: id doppio o mancante -> id nuovo. */
+    const seenIds = new Set(), seenEv = new Set();
     const idOf = x => { const n=+x; return (Number.isFinite(n) && n>0) ? n : null; };
     d.players = arrOr(d.players).filter(isPlainObj).map(p=>{
         let id=idOf(p.id); if(id==null || seenIds.has(id)) id=null; if(id!=null) seenIds.add(id);
+        if(!isPlainObj(p.archivio)) delete p.archivio;
         return Object.assign(p, {
             id,
             name: (typeof p.name==='string' && p.name.trim()) ? p.name : 'Giocatore',
@@ -520,7 +524,7 @@ function normalizeDB(d){
         });
     });
     d.events = arrOr(d.events).filter(e=>isPlainObj(e) && typeof e.date==='string' && e.date).map(e=>{
-        let id=idOf(e.id); if(id==null || seenIds.has(id)) id=null; if(id!=null) seenIds.add(id);
+        let id=idOf(e.id); if(id==null || seenEv.has(id)) id=null; if(id!=null) seenEv.add(id);
         return Object.assign(e, {
             id,
             type: e.type==='Partita' ? 'Partita' : 'Allenamento',
@@ -549,6 +553,7 @@ function normalizeDB(d){
     ['theme','lineup','customExercises','exMeta','cardLayouts'].forEach(k=>{ if(d.settings[k]!==undefined && !isPlainObj(d.settings[k])) delete d.settings[k]; });
     /* id mancanti o duplicati: nuovi id sopra il massimo esistente */
     seenIds.forEach(n=>{ if(n>maxId) maxId=n; });
+    seenEv.forEach(n=>{ if(n>maxId) maxId=n; });
     let next = Math.max(idOf(d.nextId)||0, maxId+1);
     d.players.forEach(p=>{ if(p.id==null) p.id=next++; });
     d.events.forEach(e=>{ if(e.id==null) e.id=next++; });
@@ -4889,6 +4894,17 @@ function buildPlayerPackage(id, photo){
         season:{matches:s.matches,avgVoto:s.avgVoto,cells:s.cells},
         training:{avg:tstat.avg,count:tstat.count,byCat:tstat.byCat},
         matches, cal, att, attPct:playerAttendance(id), ex};
+    /* giocatore recuperato da un pacchetto orfano: i dati del vecchio pacchetto che
+       la rosa locale non ha (stessa data = vince il locale) restano nel profilo */
+    const a=p.archivio;
+    if(a){
+        const add=(cur,old)=>{ const seen=new Set(cur.map(x=>x.d));
+            return cur.concat(arrOr(old).filter(x=>isPlainObj(x)&&!seen.has(x.d))).sort((x,y)=>new Date(x.d)-new Date(y.d)); };
+        pkg.voti=add(pkg.voti,a.voti); pkg.matches=add(pkg.matches,a.matches); pkg.att=add(pkg.att,a.att); pkg.ex=add(pkg.ex,a.ex);
+        if(!pkg.season.matches && isPlainObj(a.season)) pkg.season=a.season;
+        if(!pkg.training.count && isPlainObj(a.training)) pkg.training=a.training;
+        if(pkg.attPct==null && a.attPct!=null) pkg.attPct=a.attPct;
+    }
     const lineup=buildLineupPackage(sport);
     if(lineup) pkg.lineup=lineup;
     return pkg;
@@ -5341,6 +5357,7 @@ async function syncAllPlayersOnline(){
         uploadTeamBackupOnline();
         toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
         checkLicenseOnline(true);
+        checkOrphanPackages(sync);
     }catch(e){
         const detail=syncErrorDetail(e);
         toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita: verifica la connessione','danger');
@@ -5348,6 +5365,81 @@ async function syncAllPlayersOnline(){
     btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza'; });
     renderSyncSettings();
     if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
+    });
+}
+/* ---------- pacchetti orfani: sul server ci sono pacchetti di giocatori che non sono
+   in rosa (rosa sostituita da un backup piu' vecchio, id rigenerato, rimozione fatta
+   offline). Mai cancellati in automatico: il coach sceglie se recuperarli nella rosa
+   (stesso id, stesso PIN, dati del pacchetto) oppure eliminarli. ---------- */
+let ORPHANS=[];
+async function checkOrphanPackages(sync){
+    let rows; try{ rows=await AiRIMSync.listTeamPins(sync.teamId); }catch(e){ return; }
+    const ids=new Set(DB.players.map(p=>String(p.id)));
+    ORPHANS=(rows||[]).filter(r=>!ids.has(String(r.player_id)));
+    if(ORPHANS.length) openOrphansModal();
+}
+function openOrphansModal(){
+    if(!ORPHANS.length){ closeModal(); return; }
+    const pinOf=pin=>DB.players.find(p=>String(p.pin)===String(pin));
+    const rows=ORPHANS.map((o,i)=>{
+        const same=pinOf(o.pin);
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--line-soft)">
+            <div><b>${escapeHtml(o.player_name||'Senza nome')}</b> · PIN <b>${escapeHtml(o.pin)}</b></div>
+            <div class="hint">Ultimo aggiornamento: ${o.updated_at?new Date(o.updated_at).toLocaleString('it-IT'):'n.d.'}</div>
+            ${same?`<div class="hint" style="color:var(--warn)">Stesso PIN di ${escapeHtml(same.name)} in rosa</div>`:''}
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn btn-accent btn-sm" style="flex:1" onclick="recoverOrphan(${i})"><i class="fa-solid fa-user-plus"></i> Recupera nella rosa</button>
+              <button class="btn btn-danger btn-sm" style="flex:1" onclick="deleteOrphan(${i})"><i class="fa-solid fa-trash-can"></i> Elimina</button>
+            </div></div>`;
+    }).join('');
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-user-clock" style="color:var(--brand)"></i> Giocatori non in rosa</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom:6px">Sul server ci sono profili di giocatori che non sono nella rosa di questo dispositivo. Non vengono toccati finché non scegli tu.</p>
+        ${rows}
+      </div>`);
+}
+async function recoverOrphan(i){
+    const o=ORPHANS[i]; if(!o || !guardWrite()) return;
+    if(!canSync()) return toast('Licenza non attiva: recupero non disponibile.','warning');
+    const id=+o.player_id;
+    if(!(Number.isFinite(id) && id>0)) return toast(`Id del pacchetto non valido (${o.player_id}): recupero non possibile.`,'danger');
+    if(playerById(id)) return toast('Questo giocatore è già in rosa.','info');
+    try{
+        const sync=await ensureTeamOnline();
+        const row=await AiRIMSync.getPlayerPackage(sync.teamCode, o.pin, o.player_id);
+        if(!row || !isPlainObj(row.package)) throw new Error('pacchetto non leggibile');
+        const k=row.package, q=objOr(k.p);
+        const archivio={gen:k.gen||null, voti:arrOr(k.voti), matches:arrOr(k.matches), att:arrOr(k.att), ex:arrOr(k.ex),
+            season:objOr(k.season), training:objOr(k.training), attPct:k.attPct!=null?k.attPct:null};
+        DB.players.push({id, name:q.name||o.player_name||'Giocatore', number:+q.number||0, role:q.role||'',
+            hand:q.hand, height:q.height, status:q.status, goal:q.goal||'',
+            isCaptain:!!q.cap && !DB.players.some(x=>x.isCaptain),
+            isViceCaptain:!!q.vice && !DB.players.some(x=>x.isViceCaptain),
+            pin:String(o.pin), archivio});
+        ensureDBDefaults(); save();
+        if(k.photo){ await cIdbSet('p'+id, k.photo); COACH_PHOTOS[id]=k.photo; }
+        ORPHANS.splice(ORPHANS.indexOf(o),1);
+        renderRoster(); renderSyncSettings(); openOrphansModal();
+        const p=playerById(id);
+        toast(DB.players.some(x=>x.id!==id && x.number===p.number) ? `${p.name} recuperato: la maglia ${p.number} è già usata, correggila in Modifica` : `${p.name} recuperato nella rosa`, 'success');
+        /* riscrive subito lo stesso pacchetto (stesso id e PIN) e la copia completa;
+           se non riesce, il giocatore e' comunque in rosa e parte al prossimo Sincronizza */
+        await AiRIMSync.upsertPlayerPackage(sync.teamId, id, p.name, p.pin, buildPlayerPackage(id, k.photo||null));
+        uploadTeamBackupOnline();
+    }catch(e){
+        const detail=syncErrorDetail(e);
+        if(playerById(id)) toast(`Giocatore in rosa, ma pacchetto non aggiornato: premi Sincronizza — ${detail}`,'warning');
+        else toast(detail?`Recupero non riuscito — ${detail}`:'Recupero non riuscito','danger');
+    }
+}
+function deleteOrphan(i){
+    const o=ORPHANS[i]; if(!o) return;
+    confirmAction(`Eliminare dal server il profilo di ${o.player_name||'questo giocatore'}? Non potrà più entrare nel Player con il PIN ${o.pin}. Non si può annullare.`, async()=>{
+        try{
+            await AiRIMSync.deletePlayerPackage(DB.settings.sync.teamId, o.player_id);
+            ORPHANS.splice(ORPHANS.indexOf(o),1); openOrphansModal(); toast('Profilo eliminato dal server','info');
+        }catch(e){ toast(`Eliminazione non riuscita — ${syncErrorDetail(e)}`,'danger'); }
     });
 }
 /* ---------- Task 3: dopo import backup, se il coach e' gia' loggato su questo

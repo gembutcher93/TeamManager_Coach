@@ -111,12 +111,13 @@
     if (error) throw error;
   }
 
-  /* ---- player_packages: lettura (player, via team_code+pin) ---- */
-  async function getPlayerPackage(teamCode, pin) {
+  /* ---- player_packages: lettura via team_code+pin (usata dal coach per recuperare
+     un pacchetto orfano: con playerId sceglie la riga giusta se il PIN e' ripetuto) ---- */
+  async function getPlayerPackage(teamCode, pin, playerId) {
     const sb = await getClient();
     const { data, error } = await sb.rpc('get_player_package', { p_team_code: teamCode, p_pin: String(pin) });
     if (error) throw error;
-    return (data && data[0]) || null; // {team_id, player_id, player_name, package, updated_at}
+    return (data || []).find(r => playerId == null || String(r.player_id) === String(playerId)) || null; // {team_id, player_id, player_name, package, updated_at}
   }
 
   /* ---- vista "PIN squadra" per il coach ---- */
