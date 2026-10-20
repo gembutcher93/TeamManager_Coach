@@ -90,6 +90,22 @@
     return (data && data[0]) || null; // {backup, updated_at}
   }
 
+  /* ---- team_backups con versione (sincronizzazione che unisce): il server
+     accetta il caricamento solo se la versione attesa e' ancora quella attuale,
+     altrimenti errore 'version_conflict' (Prompt/sync_versione_backup.sql) ---- */
+  async function getMyTeamBackupV() {
+    const sb = await getClient();
+    const { data, error } = await sb.rpc('get_my_team_backup_v');
+    if (error) throw error;
+    return (data && data[0]) || null; // {backup, updated_at, version}
+  }
+  async function upsertMyTeamBackupV(backup, expectedVersion) {
+    const sb = await getClient();
+    const { data, error } = await sb.rpc('upsert_my_team_backup_v', { p_backup: backup, p_expected_version: expectedVersion });
+    if (error) throw error;
+    return data; // nuova versione
+  }
+
   /* ---- player_packages: scrittura (coach) ---- */
   async function upsertPlayerPackage(teamId, playerId, playerName, pin, pkg) {
     const sb = await getClient();
@@ -169,5 +185,5 @@
   }
 
   window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, deletePlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus, getMyLicense,
-    signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance, upsertMyTeamBackup, getMyTeamBackup };
+    signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance, upsertMyTeamBackup, getMyTeamBackup, getMyTeamBackupV, upsertMyTeamBackupV };
 })();

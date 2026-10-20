@@ -558,7 +558,180 @@ function normalizeDB(d){
     d.players.forEach(p=>{ if(p.id==null) p.id=next++; });
     d.events.forEach(e=>{ if(e.id==null) e.id=next++; });
     d.nextId = next;
+    if(d._sync!==undefined && !isPlainObj(d._sync)) delete d._sync;
     return d;
+}
+/* =========================================================
+   SINCRONIZZAZIONE CHE UNISCE (piu' dispositivi sullo stesso account)
+   Ogni dato del DB ha un percorso: le chiavi degli oggetti e, nelle liste,
+   l'id dell'elemento (id; matchId per lo scout; date per il benessere).
+   DB._sync viaggia con il backup e tiene, per percorso:
+     m   = ora dell'ultima modifica (di questo o di un altro dispositivo)
+     del = cancellazioni (percorso e ora), per non confonderle con "mai visto"
+   Le date si registrano da sole a ogni salvataggio (syncTrack in _persistDB)
+   confrontando il DB con quello salvato prima: nessuna funzione dell'app che
+   modifica i dati va toccata. Backup vecchi senza date: valgono come ora 0.
+   ========================================================= */
+const SYNC_SEP='\u001f';
+// metadati, contatore id e stato sync del dispositivo: mai uniti come dati
+const SYNC_SKIP=new Set(['k_sync','knextId','ksettings'+SYNC_SEP+'ksync']);
+const syncPath=(p,seg)=>p?p+SYNC_SEP+seg:seg;
+const syncKeyOf=e=>!isPlainObj(e)?null:(e.id!=null?e.id:e.matchId!=null?e.matchId:e.date!=null?e.date:null);
+function syncKeyedList(a){   // lista di elementi con id univoco (vuota compresa)
+    if(!Array.isArray(a)) return false;
+    const seen=new Set();
+    for(const e of a){ const k=syncKeyOf(e); if(k==null || seen.has(String(k))) return false; seen.add(String(k)); }
+    return true;
+}
+function syncFlat(db){
+    const out={leaves:new Map(), nodes:new Set()};
+    const walk=(v,p)=>{
+        out.nodes.add(p);
+        if(isPlainObj(v)){ Object.keys(v).forEach(k=>{ const c=syncPath(p,'k'+k); if(!SYNC_SKIP.has(c)) walk(v[k],c); }); return; }
+        if(Array.isArray(v) && v.length && syncKeyedList(v)){ v.forEach(e=>walk(e,syncPath(p,'i'+syncKeyOf(e)))); return; }
+        out.leaves.set(p, JSON.stringify(v));
+    };
+    walk(db,'');
+    return out;
+}
+function syncMeta(d){ d._sync=objOr(d._sync); d._sync.m=objOr(d._sync.m); d._sync.del=objOr(d._sync.del); return d._sync; }
+const syncUnder=(k,p)=>k===p || k.startsWith(p+SYNC_SEP);
+let _syncPrev=null, _syncPrevDB=null;
+function syncTrack(){
+    const cur=syncFlat(DB), meta=syncMeta(DB), now=Date.now();
+    // DB sostituito (import, ripristino, unione): nuova base, nessuna data inventata
+    if(_syncPrev && _syncPrevDB===DB){
+        cur.leaves.forEach((v,p)=>{
+            if(_syncPrev.leaves.get(p)===v) return;
+            meta.m[p]=now;
+            const s=p.split(SYNC_SEP); for(let i=1;i<=s.length;i++) delete meta.del[s.slice(0,i).join(SYNC_SEP)];
+        });
+        _syncPrev.leaves.forEach((v,p)=>{
+            if(cur.leaves.has(p)) return;
+            const s=p.split(SYNC_SEP);
+            for(let i=1;i<=s.length;i++){ const top=s.slice(0,i).join(SYNC_SEP);
+                if(!cur.nodes.has(top)){ meta.del[top]=now; Object.keys(meta.m).forEach(k=>{ if(syncUnder(k,top)) delete meta.m[k]; }); break; } }
+        });
+    }
+    _syncPrev=cur; _syncPrevDB=DB;
+}
+/* modifiche locali non ancora caricate sul server */
+function syncDirty(){
+    const t=(DB.settings.sync&&DB.settings.sync.baseAt)||0, s=DB._sync;
+    if(!isPlainObj(s)) return false;
+    return Object.values(objOr(s.m)).some(x=>x>t) || Object.values(objOr(s.del)).some(x=>x>t);
+}
+/* unione elemento per elemento: loc = questo dispositivo, srv = copia sul server,
+   baseAt = ora dell'ultima sincronizzazione di questo dispositivo */
+function syncMerge(loc, srv, baseAt){
+    const Lm=syncMeta(loc).m, Ld=loc._sync.del, Sm=syncMeta(srv).m;
+    const Sd=srv._sync.del, rep={added:[], conflicts:[], restored:[], ask:[], removed:[], kept:[]};
+    const newest=(m,p)=>{ let t=0; for(const k in m) if(syncUnder(k,p) && m[k]>t) t=m[k]; return t; };
+    const node=(a,b,p)=>{
+        if(a===undefined && b===undefined) return undefined;
+        if(a===undefined){                                  // c'e' solo sul server
+            if(Ld[p]){                                      // tolto qui: resta tolto, salvo modifiche successive altrove
+                if(newest(Sm,p)>Ld[p]){ rep.restored.push(p); return b; }
+                return undefined;
+            }
+            rep.added.push(p); return b;                    // aggiunto su un altro dispositivo
+        }
+        if(b===undefined){                                  // c'e' solo qui
+            if(Sd[p]) rep.ask.push(p);                      // tolto altrove: decide il coach, mai in silenzio
+            return a;
+        }
+        if(isPlainObj(a) && isPlainObj(b)){
+            const o={};
+            new Set([...Object.keys(a),...Object.keys(b)]).forEach(k=>{
+                const c=syncPath(p,'k'+k), v=SYNC_SKIP.has(c)?a[k]:node(a[k],b[k],c);
+                if(v!==undefined) o[k]=v;
+            });
+            return o;
+        }
+        if(Array.isArray(a) && Array.isArray(b) && syncKeyedList(a) && syncKeyedList(b)){
+            const bm=new Map(b.map(e=>[String(syncKeyOf(e)),e])), out=[];
+            a.forEach(e=>{ const k=String(syncKeyOf(e)), v=node(e,bm.get(k),syncPath(p,'i'+k)); bm.delete(k); if(v!==undefined) out.push(v); });
+            bm.forEach((e,k)=>{ const v=node(undefined,e,syncPath(p,'i'+k)); if(v!==undefined) out.push(v); });
+            return out;
+        }
+        if(JSON.stringify(a)===JSON.stringify(b)) return a;
+        const ta=Lm[p]||0, tb=Sm[p]||0;
+        if(ta>baseAt && tb>baseAt) rep.conflicts.push(p);  // modificato su entrambi dall'ultima sincronizzazione
+        return ta>tb ? a : b;                               // vince la modifica piu' recente; senza date vince il server
+    };
+    return {db:node(loc,srv,''), rep};
+}
+function syncRemoveAt(db, p){
+    const s=p.split(SYNC_SEP); let cur=db;
+    for(let i=0;i<s.length;i++){
+        const t=s[i][0], k=s[i].slice(1), last=i===s.length-1;
+        if(t==='k'){ if(!isPlainObj(cur)) return; if(last){ delete cur[k]; return; } cur=cur[k]; }
+        else{ if(!Array.isArray(cur)) return; const j=cur.findIndex(e=>String(syncKeyOf(e))===k); if(j<0) return; if(last){ cur.splice(j,1); return; } cur=cur[j]; }
+    }
+}
+/* dopo le scelte del coach (decided: percorso -> true togli / false tieni) */
+function syncFinalize(r, loc, srv, decided){
+    const db=r.db, now=Date.now(), max=(x,y)=>{ const o={...x}; for(const k in y) if(!(o[k]>=y[k])) o[k]=y[k]; return o; };
+    const m=max(srv._sync.m, loc._sync.m), del=max(srv._sync.del, loc._sync.del), keep=[];
+    Object.keys(decided).forEach(p=>{
+        if(decided[p]){ syncRemoveAt(db,p); r.rep.removed.push(p); }
+        else{ keep.push(p); r.rep.kept.push(p); }
+    });
+    const flat=syncFlat(db);
+    // "Tieni": i suoi dati diventano piu' recenti della cancellazione, cosi' tornano anche sull'altro dispositivo
+    keep.forEach(p=>flat.leaves.forEach((v,k)=>{ if(syncUnder(k,p)) m[k]=now; }));
+    // ponytail: cancellazioni dimenticate dopo 180 giorni; un dispositivo spento piu' a lungo puo' riportare dati tolti (mai perderne)
+    Object.keys(del).forEach(p=>{ if(flat.nodes.has(p) || del[p]<now-180*864e5) delete del[p]; });
+    db._sync={m, del};
+    db.nextId=Math.max(+loc.nextId||0, +srv.nextId||0);
+    return db;
+}
+/* etichetta leggibile di un percorso, per riepilogo e conferme */
+function syncLabel(p, ...dbs){
+    const s=p.split(SYNC_SEP).map(x=>x.slice(1));
+    const find=(list,id)=>{ for(const d of dbs){ const x=arrOr(d&&d[list]).find(e=>String(syncKeyOf(e))===String(id)); if(x) return x; } return null; };
+    const day=d=>{ const t=new Date(d); return isNaN(t)?String(d||''):t.toLocaleDateString('it-IT'); };
+    const pl=id=>{ const x=find('players',id); return (x&&x.name)||'giocatore'; };
+    const ev=id=>{ const x=find('events',id); return x?`${x.type==='Partita'?'partita':'allenamento'} del ${day(x.date)}${x.notes?' ('+x.notes+')':''}`:'evento'; };
+    const r=(cat,label)=>({cat,label});
+    switch(s[0]){
+        case 'players':
+            if(s.length<=2) return r('giocatore', pl(s[1]));
+            return r(s[2]==='wellness'?'check-in benessere':'dato giocatore', pl(s[1]));
+        case 'events': return r(s.length<=2?'evento':'dato evento', ev(s[1]));
+        case 'scoutHistory': { const x=find('scoutHistory',s[1]); return r('scout partita', x?`${x.opponent||''} del ${day(x.date)}`.trim():ev(s[1])); }
+        case 'trainings':
+            if(s.length<=2) return r('allenamento', ev(s[1]));
+            if(s[2]==='grades') return r('voto', s[3]?`${pl(s[3])}, ${ev(s[1])}`:ev(s[1]));
+            if(s[2]==='notes') return r('nota', s[3]?`${pl(s[3])}, ${ev(s[1])}`:ev(s[1]));
+            return r('esercizio', ev(s[1]));
+        case 'attendance': return r(s.length<=2?'presenze':'presenza', s[2]?`${pl(s[2])}, ${ev(s[1])}`:ev(s[1]));
+        case 'physicalTests': { let x=null; for(const d of dbs){ x=arrOr(d&&d.physicalTests&&d.physicalTests[s[1]]).find(e=>String(e.id)===s[2]); if(x) break; }
+            return r('test fisico', x?`${pl(x.playerId)} del ${day(x.date)}`:'test'); }
+        case 'substitutions': return r('cambio', ev(s[1]));
+        case 'rotationStats': return r('rotazioni', ev(s[1]));
+        case 'settings': return r('impostazione', s.slice(1).join(' › '));
+        case 'teamName': return r('nome squadra', 'nome squadra');
+        default: return r('dato', s.join(' › '));
+    }
+}
+const SYNC_PLURAL={giocatore:'giocatori', 'dato giocatore':'dati giocatore', evento:'eventi', 'dato evento':'dati evento', 'scout partita':'scout partite',
+    allenamento:'allenamenti', voto:'voti', nota:'note', esercizio:'esercizi', presenze:'presenze', presenza:'presenze', 'test fisico':'test fisici',
+    cambio:'cambi', rotazioni:'rotazioni', impostazione:'impostazioni', dato:'dati'};
+function syncSummaryLines(rep, ...dbs){
+    const group=(paths,withNames)=>{
+        const by=new Map();
+        paths.forEach(p=>{ const {cat,label}=syncLabel(p,...dbs); if(!by.has(cat)) by.set(cat,new Set()); by.get(cat).add(label); });
+        return [...by].map(([cat,ls])=>{ const n=withNames?ls.size:paths.filter(p=>syncLabel(p,...dbs).cat===cat).length;
+            return `${n} ${n===1?cat:(SYNC_PLURAL[cat]||cat)}${cat==='giocatore'||withNames?` (${[...ls].join(', ')})`:''}`; }).join(', ');
+    };
+    const out=[];
+    if(rep.added.length) out.push(`Aggiunti da un altro dispositivo: ${group(rep.added,false)}.`);
+    if(rep.conflicts.length){ const ls=new Set(rep.conflicts.map(p=>syncLabel(p,...dbs).label)); out.push(`Conflitti risolti con la modifica più recente: ${ls.size} (${[...ls].join(', ')}).`); }
+    if(rep.restored.length) out.push(`Tornati perché modificati altrove dopo che li avevi tolti: ${group(rep.restored,true)}.`);
+    if(rep.removed.length) out.push(`Tolti come sull'altro dispositivo: ${group(rep.removed,true)}.`);
+    if(rep.kept.length) out.push(`Tenuti anche se tolti altrove: ${group(rep.kept,true)}.`);
+    return out;
 }
 function ensureDBDefaults(){
     DB = normalizeDB(DB);
@@ -567,6 +740,7 @@ function ensureDBDefaults(){
     DB.players.forEach(p=>{ if(!p.pin) p.pin=genPlayerPin(); else p.pin=String(p.pin); });
 }
 ensureDBDefaults();
+syncTrack();   // base delle date di modifica: quello che c'e' all'avvio non e' una modifica nuova
 /* Task 1 (Prompt16): PIN casuale invece che sequenziale — un PIN progressivo
    (1, 2, 3…) e' banale da indovinare per un compagno di squadra che vuole
    sbirciare la scheda di un altro. 4 cifre casuali, ricontrollate contro i
@@ -590,7 +764,7 @@ function ensureSyncSettings(){
    reload mentre la licenza non e' attiva, anche per azioni non esplicitamente
    protette da guardWrite(). saveSystem() e' il bypass riservato al bookkeeping
    del controllo licenza stesso (altrimenti lo stato non potrebbe mai aggiornarsi). */
-function _persistDB(){ localStorage.setItem(dbKey(), JSON.stringify(DB)); }
+function _persistDB(){ try{ syncTrack(); }catch(e){ console.warn('syncTrack',e); } localStorage.setItem(dbKey(), JSON.stringify(DB)); }
 function saveSystem(){ _persistDB(); }
 function save(){
     if(!canWriteDB()){
@@ -600,7 +774,14 @@ function save(){
     }
     _persistDB();
 }
-function uid(){ return DB.nextId++; }
+/* id unici anche tra dispositivi diversi: due coach che aggiungono insieme un
+   giocatore non devono mai generare lo stesso id (l'unione li confonderebbe).
+   Ora in ms * 1000 + 3 cifre casuali, sempre crescente su questo dispositivo. */
+function uid(){
+    const id=Math.max(+DB.nextId||1, Date.now()*1000+Math.floor(Math.random()*1000));
+    DB.nextId=id+1;
+    return id;
+}
 
 /* =========================================================
    TUTORIAL — primo avvio (ENTRAMBE le build), riapribile da Impostazioni.
@@ -1205,8 +1386,10 @@ function openModal(html,wide){
     m.innerHTML=html;
     document.getElementById('modal-overlay').classList.add('show');
 }
+let _modalOnClose=null;   // azione in attesa legata alla finestra aperta (sincronizzazione)
 function closeModal(){
     document.getElementById('modal-overlay').classList.remove('show');
+    if(_modalOnClose){ const f=_modalOnClose; _modalOnClose=null; f(); }
     if(typeof PHYS!=='undefined' && PHYS){ if(PHYS.videoURL) URL.revokeObjectURL(PHYS.videoURL); PHYS=null; }
 }
 /* ---------- modale custom al posto di window.prompt() ---------- */
@@ -4396,19 +4579,100 @@ function exportData(){
     toast('Backup scaricato');
 }
 /* Copia completa del DB sul server (team_backups): solo dentro la sincronizzazione.
-   Best-effort: un errore qui non annulla la sync dei giocatori, ma viene segnalato. */
+   Non sovrascrive piu': se la copia sul server e' cambiata da un altro dispositivo
+   (versione diversa da quella che questo dispositivo conosce) prima la scarica, la
+   unisce ai dati locali e poi carica il risultato. Il server accetta il caricamento
+   solo se la versione e' ancora quella attesa (upsert_my_team_backup_v): se un altro
+   dispositivo ha caricato nel frattempo, si rifa' scarica -> unisci -> carica.
+   Restituisce il resoconto dell'unione (null se non c'era niente da unire), false se
+   non riuscito; {cancelled:true} se il coach ha annullato. Un errore viene segnalato
+   ma non annulla la sync dei giocatori. */
+let _backupSyncPromise=null;
 function uploadTeamBackupOnline(){
     if(!COACH_EMAIL || !canSync() || typeof AiRIMSync==='undefined') return Promise.resolve(false);
-    return AiRIMSync.upsertMyTeamBackup(DB).then(()=>{
+    if(_backupSyncPromise) return _backupSyncPromise;
+    _backupSyncPromise=mergeAndUploadBackup().then(rep=>{
         DB.settings.sync.lastOnlineSaveAt=new Date().toISOString(); saveSystem();
         renderSyncSettings();
         const d=document.getElementById('dashboard'); if(d && d.classList.contains('active')) renderDashboard();
-        return true;
+        return rep;
     }).catch(e=>{
+        if(e && e.cancelled){ toast('Sincronizzazione annullata: niente è stato caricato.','info'); return {cancelled:true}; }
         const detail=syncErrorDetail(e);
         toast(detail?`Copia online non aggiornata — ${detail}`:'Copia online non aggiornata: verifica la connessione','warning');
         return false;
+    }).finally(()=>{ _backupSyncPromise=null; });
+    return _backupSyncPromise;
+}
+async function mergeAndUploadBackup(){
+    const decided={};   // scelte del coach sulle cancellazioni, tenute se si deve riunire
+    let rep=null;
+    for(let tries=0; tries<4; tries++){
+        const row=await AiRIMSync.getMyTeamBackupV();
+        const ver=row ? Number(row.version) : 0;
+        if(row && row.backup && ver!==DB.settings.sync.baseVersion){
+            const srv=stripDangerousKeys(row.backup);
+            if(isPlainObj(srv) && Array.isArray(srv.players)){
+                normalizeDB(srv);
+                const loc=DB, r=syncMerge(loc, srv, DB.settings.sync.baseAt||0);
+                const asks=r.rep.ask.filter(p=>!(p in decided));
+                if(asks.length) Object.assign(decided, await askRemoteDeletions(asks.map(p=>({p, label:syncLabel(p, loc, srv).label}))));
+                r.rep.ask.filter(p=>!(p in decided)).forEach(p=>{ decided[p]=false; });
+                const db=syncFinalize(r, loc, srv, decided);
+                DB=db; ensureDBDefaults(); save();
+                rep=r.rep; rep.dbs=[loc, srv];
+                rerenderCurrentSection();
+            }
+        }
+        try{
+            const v=await AiRIMSync.upsertMyTeamBackupV(DB, ver);
+            const sync=DB.settings.sync; sync.baseVersion=Number(v); sync.baseAt=Date.now(); saveSystem();
+            return rep;
+        }catch(e){
+            // un altro dispositivo ha caricato nel frattempo: si riparte da scarica -> unisci
+            if(!/version_conflict/.test(syncErrorDetail(e))) throw e;
+        }
+    }
+    throw new Error('troppi caricamenti contemporanei da altri dispositivi, riprova tra poco');
+}
+function rerenderCurrentSection(){
+    const s=document.querySelector('.section.active');
+    try{ renderTeamName(); if(s && RENDERERS[s.id]) RENDERERS[s.id](); }catch(e){ console.warn('render dopo unione',e); }
+}
+/* cancellazioni fatte su un altro dispositivo: una conferma per ciascuna */
+function askRemoteDeletions(items){
+    return new Promise((resolve,reject)=>{
+        const dec={};
+        const draw=()=>{
+            const all=items.every(it=>it.p in dec);
+            openModal(`<div class="modal-head"><h3><i class="fa-solid fa-code-merge" style="color:var(--brand)"></i> Tolti su un altro dispositivo</h3>
+                <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+              <div class="modal-body">
+                <p class="hint" style="margin-bottom:6px">Niente viene tolto senza la tua conferma. «Tieni» lo lascia qui e lo rimette anche sull'altro dispositivo.</p>
+                ${items.map((it,i)=>`<div style="padding:10px 0;border-bottom:1px solid var(--line-soft)">
+                    <div>Su un altro dispositivo è stato tolto: <b>${escapeHtml(it.label)}</b></div>
+                    <div style="display:flex;gap:8px;margin-top:8px">
+                      <button class="btn btn-sm ${dec[it.p]===true?'btn-danger':'btn-ghost'}" style="flex:1" onclick="_syncDecide(${i},true)">Togli anche qui</button>
+                      <button class="btn btn-sm ${dec[it.p]===false?'btn-accent':'btn-ghost'}" style="flex:1" onclick="_syncDecide(${i},false)">Tieni</button>
+                    </div></div>`).join('')}
+                <button class="btn btn-accent" style="width:100%;margin-top:14px" ${all?'':'disabled'} onclick="_syncDecideDone()">Continua la sincronizzazione</button>
+              </div>`);
+            _modalOnClose=()=>reject(Object.assign(new Error('annullata'),{cancelled:true}));
+        };
+        window._syncDecide=(i,v)=>{ dec[items[i].p]=v; draw(); };
+        window._syncDecideDone=()=>{ _modalOnClose=null; closeModal(); resolve(dec); };
+        draw();
     });
+}
+/* riepilogo finale dell'unione; then() parte quando il coach lo chiude */
+function showSyncSummary(rep, then){
+    const lines=(rep && !rep.cancelled && rep.dbs) ? syncSummaryLines(rep, ...rep.dbs) : [];
+    if(!lines.length){ if(then) then(); return; }
+    openModal(`<div class="modal-head"><h3><i class="fa-solid fa-code-merge" style="color:var(--brand)"></i> Dati uniti con l'altro dispositivo</h3>
+        <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="modal-body">${lines.map(l=>`<p style="margin:0 0 10px;line-height:1.5">${escapeHtml(l)}</p>`).join('')}
+        <button class="btn btn-accent" style="width:100%;margin-top:6px" onclick="closeModal()">OK</button></div>`);
+    _modalOnClose=then||null;
 }
 function lastOnlineSaveText(){
     const t=DB.settings.sync && DB.settings.sync.lastOnlineSaveAt;
@@ -4434,6 +4698,8 @@ function importData(e){
                 try{ DB=data; ensureDBDefaults(); }
                 catch(err){ DB=JSON.parse(prevDB); ensureDBDefaults(); toast('Backup non ripristinato: file danneggiato. I dati attuali non sono stati toccati.','danger'); return; }
                 if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza non viaggia nei backup
+                // un file non dice quale versione c'e' sul server: il prossimo Sincronizza unisce, mai sovrascrive
+                if(DB.settings.sync){ delete DB.settings.sync.baseVersion; delete DB.settings.sync.baseAt; }
                 /* Task 3 (Prompt16): un backup vecchio/scollegato non porta con se' un
                    account coach — se il coach e' loggato su questo device, ricollega la
                    squadra importata al SUO account (owner_user_id) invece di lasciare che
@@ -5344,7 +5610,12 @@ async function syncAllPlayersOnline(){
     const btns=syncAllBtns(); btns.forEach(b=>{ b.disabled=true; b.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Sincronizzazione…'; });
     let ok=0, fail=0;
     try{
-        const sync=await ensureTeamOnline();
+        await ensureTeamOnline();
+        /* prima la copia completa (unita a quella degli altri dispositivi), poi i
+           pacchetti di TUTTI i giocatori della rosa risultante */
+        const rep=await uploadTeamBackupOnline();
+        if(rep && rep.cancelled) throw Object.assign(new Error('annullata'),{cancelled:true});
+        const sync=DB.settings.sync;
         for(const p of DB.players){
             try{
                 const photo=await cIdbGet('p'+p.id);
@@ -5354,13 +5625,16 @@ async function syncAllPlayersOnline(){
             }catch(e){ fail++; }
         }
         sync.hasEverSynced=true; save();
-        uploadTeamBackupOnline();
         toast(fail? `Sincronizzati ${ok}, ${fail} falliti` : `${ok} giocatori sincronizzati`, fail?'warning':'success');
         checkLicenseOnline(true);
-        checkOrphanPackages(sync);
+        // pacchetti di giocatori non in rosa: avviso della v80, mai cancellati in automatico
+        showSyncSummary(rep, ()=>checkOrphanPackages(sync));
     }catch(e){
-        const detail=syncErrorDetail(e);
-        toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita: verifica la connessione','danger');
+        if(e && e.cancelled){ /* gia' segnalato */ }
+        else{
+            const detail=syncErrorDetail(e);
+            toast(detail?`Sincronizzazione fallita — ${detail}`:'Sincronizzazione fallita: verifica la connessione','danger');
+        }
     }
     btns.forEach(b=>{ b.disabled=false; b.innerHTML='<i class="fa-solid fa-cloud-arrow-up"></i> Sincronizza'; });
     renderSyncSettings();
@@ -5479,12 +5753,14 @@ async function relinkTeamAfterImport(){
    proposito: sono loro a mettere un .catch(()=>false) quando lo invocano. */
 async function pullTeamFromServer(){
     if(typeof AiRIMSync==='undefined') return false;
-    const res=await AiRIMSync.getMyTeamBackup();
+    const res=await AiRIMSync.getMyTeamBackupV();
     if(!res||!res.backup) return false;
     const data=stripDangerousKeys(res.backup);
     if(!isPlainObj(data) || !Array.isArray(data.players)) return false;
     DB=data; ensureDBDefaults();
     if(DB.settings.sync) delete DB.settings.sync.license;   // la licenza sta in LICENSE_KEY, non nel backup
+    // da qui questo dispositivo conosce esattamente la versione del server (lo stato sync del backup e' di chi l'ha caricato)
+    DB.settings.sync.baseVersion=Number(res.version); DB.settings.sync.baseAt=Date.now();
     // owner della verita' per teamId/teamCode resta la riga `teams`, non il
     // blob di backup (che potrebbe portarsi dietro valori vecchi/di un altro
     // device): stesso self-heal gia' usato dopo un import di backup manuale.
@@ -5511,7 +5787,18 @@ function importTeamFromServer(){
                 if(document.getElementById('dashboard').classList.contains('active')) renderDashboard();
             }
         };
-        if(DB.players.length){
+        if(DB.players.length && syncDirty()){
+            /* modifiche non ancora caricate: proporre di unirle invece di perderle */
+            openModal(`<div class="modal-head"><h3><i class="fa-solid fa-triangle-exclamation" style="color:var(--warn)"></i> Modifiche non sincronizzate</h3>
+                <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button></div>
+              <div class="modal-body">
+                <p style="margin-bottom:12px;line-height:1.5">Su questo dispositivo ci sono modifiche non ancora sincronizzate. «Ripristina dal server» sostituisce i dati locali con quelli del server e queste modifiche andrebbero perse.</p>
+                <button class="btn btn-accent" style="width:100%" onclick="closeModal();syncAllPlayersOnline()"><i class="fa-solid fa-code-merge"></i> Sincronizza (unisci)</button>
+                <button class="btn btn-danger" style="width:100%;margin-top:8px" id="restore-anyway-btn">Ripristina comunque</button>
+                <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal()">Annulla</button>
+              </div>`);
+            document.getElementById('restore-anyway-btn').onclick=()=>{ closeModal(); doPull(); };
+        }else if(DB.players.length){
             confirmAction('Ripristinare la copia salvata online sovrascriverà TUTTI i dati locali di questo dispositivo (rosa, scout, calendario). Continuare?', doPull);
         }else{
             doPull();
