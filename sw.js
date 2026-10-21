@@ -5,7 +5,7 @@
    Bump CACHE_VERSION ad ogni rilascio. localStorage, IndexedDB e sessione non vengono mai toccati:
    si cancellano solo le cache di QUESTA app (prefisso volleyteam-). */
 const CACHE_PREFIX = 'volleyteam-';
-const CACHE_VERSION = 'volleyteam-v82';
+const CACHE_VERSION = 'volleyteam-v83';
 const APP_SHELL = [
   './',
   './index.html',
@@ -42,9 +42,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// La pagina chiede di applicare l'aggiornamento in attesa
+// La pagina chiede di applicare l'aggiornamento in attesa, o la versione in uso
+// (unica fonte del numero mostrato nelle impostazioni)
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data && event.data.type === 'GET_VERSION' && event.ports[0]) event.ports[0].postMessage(CACHE_VERSION);
 });
 
 // Fetch: same-origin cache-first (offline), CDN stale-while-revalidate

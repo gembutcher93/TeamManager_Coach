@@ -4917,7 +4917,7 @@ function backupReminderNow(){ exportData(); dismissBackupReminder(); }
    serve solo a chi vuole aggiornare subito: prima del reload il lavoro in corso
    viene salvato e poi ripristinato. localStorage/IndexedDB/sessione restano intatti.
    ========================================================= */
-const APP_VERSION='volleyteam-v78';   /* combacia col CACHE_VERSION di sw.js */
+let APP_VERSION='';   /* chiesta al service worker attivo (CACHE_VERSION di sw.js): unica fonte */
 let swReg=null, pwaRefreshing=false;
 let pwaReloadAllowed=false;           /* il reload su controllerchange avviene SOLO se l'abbiamo chiesto noi */
 let pwaLastInteraction=0, pwaHiddenAt=0, pwaLastCheckAt=0;
@@ -5050,7 +5050,13 @@ function pwaMarkSettings(available){
   const el=document.getElementById('pwa-settings-state'); if(!el) return;
   el.innerHTML = available
     ? `<span class="pwa-badge-new">Aggiornamento pronto</span><button class="btn btn-accent" onclick="pwaApplyUpdate()"><i class="fa-solid fa-arrows-rotate"></i> Aggiorna adesso</button>`
-    : `<span class="pwa-ok">Sei alla versione più recente (${APP_VERSION}).</span>`;
+    : `<span class="pwa-ok">Sei alla versione più recente${APP_VERSION?` (${APP_VERSION})`:''}.</span>`;
+}
+function pwaLoadVersion(){
+  const c=navigator.serviceWorker && navigator.serviceWorker.controller; if(!c) return;
+  const ch=new MessageChannel();
+  ch.port1.onmessage=e=>{ APP_VERSION=String(e.data||''); pwaMarkSettings(!!(swReg&&swReg.waiting)); };
+  c.postMessage({type:'GET_VERSION'},[ch.port2]);
 }
 /* Controllo silenzioso: se c'e' una versione nuova il SW la scarica e la lascia in attesa. Offline: nessun errore. */
 function pwaCheckUpdate(){
@@ -5079,7 +5085,7 @@ function pwaApplyOnOpening(reg){
 if('serviceWorker' in navigator){
   /* Nessun reload automatico: solo se l'attivazione l'abbiamo chiesta noi (apertura o banner).
      Un aggiornamento attivato da un'altra scheda non ricarica questa. */
-  navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(pwaReloadAllowed) pwaReload(); });
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(pwaReloadAllowed) pwaReload(); else pwaLoadVersion(); });
   /* Avvio: versione in attesa → attivala ora, a schermata appena aperta */
   navigator.serviceWorker.getRegistration().then(reg=>{
     if(reg && !pwaLastInteraction) pwaApplyOnOpening(reg);
@@ -5111,6 +5117,7 @@ if('serviceWorker' in navigator){
         });
       });
       pwaMarkSettings(!!reg.waiting);
+      pwaLoadVersion();
       pwaCheckUpdate();                                /* controllo all'apertura */
     });
   });
