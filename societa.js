@@ -683,4 +683,112 @@ async function salvaVoceExtra(btn, tId) {
   });
 }
 
+/* =========================================================
+   NON IN REGOLA, SOLLECITI, IMPOSTAZIONI
+   ========================================================= */
+VISTE.nir = { titolo: 'Non in regola', icona: 'fa-triangle-exclamation', ruoli: ['presidente', 'dirigente'], async render({ squadra }) {
+  const sq = await squadre();
+  const r = await rpc('soc_non_in_regola', { p_societa: S.soc.societa_id, p_squadra: squadra || null }) || [];
+  S.cache.nir = r;
+  const tot = r.reduce((s, x) => s + Number(x.totale), 0);
+  vista(`<div class="eyebrow">Solleciti</div><h2>Non in regola</h2>
+    <div class="fg"><select onchange="vai('nir',{squadra:this.value||null})"><option value="">Tutte le squadre</option>
+      ${sq.map((x) => `<option value="${x.id}" ${x.id === squadra ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
+    <div class="kpis"><div class="kpi"><span>Persone</span><b class="num">${r.length}</b></div>
+      <div class="kpi"><span>Scaduto</span><b class="num" style="color:var(--bad)">${euro(tot)}</b></div></div>
+    ${r.length ? `<button class="btn btn-ghost btn-block" style="margin-bottom:1rem" onclick="avvisaTutti(this,${squadra ? `'${squadra}'` : 'null'})">
+      <i class="fa-solid fa-bell"></i> Avvisa tutti in app (AiRIM Player)</button>` : ''}
+    <div class="list">${r.map((x, i) => `
+      <div class="item" style="cursor:default;flex-direction:column;align-items:stretch">
+        <div style="display:flex;gap:10px;align-items:flex-start"><div class="b"><b>${esc(nomeCompleto(x))}</b>
+          <small>${esc(x.squadra_nome)}${x.minorenne ? ' · minorenne' : ''}</small></div>
+          <div class="r num" style="color:var(--bad)">${euro(x.totale)}</div></div>
+        <div style="font-size:.9rem;margin:6px 0">${esc(x.voci_testo)} = ${euro(x.totale)}</div>
+        <small class="muted">${x.minorenne ? 'Messaggio al genitore: ' : 'Messaggio a: '}${esc(x.destinatario_nome)}${x.destinatario_telefono ? ' · ' + esc(x.destinatario_telefono) : ''}
+          ${x.ultimo_sollecito_il ? `<br>Ultimo sollecito: ${quando(x.ultimo_sollecito_il)} (${x.ultimo_canale === 'app' ? 'in app' : 'WhatsApp'})` : ''}</small>
+        <div class="btns" style="margin-top:8px">
+          ${x.wa_numero ? `<a class="btn btn-accent btn-sm" href="${waLink(x.wa_numero, x.testo_whatsapp)}" target="_blank" rel="noopener" onclick="sollecitato(${i},'whatsapp')"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>`
+            : `<button class="btn btn-ghost btn-sm" onclick="vai('tesserato',{id:'${x.tesserato_id}'})">Manca il telefono: aggiungilo</button>`}
+          ${!x.minorenne && x.ha_player ? `<button class="btn btn-ghost btn-sm" onclick="avvisaInApp(this,${i})"><i class="fa-solid fa-bell"></i> In app</button>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="vai('tesserato',{id:'${x.tesserato_id}'})">Scheda</button></div></div>`).join('')
+      || '<div class="empty">Tutti in regola. 🎉</div>'}</div>
+    <p class="hint">Contano solo le voci già scadute. Il messaggio WhatsApp parte dal tuo telefono; il sollecito viene segnato nel registro quando tocchi il bottone.</p>`);
+} };
+function sollecitato(i, canale) {
+  const x = S.cache.nir[i];
+  // il link si apre subito; la registrazione va in parallelo e non lo blocca
+  rpc('soc_registra_sollecito', { p_tesserato: x.tesserato_id, p_canale: canale })
+    .then(() => toast('Sollecito segnato nel registro'))
+    .catch((e) => toast(errText(e), 'danger'));
+}
+async function avvisaInApp(btn, i) {
+  const x = S.cache.nir[i];
+  await azione(btn, async () => {
+    await rpc('soc_registra_sollecito', { p_tesserato: x.tesserato_id, p_canale: 'app' });
+    toast(`Avviso inviato a ${x.nome}: lo vedrà alla prossima apertura di AiRIM Player`);
+    ricarica();
+  });
+}
+function avvisaTutti(btn, squadra) {
+  conferma('Mandare l\'avviso in AiRIM Player a tutti i non in regola che usano l\'app? I minorenni si avvisano solo su WhatsApp, al genitore.', () => azione(btn, async () => {
+    const r = ((await rpc('soc_avvisa_tutti', { p_societa: S.soc.societa_id, p_squadra: squadra })) || [])[0] || {};
+    const extra = [Number(r.senza_app) ? `${r.senza_app} senza app: usa WhatsApp` : '', Number(r.minorenni) ? `${r.minorenni} minorenni: WhatsApp al genitore` : ''].filter(Boolean).join(' · ');
+    toast(`Avvisati in app: ${r.inviati || 0}${extra ? ' · ' + extra : ''}`);
+    ricarica();
+  }), 'Avvisa tutti');
+}
+
+VISTE.registro = { titolo: 'Registro', icona: 'fa-clock-rotate-left', ruoli: ['presidente', 'dirigente'], async render() {
+  const [sol, mem] = await Promise.all([
+    leggi('soc_solleciti', 'id,tesserato_id,canale,destinatario,totale,dettaglio,inviato_da,inviato_il',
+      (b) => b.eq('societa_id', S.soc.societa_id).order('inviato_il', { ascending: false }).limit(300)),
+    membri(true)]);
+  const ids = [...new Set(sol.map((x) => x.tesserato_id))];
+  const tess = ids.length ? await leggi('soc_tesserati', 'id,nome,cognome,squadra_id', (b) => b.in('id', ids)) : [];
+  const sq = await squadre();
+  const nomeT = (id) => { const t = tess.find((x) => x.id === id); return t ? nomeCompleto(t) : '—'; };
+  const sqT = (id) => { const t = tess.find((x) => x.id === id); const s = t && sq.find((x) => x.id === t.squadra_id); return s ? s.nome : ''; };
+  const chi = (id) => { const m = mem.find((x) => x.id === id); return m ? nomeCompleto(m) : '—'; };
+  vista(`<div class="eyebrow">Solleciti</div><h2>Registro</h2><div class="list">${sol.map((x) => `
+    <div class="item" style="cursor:default"><i class="fa-${x.canale === 'app' ? 'solid fa-bell' : 'brands fa-whatsapp'}" style="font-size:1.2rem;color:var(--brand)"></i>
+      <div class="b"><b>${esc(nomeT(x.tesserato_id))}</b><small>${esc(sqT(x.tesserato_id))} · ${x.canale === 'app' ? 'in app' : 'WhatsApp'}${x.destinatario === 'genitore' ? ' al genitore' : ''}
+        · ${quando(x.inviato_il)} · da ${esc(chi(x.inviato_da))}<br>${esc((x.dettaglio || []).map((d) => d.descrizione).join(', '))}</small></div>
+      <div class="r num">${euro(x.totale)}</div></div>`).join('') || '<div class="empty">Nessun sollecito inviato.</div>'}</div>`);
+} };
+
+const TESTO_WA_BASE = 'Ciao {destinatario}, ti scriviamo da {societa}. Per {nome} {cognome} ({squadra}) risultano da saldare: {voci} = {totale} €.\nBonifico a: {intestatario}\nIBAN: {iban}\nCausale: {causale}\nSe hai già pagato, ignora pure questo messaggio. Grazie!';
+const TESTO_APP_BASE = 'Hai {voci} da pagare: {totale} €';
+VISTE.impostazioni = { titolo: 'Società', icona: 'fa-gear', ruoli: ['presidente'], async render() {
+  const s = (await leggi('soc_societa', 'id,nome,iban,intestatario,causale_modello,testi', (b) => b.eq('id', S.soc.societa_id)))[0];
+  const t = s.testi || {};
+  vista(`<div class="eyebrow">Presidente</div><h2>Impostazioni società</h2>
+    <div class="card"><h3><i class="fa-solid fa-building-columns"></i> Dati per i pagamenti</h3>
+      <div class="fg"><label>Nome della società</label><input id="s-nome" value="${esc(s.nome)}" maxlength="80"></div>
+      <div class="fg"><label>IBAN</label><input id="s-iban" value="${esc(s.iban)}" autocapitalize="characters" placeholder="IT…"></div>
+      <div class="fg"><label>Intestatario del conto</label><input id="s-int" value="${esc(s.intestatario)}" maxlength="100"></div>
+      <div class="fg"><label>Causale</label><input id="s-cau" value="${esc(s.causale_modello)}" maxlength="200" placeholder="{voci} {cognome} {nome} {squadra} {stagione}"></div></div>
+    <div class="card"><h3><i class="fa-solid fa-message"></i> Testi dei solleciti</h3>
+      <div class="fg"><label>Messaggio WhatsApp</label><textarea id="s-wa" maxlength="1000">${esc(t.whatsapp || TESTO_WA_BASE)}</textarea></div>
+      <div class="fg"><label>Avviso in AiRIM Player</label><input id="s-app" value="${esc(t.app || TESTO_APP_BASE)}" maxlength="300"></div>
+      <p class="hint">Segnaposto: {destinatario} {nome} {cognome} {squadra} {stagione} {voci} {totale} {iban} {intestatario} {causale} {societa}</p></div>
+    <button class="btn btn-accent btn-block" onclick="salvaImpostazioni(this)">Salva</button>`);
+} };
+async function salvaImpostazioni(btn) {
+  const v = (k) => $(k).value.trim();
+  if (v('s-nome').length < 2) return toast('Scrivi il nome della società', 'danger');
+  const iban = v('s-iban').replace(/\s/g, '').toUpperCase();
+  if (iban && !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return toast('IBAN non valido', 'danger');
+  await azione(btn, async () => {
+    // testo uguale a quello predefinito = non salvato, così segue eventuali miglioramenti futuri
+    const testi = {};
+    if (v('s-wa') && v('s-wa') !== TESTO_WA_BASE) testi.whatsapp = v('s-wa');
+    if (v('s-app') && v('s-app') !== TESTO_APP_BASE) testi.app = v('s-app');
+    await rpc('soc_salva_impostazioni', { p_societa: S.soc.societa_id, p_nome: v('s-nome'), p_iban: iban,
+      p_intestatario: v('s-int'), p_causale_modello: v('s-cau'), p_testi: testi });
+    S.soc.nome = v('s-nome');
+    toast('Impostazioni salvate');
+    ricarica();
+  });
+}
+
 avvio();
