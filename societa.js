@@ -70,6 +70,7 @@ const ERRORI = {
   nessun_importo_dovuto: 'Non risulta nulla di scaduto da pagare.',
   minorenne_solo_whatsapp: 'Per i minorenni l\'avviso va al genitore su WhatsApp.',
   squadra_non_collegata: 'La squadra non è ancora collegata ad AiRIM Coach.',
+  nessuna_scadenza: 'Questa scadenza non è vicina: niente da avvisare.',
   rosa_non_disponibile: 'L\'allenatore non ha ancora sincronizzato la rosa: chiedigli di premere "Sincronizza" nel Coach.',
 };
 function errText(e) {
@@ -128,7 +129,7 @@ function conferma(testo, cb, etichetta, pericolo) {
 }
 
 /* ---------- privacy della Società (versione separata da quella dei coach) ---------- */
-const SOC_PRIVACY_VERSION = 'soc-v1.0 — 2026-10-21';
+const SOC_PRIVACY_VERSION = 'soc-v1.1 — 2026-10-21';
 const SOC_PRIVACY_TEXT = `INFORMATIVA E ACCORDO PER IL TRATTAMENTO DEI DATI — AiRIM Società
 
 Creando la società in AiRIM Società, il Presidente (o il legale rappresentante) dichiara di agire per conto della Società Sportiva / ASD e accetta quanto segue.
@@ -140,15 +141,16 @@ Creando la società in AiRIM Società, il Presidente (o il legale rappresentante
 2. Dati trattati
 - Staff: nome, cognome, telefono, ruolo; codice personale e PIN (il PIN è salvato solo in forma cifrata).
 - Tesserati: nome, cognome, ruolo, numero di maglia, telefono; per i minorenni nome e telefono di un genitore o tutore.
-- Quote: importi dovuti, scadenze, pagamenti ricevuti (data, importo, metodo), solleciti inviati.
+- Tesseramento: confermato sì/no con la data, scadenza della tessera e SOLO la data di scadenza del certificato medico.
+- Quote: importi dovuti, scadenze, pagamenti ricevuti (data, importo, metodo), solleciti e avvisi di scadenza inviati.
 - IBAN e intestatario del conto della Società.
-AiRIM Società NON tratta dati sanitari, certificati medici, codici fiscali o documenti d'identità. Voti, statistiche e check-in dell'app Coach non sono visibili al Presidente né ai dirigenti.
+Del certificato medico AiRIM Società conserva solo la data di scadenza: mai il documento, foto, tipo di visita o altre informazioni sanitarie. Non tratta codici fiscali né documenti d'identità. Voti, statistiche e check-in dell'app Coach non sono visibili al Presidente né ai dirigenti.
 
 3. Responsabilità della Società
 La Società garantisce di avere una base giuridica per il trattamento (es. rapporto associativo) e di aver informato i tesserati e, per i minorenni, i genitori o tutori. I messaggi WhatsApp partono dal telefono di chi li invia: la Società è responsabile del loro contenuto e dei destinatari.
 
 4. Sicurezza e conservazione
-I dati sono conservati su infrastruttura Supabase (cloud) con accesso protetto e regole per ruolo: gli allenatori non vedono quote, pagamenti né telefoni. I pagamenti non si cancellano, si annullano, per tenere uno storico affidabile. I dati restano finché la Società usa il servizio; alla chiusura vengono cancellati su richiesta del Presidente.
+I dati sono conservati su infrastruttura Supabase (cloud) con accesso protetto e regole per ruolo: gli allenatori non vedono quote, pagamenti né telefoni; del certificato vedono solo se è valido, in scadenza o scaduto. I pagamenti non si cancellano, si annullano, per tenere uno storico affidabile. I dati restano finché la Società usa il servizio; alla chiusura vengono cancellati su richiesta del Presidente.
 
 5. Diritti
 Gli interessati possono chiedere accesso, rettifica o cancellazione alla Società, che può inoltrare la richiesta allo Sviluppatore.
@@ -329,7 +331,7 @@ function schermataLicenza() {
    NAVIGAZIONE (le schermate si registrano in VISTE)
    ========================================================= */
 const VISTE = {};      // nome → { titolo, icona (solo le voci del menu), tab, ruoli, render }
-const MENU = ['home', 'squadre', 'nir', 'registro', 'staff', 'impostazioni', 'allenatore'];   // ordine del menu in basso
+const MENU = ['home', 'squadre', 'scadenze', 'nir', 'registro', 'staff', 'impostazioni', 'allenatore'];   // ordine del menu in basso
 function vai(nome, params) {
   S.view = nome; S.params = params || {};
   chiudiFoglio();
@@ -344,11 +346,21 @@ function vai(nome, params) {
 function ricarica() { vai(S.view, S.params); }
 function vista(html) { const el = $('view'); if (el) el.innerHTML = html; }
 
-/* allenatore: in Fase A vede solo le sue squadre (la vista certificati arriva in Fase B) */
+/* allenatore: le sue squadre e, per i suoi giocatori, solo semaforo del certificato e tesseramento sì/no */
 VISTE.allenatore = { titolo: 'Squadre', icona: 'fa-people-group', ruoli: ['allenatore'], async render() {
-  const sq = await leggi('soc_squadre', 'id,nome,stagione,team_id', (b) => b.eq('societa_id', S.soc.societa_id).order('nome'));
+  const [sq, rosa] = await Promise.all([leggi('soc_squadre', 'id,nome,stagione,team_id', (b) => b.eq('societa_id', S.soc.societa_id).order('nome')),
+    rpc('soc_allenatore_rosa', { p_societa: S.soc.societa_id })]);
   vista(`<div class="eyebrow">Allenatore</div><h2>Le tue squadre</h2>
-    <div class="list">${sq.map((x) => `<div class="item"><div class="b"><b>${esc(x.nome)}</b><small>${esc(x.stagione)} · ${x.team_id ? 'collegata ad AiRIM Coach' : 'non ancora collegata ad AiRIM Coach'}</small></div></div>`).join('') || '<div class="empty">Nessuna squadra assegnata.</div>'}</div>
+    ${sq.map((x) => { const g = (rosa || []).filter((r) => r.squadra_id === x.id);
+      return `<div class="card"><h3><i class="fa-solid fa-people-group"></i> ${esc(x.nome)}</h3>
+        <p class="hint" style="margin:-.5rem 0 .8rem">${esc(x.stagione)} · ${x.team_id ? 'collegata ad AiRIM Coach' : 'non ancora collegata ad AiRIM Coach'}</p>
+        <div class="list">${g.map((r) => `<div class="item" style="cursor:default"><span class="dot ${DOC[r.certificato][0]}"></span>
+          <div class="b"><b>${esc(nomeCompleto(r))}${r.numero != null ? ` <span class="muted">#${r.numero}</span>` : ''}</b>
+          <small>Certificato: ${DOC[r.certificato][1].toLowerCase()} · ${r.confermato ? 'tesserato' : 'tesseramento non confermato'}</small></div></div>`).join('')
+          || '<div class="empty">Nessun giocatore in elenco.</div>'}</div></div>`; }).join('') || '<div class="empty">Nessuna squadra assegnata.</div>'}
+    <p class="hint"><span class="dot ok" style="display:inline-block;width:9px;height:9px"></span> certificato valido ·
+      <span class="dot warn" style="display:inline-block;width:9px;height:9px"></span> scade entro 30 giorni ·
+      <span class="dot bad" style="display:inline-block;width:9px;height:9px"></span> scaduto o mancante</p>
     <div class="card" style="margin-top:1rem"><h3><i class="fa-solid fa-link"></i> Collega AiRIM Coach</h3>
       <p class="muted">Se usi AiRIM Coach con la tua email, aprilo e vai in Impostazioni → Società → "Collega a una società" con questo stesso codice e PIN. Da quel momento la società può importare la rosa (solo nome, numero e ruolo).</p></div>`);
 } };
@@ -371,6 +383,22 @@ function semaforo(voci) {
   const scaduto = voci.filter((v) => v.residuo > 0 && v.scadenza < oggi()).reduce((s, v) => s + Number(v.residuo), 0);
   const futuro = voci.filter((v) => v.residuo > 0 && v.scadenza >= oggi()).reduce((s, v) => s + Number(v.residuo), 0);
   return { scaduto, futuro, cls: scaduto > 0 ? 'bad' : futuro > 0 ? 'warn' : voci.length ? 'ok' : '' };
+}
+/* semaforo di tessera e certificato: verde valido, giallo entro 30 giorni, rosso scaduto o mancante */
+const DOC = { valido: ['ok', 'Valido'], in_scadenza: ['warn', 'In scadenza'], scaduto: ['bad', 'Scaduto'], mancante: ['bad', 'Mancante'] };
+function statoData(d) {
+  if (!d) return 'mancante';
+  const tra30 = new Date(); tra30.setDate(tra30.getDate() + 30);
+  const lim = tra30.getFullYear() + '-' + String(tra30.getMonth() + 1).padStart(2, '0') + '-' + String(tra30.getDate()).padStart(2, '0');
+  return d < oggi() ? 'scaduto' : d <= lim ? 'in_scadenza' : 'valido';
+}
+function iconaCert(stato) {
+  const [c, l] = DOC[stato];
+  return `<i class="fa-solid fa-notes-medical" style="color:var(--${c})" title="Certificato: ${l}" aria-label="Certificato: ${l}"></i>`;
+}
+async function tesseramentiDi(idTesserati) {
+  if (!idTesserati.length) return [];
+  return leggi('soc_tesseramenti', 'tesserato_id,confermato,confermato_il,tessera_scadenza,certificato_scadenza', (b) => b.in('tesserato_id', idTesserati));
 }
 async function vociDi(idTesserati) {
   if (!idTesserati.length) return [];
@@ -411,13 +439,14 @@ VISTE.squadra = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async rend
   if (!sq) return vai('squadre');
   const tess = await leggi('soc_tesserati', 'id,nome,cognome,numero,ruolo,minorenne,attivo,player_id',
     (b) => b.eq('squadra_id', id).order('cognome').order('nome'));
-  const voci = await vociDi(tess.map((t) => t.id));
+  const [voci, doc] = await Promise.all([vociDi(tess.map((t) => t.id)), tesseramentiDi(tess.map((t) => t.id))]);
   S.cache.tesserati = tess;
   const riga = (t) => {
     const s = semaforo(voci.filter((v) => v.tesserato_id === t.id));
+    const d = doc.find((x) => x.tesserato_id === t.id) || {};
     return `<button class="item" onclick="vai('tesserato',{id:'${t.id}'})"><span class="dot ${s.cls}"></span>
       <div class="b"><b>${esc(nomeCompleto(t))}${t.numero != null ? ` <span class="muted">#${t.numero}</span>` : ''}</b>
-      <small>${esc(t.ruolo || '')}${t.minorenne ? ' · minorenne' : ''}${t.attivo ? '' : ' · non più in squadra'}</small></div>
+      <small>${iconaCert(statoData(d.certificato_scadenza))} ${esc(t.ruolo || '')}${t.minorenne ? ' · minorenne' : ''}${d.confermato ? '' : ' · non tesserato'}${t.attivo ? '' : ' · non più in squadra'}</small></div>
       <div class="r">${s.scaduto > 0 ? `<span style="color:var(--bad)">${euro(s.scaduto)}</span>` : ''}</div></button>`;
   };
   const attivi = tess.filter((t) => t.attivo), usciti = tess.filter((t) => !t.attivo);
@@ -430,7 +459,8 @@ VISTE.squadra = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async rend
       <button class="btn btn-accent btn-block" style="margin-top:1rem" onclick="foglioTesserato(null,'${sq.id}')"><i class="fa-solid fa-user-plus"></i> Nuovo tesserato</button>
       <p class="hint"><span class="dot bad" style="display:inline-block;width:9px;height:9px"></span> scaduto da pagare ·
         <span class="dot warn" style="display:inline-block;width:9px;height:9px"></span> da pagare più avanti ·
-        <span class="dot ok" style="display:inline-block;width:9px;height:9px"></span> in regola</p></div>`);
+        <span class="dot ok" style="display:inline-block;width:9px;height:9px"></span> in regola ·
+        <i class="fa-solid fa-notes-medical"></i> certificato medico</p></div>`);
   if (VISTE.squadra.extra) VISTE.squadra.extra(sq);
 } };
 
@@ -452,9 +482,30 @@ function foglioTesserato(id, squadraId) {
     <p class="hint" style="margin:-.4rem 0 .8rem">Chi entra a stagione iniziata ha 15 giorni dall'ingresso per pagare iscrizione e prima mensilità.</p>
     <div class="fg"><label>Note</label><input id="t-note" value="${esc(t.note)}" maxlength="200"></div>
     ${id ? `<label class="check"><input type="checkbox" id="t-att" ${t.attivo ? '' : 'checked'}> Non è più in squadra (le mensilità future non pagate vengono tolte)</label>` : ''}
-    <p class="hint" style="margin-bottom:.8rem">Nessun dato sanitario: niente certificati o note mediche.</p>
+    <p class="hint" style="margin-bottom:.8rem">Nessun dato sanitario nelle note: del certificato medico si salva solo la data di scadenza, nella scheda.</p>
     <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaTesserato(this,${id ? `'${id}'` : 'null'})">Salva</button></div>`);
+}
+function foglioTesseramento(id) {
+  const d = S.cache.doc || {};
+  apriFoglio(`<h3>Tesseramento e certificato</h3>
+    <label class="check"><input type="checkbox" id="d-conf" ${d.confermato ? 'checked' : ''} onchange="$('d-confil').disabled=!this.checked"> Tesseramento confermato</label>
+    <div class="fg"><label>Confermato il</label><input id="d-confil" type="date" max="${oggi()}" value="${esc(d.confermato_il || oggi())}" ${d.confermato ? '' : 'disabled'}></div>
+    <div class="row"><div class="fg"><label>Scadenza tessera</label><input id="d-tess" type="date" value="${esc(d.tessera_scadenza || '')}"></div>
+      <div class="fg"><label>Scadenza certificato medico</label><input id="d-cert" type="date" value="${esc(d.certificato_scadenza || '')}"></div></div>
+    <p class="hint" style="margin-bottom:.8rem">Del certificato si salva SOLO la data di scadenza: niente foto, file o informazioni mediche.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaTesseramento(this,'${id}')">Salva</button></div>`);
+}
+async function salvaTesseramento(btn, id) {
+  const conf = $('d-conf').checked, il = $('d-confil').value;
+  if (conf && il > oggi()) return toast('La data di conferma non può essere nel futuro', 'danger');
+  await azione(btn, async () => {
+    await rpc('soc_salva_tesseramento', { p_tesserato: id, p_confermato: conf, p_confermato_il: conf ? il || null : null,
+      p_tessera_scadenza: $('d-tess').value || null, p_certificato_scadenza: $('d-cert').value || null });
+    toast('Salvato');
+    ricarica();
+  });
 }
 async function salvaTesserato(btn, id) {
   const v = (k) => $(k).value.trim();
@@ -480,6 +531,11 @@ VISTE.tesserato = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async re
   if (!t) return vai('squadre');
   S.cache.tesserato = t;
   const sq = (await squadre()).find((x) => x.id === t.squadra_id) || {};
+  const d = (await tesseramentiDi([t.id]))[0] || {};
+  S.cache.doc = d;
+  const rigaDoc = (nome, data) => { const [c, l] = DOC[statoData(data)];
+    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0"><span>${nome}</span>
+      <span>${data ? dataIt(data) + ' ' : ''}<span class="badge ${c}">${l}</span></span></div>`; };
   const contatto = t.minorenne ? `Genitore: ${esc(t.genitore_nome || '—')} · ${esc(t.genitore_telefono || '—')}` : esc(t.telefono || 'nessun telefono');
   vista(`<button class="back" onclick="vai('squadra',{id:'${t.squadra_id}'})"><i class="fa-solid fa-chevron-left"></i> ${esc(sq.nome || 'Squadra')}</button>
     <h2>${esc(nomeCompleto(t))}${t.numero != null ? ` <span class="muted">#${t.numero}</span>` : ''}</h2>
@@ -488,6 +544,11 @@ VISTE.tesserato = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async re
       <div class="muted" style="font-size:.88rem;margin-top:4px">${contatto}</div>
       ${t.note ? `<div class="muted" style="font-size:.85rem;margin-top:4px">${esc(t.note)}</div>` : ''}</div>
       <button class="btn btn-ghost btn-sm" onclick="foglioTesserato('${t.id}')"><i class="fa-solid fa-pen"></i> Modifica</button></div></div>
+    <div class="card"><h3><i class="fa-solid fa-id-card"></i> Tesseramento e certificato</h3>
+      <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0"><span>Tesseramento</span>
+        <span>${d.confermato ? `confermato il ${dataIt(d.confermato_il)} <span class="badge ok">Sì</span>` : '<span class="badge bad">Non confermato</span>'}</span></div>
+      ${rigaDoc('Scadenza tessera', d.tessera_scadenza)}${rigaDoc('Certificato medico', d.certificato_scadenza)}
+      <button class="btn btn-ghost btn-block" style="margin-top:.6rem" onclick="foglioTesseramento('${t.id}')"><i class="fa-solid fa-pen"></i> Aggiorna</button></div>
     <div id="t-extra"></div>`);
   if (VISTE.tesserato.extra) await VISTE.tesserato.extra(t);
 } };
@@ -726,6 +787,37 @@ VISTE.nir = { titolo: 'Non in regola', icona: 'fa-triangle-exclamation', ruoli: 
       || '<div class="empty">Tutti in regola. 🎉</div>'}</div>
     <p class="hint">Contano solo le voci già scadute. Il messaggio WhatsApp parte dal tuo telefono; il sollecito viene segnato nel registro quando tocchi il bottone.</p>`);
 } };
+VISTE.scadenze = { titolo: 'Scadenze', icona: 'fa-notes-medical', ruoli: ['presidente', 'dirigente'], async render({ squadra }) {
+  const sq = await squadre();
+  const r = await rpc('soc_scadenze', { p_societa: S.soc.societa_id, p_squadra: squadra || null }) || [];
+  S.cache.scad = r;
+  const cosa = (x) => (x.tipo === 'certificato' ? 'Certificato medico' : 'Tessera') + ' ' +
+    (x.stato === 'mancante' ? 'mancante' : (x.stato === 'scaduto' ? (x.tipo === 'certificato' ? 'scaduto il ' : 'scaduta il ') : 'in scadenza il ') + dataIt(x.scadenza));
+  vista(`<div class="eyebrow">Tessere e certificati</div><h2>Scadenze</h2>
+    <div class="fg"><select onchange="vai('scadenze',{squadra:this.value||null})"><option value="">Tutte le squadre</option>
+      ${sq.map((x) => `<option value="${x.id}" ${x.id === squadra ? 'selected' : ''}>${esc(x.nome)}</option>`).join('')}</select></div>
+    <div class="kpis"><div class="kpi"><span>Scaduti o mancanti</span><b class="num" style="color:var(--bad)">${r.filter((x) => x.stato !== 'in_scadenza').length}</b></div>
+      <div class="kpi"><span>Entro 30 giorni</span><b class="num" style="color:var(--warn)">${r.filter((x) => x.stato === 'in_scadenza').length}</b></div></div>
+    <div class="list">${r.map((x, i) => `
+      <div class="item" style="cursor:default;flex-direction:column;align-items:stretch">
+        <div style="display:flex;gap:10px;align-items:center"><span class="dot ${DOC[x.stato][0]}"></span><div class="b"><b>${esc(nomeCompleto(x))}</b>
+          <small>${esc(x.squadra_nome)}${x.minorenne ? ' · minorenne' : ''}</small></div></div>
+        <div style="font-size:.9rem;margin:6px 0">${esc(cosa(x))}</div>
+        <small class="muted">${x.minorenne ? 'Messaggio al genitore: ' : 'Messaggio a: '}${esc(x.destinatario_nome)}${x.destinatario_telefono ? ' · ' + esc(x.destinatario_telefono) : ''}
+          ${x.ultimo_avviso_il ? `<br>Ultimo avviso: ${quando(x.ultimo_avviso_il)}` : ''}</small>
+        <div class="btns" style="margin-top:8px">
+          ${x.wa_numero ? `<a class="btn btn-accent btn-sm" href="${waLink(x.wa_numero, x.testo_whatsapp)}" target="_blank" rel="noopener" onclick="scadenzaAvvisata(${i})"><i class="fa-brands fa-whatsapp"></i> WhatsApp</a>`
+            : `<button class="btn btn-ghost btn-sm" onclick="vai('tesserato',{id:'${x.tesserato_id}'})">Manca il telefono: aggiungilo</button>`}
+          <button class="btn btn-ghost btn-sm" onclick="vai('tesserato',{id:'${x.tesserato_id}'})">Scheda</button></div></div>`).join('')
+      || '<div class="empty">Tessere e certificati in regola. 🎉</div>'}</div>
+    <p class="hint">Compaiono i certificati scaduti, mancanti o in scadenza entro 30 giorni e le tessere scadute o in scadenza. L'avviso viene segnato nel registro quando tocchi WhatsApp.</p>`);
+} };
+function scadenzaAvvisata(i) {
+  const x = S.cache.scad[i];
+  rpc('soc_registra_scadenza', { p_tesserato: x.tesserato_id, p_tipo: x.tipo })
+    .then(() => toast('Avviso segnato nel registro'))
+    .catch((e) => toast(errText(e), 'danger'));
+}
 function sollecitato(i, canale) {
   const x = S.cache.nir[i];
   // il link si apre subito; la registrazione va in parallelo e non lo blocca
@@ -752,7 +844,7 @@ function avvisaTutti(btn, squadra) {
 
 VISTE.registro = { titolo: 'Registro', icona: 'fa-clock-rotate-left', ruoli: ['presidente', 'dirigente'], async render() {
   const [sol, mem] = await Promise.all([
-    leggi('soc_solleciti', 'id,tesserato_id,canale,destinatario,totale,dettaglio,inviato_da,inviato_il',
+    leggi('soc_solleciti', 'id,tesserato_id,canale,destinatario,totale,dettaglio,inviato_da,inviato_il,tipo',
       (b) => b.eq('societa_id', S.soc.societa_id).order('inviato_il', { ascending: false }).limit(300)),
     membri(true)]);
   const ids = [...new Set(sol.map((x) => x.tesserato_id))];
@@ -762,10 +854,10 @@ VISTE.registro = { titolo: 'Registro', icona: 'fa-clock-rotate-left', ruoli: ['p
   const sqT = (id) => { const t = tess.find((x) => x.id === id); const s = t && sq.find((x) => x.id === t.squadra_id); return s ? s.nome : ''; };
   const chi = (id) => { const m = mem.find((x) => x.id === id); return m ? nomeCompleto(m) : '—'; };
   vista(`<div class="eyebrow">Solleciti</div><h2>Registro</h2><div class="list">${sol.map((x) => `
-    <div class="item" style="cursor:default"><i class="fa-${x.canale === 'app' ? 'solid fa-bell' : 'brands fa-whatsapp'}" style="font-size:1.2rem;color:var(--brand)"></i>
-      <div class="b"><b>${esc(nomeT(x.tesserato_id))}</b><small>${esc(sqT(x.tesserato_id))} · ${x.canale === 'app' ? 'in app' : 'WhatsApp'}${x.destinatario === 'genitore' ? ' al genitore' : ''}
+    <div class="item" style="cursor:default"><i class="fa-${x.tipo === 'scadenza' ? 'solid fa-notes-medical' : x.canale === 'app' ? 'solid fa-bell' : 'brands fa-whatsapp'}" style="font-size:1.2rem;color:var(--brand)"></i>
+      <div class="b"><b>${esc(nomeT(x.tesserato_id))}</b><small>${esc(sqT(x.tesserato_id))} · ${x.tipo === 'scadenza' ? 'scadenza · ' : ''}${x.canale === 'app' ? 'in app' : 'WhatsApp'}${x.destinatario === 'genitore' ? ' al genitore' : ''}
         · ${quando(x.inviato_il)} · da ${esc(chi(x.inviato_da))}<br>${esc((x.dettaglio || []).map((d) => d.descrizione).join(', '))}</small></div>
-      <div class="r num">${euro(x.totale)}</div></div>`).join('') || '<div class="empty">Nessun sollecito inviato.</div>'}</div>`);
+      <div class="r num">${x.tipo === 'scadenza' ? '' : euro(x.totale)}</div></div>`).join('') || '<div class="empty">Nessun sollecito inviato.</div>'}</div>`);
 } };
 
 const TESTO_WA_BASE = 'Ciao {destinatario}, ti scriviamo da {societa}. Per {nome} {cognome} ({squadra}) risultano da saldare: {voci} = {totale} €.\nBonifico a: {intestatario}\nIBAN: {iban}\nCausale: {causale}\nSe hai già pagato, ignora pure questo messaggio. Grazie!';
