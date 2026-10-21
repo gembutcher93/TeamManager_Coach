@@ -108,6 +108,15 @@ async function leggi(tabella, colonne, q) {
   if (error) throw error;
   return data || [];
 }
+/* come leggi, ma a pagine di 1000 righe (il limite di Supabase per richiesta), ordinate sulla prima colonna */
+async function leggiTutto(tabella, colonne, q) {
+  const out = [];
+  for (let da = 0; ; da += 1000) {
+    const r = await leggi(tabella, colonne, (b) => (q ? q(b) : b).order(colonne.split(',')[0]).range(da, da + 999));
+    out.push(...r);
+    if (r.length < 1000) return out;
+  }
+}
 /* esegue un'azione dal bottone: disattiva il bottone, mostra l'errore in italiano */
 async function azione(btn, fn) {
   if (btn) btn.disabled = true;
@@ -584,8 +593,79 @@ VISTE.home = { titolo: 'Cruscotto', icona: 'fa-chart-pie', ruoli: ['presidente',
       <button class="item" onclick="vai('squadra',{id:'${x.squadra_id}'})"><span class="dot ${Number(x.scaduto) > 0 ? 'bad' : Number(x.da_incassare) > 0 ? 'warn' : 'ok'}"></span>
         <div class="b"><b>${esc(x.squadra_nome)}</b><small>${x.tesserati} tesserati · incassato ${euro(x.incassato)} · ${x.non_in_regola} non in regola</small></div>
         <div class="r">${Number(x.scaduto) > 0 ? `<span style="color:var(--bad)">${euro(x.scaduto)}</span>` : ''}</div></button>`).join('')
-      || '<div class="empty">Nessuna squadra: inizia da "Squadre".</div>'}</div></div>`);
+      || '<div class="empty">Nessuna squadra: inizia da "Squadre".</div>'}</div></div>
+    <div class="card"><h3><i class="fa-solid fa-file-csv"></i> Per il commercialista</h3>
+      <p class="muted">Anagrafica, voci, pagamenti e solleciti in un file CSV che si apre con Excel, filtrabile per squadra e periodo.</p>
+      <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="foglioEsporta()"><i class="fa-solid fa-download"></i> Esporta</button></div>`);
 } };
+
+/* ---------- esportazione CSV (separatore ; e virgola decimale: si apre così com'è con Excel in italiano) ---------- */
+async function foglioEsporta() {
+  const sq = await squadre();
+  apriFoglio(`<h3>Esporta per il commercialista</h3>
+    <div class="fg"><label>Cosa</label><select id="e-cosa"><option value="pagamenti">Pagamenti</option><option value="voci">Voci (quote dovute)</option>
+      <option value="anagrafica">Anagrafica tesserati</option><option value="solleciti">Solleciti e avvisi</option></select></div>
+    <div class="fg"><label>Squadra</label><select id="e-sq"><option value="">Tutte le squadre</option>
+      ${sq.map((x) => `<option value="${x.id}">${esc(x.nome)} ${esc(x.stagione)}</option>`).join('')}</select></div>
+    <div class="row"><div class="fg"><label>Dal</label><input id="e-dal" type="date"></div><div class="fg"><label>Al</label><input id="e-al" type="date"></div></div>
+    <p class="hint" style="margin-bottom:.8rem">Periodo: data del pagamento, scadenza della voce, giorno del sollecito. L'anagrafica non dipende dal periodo. Lascia vuoto per avere tutto.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="esporta(this)"><i class="fa-solid fa-download"></i> Scarica CSV</button></div>`);
+}
+function csv(righe) {
+  const cella = (v) => { const t = v == null ? '' : String(v); return /[;"\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  return '\ufeff' + righe.map((r) => r.map(cella).join(';')).join('\r\n');
+}
+const numIt = (n) => (n == null ? '' : Number(n).toFixed(2).replace('.', ','));
+const siNo = (b) => (b ? 'sì' : 'no');
+async function esporta(btn) {
+  const cosa = $('e-cosa').value, sqId = $('e-sq').value, dal = $('e-dal').value, al = $('e-al').value;
+  if (dal && al && al < dal) return toast('Il periodo finisce prima di iniziare', 'danger');
+  const nelPeriodo = (d) => { const x = String(d || '').slice(0, 10); return (!dal || x >= dal) && (!al || x <= al); };
+  await azione(btn, async () => {
+    const soc = (b) => b.eq('societa_id', S.soc.societa_id);
+    const [sq, tess, mem] = await Promise.all([squadre(true),
+      leggiTutto('soc_tesserati', 'id,squadra_id,nome,cognome,ruolo,numero,telefono,minorenne,genitore_nome,genitore_telefono,dal,attivo', soc), membri(true)]);
+    const T = Object.fromEntries(tess.filter((t) => !sqId || t.squadra_id === sqId).map((t) => [t.id, t]));
+    const nomeSq = (t) => { const x = sq.find((q) => q.id === t.squadra_id); return x ? x.nome + ' ' + x.stagione : ''; };
+    const chi = (id) => { const m = mem.find((x) => x.id === id); return m ? nomeCompleto(m) : ''; };
+    let righe;
+    if (cosa === 'anagrafica') {
+      const doc = Object.fromEntries((await leggiTutto('soc_tesseramenti', 'tesserato_id,confermato,confermato_il,tessera_scadenza,certificato_scadenza', soc)).map((d) => [d.tesserato_id, d]));
+      righe = [['Squadra', 'Cognome', 'Nome', 'Ruolo', 'Numero', 'Telefono', 'Minorenne', 'Genitore', 'Telefono genitore', 'In squadra dal', 'Ancora in squadra',
+        'Tesseramento confermato', 'Confermato il', 'Scadenza tessera', 'Scadenza certificato']]
+        .concat(Object.values(T).map((t) => { const d = doc[t.id] || {};
+          return [nomeSq(t), t.cognome, t.nome, t.ruolo, t.numero, t.telefono, siNo(t.minorenne), t.genitore_nome, t.genitore_telefono, dataIt(t.dal), siNo(t.attivo),
+            siNo(d.confermato), dataIt(d.confermato_il), dataIt(d.tessera_scadenza), dataIt(d.certificato_scadenza)]; }));
+    } else {
+      const voci = await leggiTutto('soc_v_voci', 'id,tesserato_id,tipo,competenza,descrizione,importo,scadenza,esente,nota,pagato,residuo,stato', soc);
+      const V = Object.fromEntries(voci.filter((v) => T[v.tesserato_id]).map((v) => [v.id, v]));
+      if (cosa === 'voci') {
+        const stato = { pagata: 'pagata', parziale: 'parziale', in_ritardo: 'in ritardo', da_pagare: 'da pagare' };
+        righe = [['Squadra', 'Cognome', 'Nome', 'Voce', 'Mese', 'Scadenza', 'Importo', 'Pagato', 'Da pagare', 'Stato', 'Esente', 'Nota']]
+          .concat(Object.values(V).filter((v) => nelPeriodo(v.scadenza)).sort((a, b) => (a.scadenza < b.scadenza ? -1 : 1)).map((v) => { const t = T[v.tesserato_id];
+            return [nomeSq(t), t.cognome, t.nome, v.descrizione, meseDa(v.competenza), dataIt(v.scadenza), numIt(v.importo), numIt(v.pagato), numIt(v.residuo),
+              v.esente ? 'esente' : stato[v.stato] || v.stato, siNo(v.esente), v.nota]; }));
+      } else if (cosa === 'pagamenti') {
+        const pag = await leggiTutto('soc_pagamenti', 'id,voce_id,importo,data,metodo,nota,registrato_da,registrato_il,annullato_il,annullato_da', soc);
+        righe = [['Data', 'Squadra', 'Cognome', 'Nome', 'Voce', 'Importo', 'Metodo', 'Nota', 'Registrato da', 'Registrato il', 'Annullato', 'Annullato il', 'Annullato da', 'Riferimento']]
+          .concat(pag.filter((x) => V[x.voce_id] && nelPeriodo(x.data)).sort((a, b) => (a.data < b.data ? -1 : 1)).map((x) => { const v = V[x.voce_id], t = T[v.tesserato_id];
+            return [dataIt(x.data), nomeSq(t), t.cognome, t.nome, v.descrizione, numIt(x.importo), x.metodo, x.nota, chi(x.registrato_da), quando(x.registrato_il),
+              siNo(x.annullato_il), quando(x.annullato_il), chi(x.annullato_da), x.id.slice(0, 8).toUpperCase()]; }));
+      } else {
+        const sol = await leggiTutto('soc_solleciti', 'id,tesserato_id,tipo,canale,destinatario,totale,dettaglio,inviato_da,inviato_il', soc);
+        righe = [['Data e ora', 'Squadra', 'Cognome', 'Nome', 'Tipo', 'Canale', 'Destinatario', 'Totale', 'Dettaglio', 'Inviato da']]
+          .concat(sol.filter((x) => T[x.tesserato_id] && nelPeriodo(x.inviato_il)).sort((a, b) => (a.inviato_il < b.inviato_il ? -1 : 1)).map((x) => { const t = T[x.tesserato_id];
+            return [quando(x.inviato_il), nomeSq(t), t.cognome, t.nome, x.tipo === 'scadenza' ? 'scadenza' : 'quote', x.canale === 'app' ? 'in app' : 'WhatsApp', x.destinatario,
+              x.tipo === 'scadenza' ? '' : numIt(x.totale), (x.dettaglio || []).map((d) => d.descrizione).join(', '), chi(x.inviato_da)]; }));
+      }
+    }
+    const sqNome = sqId ? (sq.find((q) => q.id === sqId) || {}).nome || 'squadra' : 'tutte';
+    const nome = `airim-${cosa}-${sqNome.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${oggi()}.csv`;
+    scaricaFile(new File([csv(righe)], nome, { type: 'text/csv;charset=utf-8' }));
+    toast(`${righe.length - 1} righe esportate`);
+  });
+}
 
 /* piano quote nella pagina della squadra */
 VISTE.squadra.extra = async function (sq) {
