@@ -123,7 +123,7 @@ let _confermaCb = null;
 function conferma(testo, cb, etichetta, pericolo) {
   _confermaCb = cb;
   apriFoglio(`<h3>${esc(testo)}</h3><div class="btns">
-    <button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+    <button class="btn btn-ghost" onclick="chiudiFoglio()">Indietro</button>
     <button class="btn ${pericolo ? 'btn-danger' : 'btn-accent'}" onclick="const f=_confermaCb;chiudiFoglio();f&&f()">${esc(etichetta || 'Conferma')}</button></div>`);
 }
 
@@ -192,7 +192,7 @@ async function caricaSocieta(idScelto) {
   S.soc = S.socs.find((r) => r.societa_id === idScelto) || S.socs[0];
   S.cache = {};
   if (!S.soc.attiva) return schermataLicenza();
-  vai(S.soc.ruolo === 'allenatore' ? 'allenatore' : 'squadre');
+  vai(S.soc.ruolo === 'allenatore' ? 'allenatore' : 'home');
 }
 
 function intestazione() {
@@ -328,12 +328,13 @@ function schermataLicenza() {
 /* =========================================================
    NAVIGAZIONE (le schermate si registrano in VISTE)
    ========================================================= */
-const VISTE = {};      // nome → { titolo, icona, ruoli (null = solo schermata interna), render }
+const VISTE = {};      // nome → { titolo, icona (solo le voci del menu), tab, ruoli, render }
+const MENU = ['home', 'squadre', 'nir', 'registro', 'staff', 'impostazioni', 'allenatore'];   // ordine del menu in basso
 function vai(nome, params) {
   S.view = nome; S.params = params || {};
   chiudiFoglio();
   const v = VISTE[nome];
-  const tabs = Object.entries(VISTE).filter(([, x]) => x.icona && x.ruoli.includes(S.soc.ruolo));
+  const tabs = MENU.filter((k) => VISTE[k] && VISTE[k].ruoli.includes(S.soc.ruolo)).map((k) => [k, VISTE[k]]);
   $('nav').hidden = tabs.length < 2;
   $('nav-in').innerHTML = tabs.map(([k, x]) => `<button class="${k === nome || k === v.tab ? 'on' : ''}" onclick="vai('${k}')"><i class="fa-solid ${x.icona}"></i>${x.titolo}</button>`).join('');
   $('app').innerHTML = intestazione() + '<div id="view"><div class="loading"><i class="fa-solid fa-spinner fa-spin"></i></div></div>';
@@ -489,5 +490,197 @@ VISTE.tesserato = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async re
     <div id="t-extra"></div>`);
   if (VISTE.tesserato.extra) await VISTE.tesserato.extra(t);
 } };
+
+/* =========================================================
+   QUOTE: piano della squadra, voci, "Ricevuto", cruscotto
+   ========================================================= */
+async function membri(forza) {
+  if (!S.cache.membri || forza) {
+    S.cache.membri = await leggi('soc_membri', 'id,ruolo,nome,cognome,telefono,revocato_il,created_at',
+      (b) => b.eq('societa_id', S.soc.societa_id).order('created_at'));
+  }
+  return S.cache.membri;
+}
+const meseDa = (d) => (d ? String(d).slice(0, 7) : '');
+const STATO = { pagata: ['ok', 'Pagata'], parziale: ['warn', 'Parziale'], in_ritardo: ['bad', 'In ritardo'], da_pagare: ['off', 'Da pagare'] };
+function badgeVoce(v) {
+  if (v.esente) return '<span class="badge ok">Esente</span>';
+  const [c, l] = STATO[v.stato] || ['off', v.stato];
+  return `<span class="badge ${c}">${l}</span>${v.parziale && v.stato === 'in_ritardo' ? ' <span class="badge warn">Parziale</span>' : ''}`;
+}
+
+VISTE.home = { titolo: 'Cruscotto', icona: 'fa-chart-pie', ruoli: ['presidente', 'dirigente'], async render() {
+  const r = await rpc('soc_riepilogo', { p_societa: S.soc.societa_id }) || [];
+  const tot = (k) => r.reduce((s, x) => s + Number(x[k] || 0), 0);
+  vista(`<div class="eyebrow">Stagione in corso</div><h2>Cruscotto</h2>
+    <div class="kpis">
+      <div class="kpi"><span>Incassato</span><b class="num" style="color:var(--ok)">${euro(tot('incassato'))}</b></div>
+      <div class="kpi"><span>Scaduto da incassare</span><b class="num" style="color:var(--bad)">${euro(tot('scaduto'))}</b></div>
+      <div class="kpi"><span>Da incassare (stagione)</span><b class="num">${euro(tot('da_incassare'))}</b></div>
+      <div class="kpi"><span>Non in regola</span><b class="num">${tot('non_in_regola')}</b></div></div>
+    <div class="card"><h3><i class="fa-solid fa-people-group"></i> Per squadra</h3><div class="list">${r.map((x) => `
+      <button class="item" onclick="vai('squadra',{id:'${x.squadra_id}'})"><span class="dot ${Number(x.scaduto) > 0 ? 'bad' : Number(x.da_incassare) > 0 ? 'warn' : 'ok'}"></span>
+        <div class="b"><b>${esc(x.squadra_nome)}</b><small>${x.tesserati} tesserati · incassato ${euro(x.incassato)} · ${x.non_in_regola} non in regola</small></div>
+        <div class="r">${Number(x.scaduto) > 0 ? `<span style="color:var(--bad)">${euro(x.scaduto)}</span>` : ''}</div></button>`).join('')
+      || '<div class="empty">Nessuna squadra: inizia da "Squadre".</div>'}</div></div>`);
+} };
+
+/* piano quote nella pagina della squadra */
+VISTE.squadra.extra = async function (sq) {
+  const pn = (await leggi('soc_piani', 'id,iscrizione_importo,iscrizione_scadenza,mensilita_importo,mese_inizio,mese_fine,giorno_scadenza',
+    (b) => b.eq('squadra_id', sq.id)))[0];
+  S.cache.piano = pn || null;
+  const el = $('sq-extra'); if (!el) return;
+  el.innerHTML = `<div class="card"><h3><i class="fa-solid fa-euro-sign"></i> Quote della stagione</h3>
+    ${pn ? `<div style="line-height:1.7">Iscrizione <b>${euro(pn.iscrizione_importo)}</b>${pn.iscrizione_scadenza ? ` entro il ${dataIt(pn.iscrizione_scadenza)}` : ''}<br>
+      Mensilità <b>${euro(pn.mensilita_importo)}</b> da ${esc(meseNome(pn.mese_inizio))} a ${esc(meseNome(pn.mese_fine))}, scadenza il giorno ${pn.giorno_scadenza}</div>
+      <div class="btns" style="margin-top:.8rem"><button class="btn btn-ghost btn-sm" onclick="foglioPiano('${sq.id}')"><i class="fa-solid fa-pen"></i> Modifica quote</button>
+      <button class="btn btn-ghost btn-sm" onclick="rigeneraVoci(this,'${sq.id}')"><i class="fa-solid fa-rotate"></i> Rigenera voci</button></div>
+      <p class="hint">Cambiando le quote si aggiornano solo le voci senza pagamenti e mai modificate a mano.</p>`
+    : `<p class="muted">Imposta iscrizione e mensilità: le voci di ogni tesserato si creano da sole.</p>
+      <button class="btn btn-accent btn-block" style="margin-top:.8rem" onclick="foglioPiano('${sq.id}')"><i class="fa-solid fa-plus"></i> Imposta le quote</button>`}</div>`;
+};
+function meseNome(d) {
+  const m = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+  const [y, mm] = String(d).split('-'); return m[parseInt(mm, 10) - 1] + ' ' + y;
+}
+function foglioPiano(sqId) {
+  const sq = (S.cache.squadre || []).find((x) => x.id === sqId) || {};
+  const y = parseInt(String(sq.stagione || stagioneCorrente()).slice(0, 4), 10);
+  const pn = S.cache.piano || { iscrizione_importo: '', iscrizione_scadenza: '', mensilita_importo: '', mese_inizio: y + '-09-01', mese_fine: (y + 1) + '-06-01', giorno_scadenza: 10 };
+  apriFoglio(`<h3>Quote · ${esc(sq.nome || '')}</h3>
+    <div class="row"><div class="fg"><label>Iscrizione (€)</label><input id="p-isc" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(pn.iscrizione_importo)}"></div>
+      <div class="fg"><label>Entro il</label><input id="p-iscd" type="date" value="${esc(pn.iscrizione_scadenza || '')}"></div></div>
+    <div class="row"><div class="fg"><label>Mensilità (€)</label><input id="p-men" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(pn.mensilita_importo)}"></div>
+      <div class="fg"><label>Scade il giorno</label><input id="p-gg" type="number" min="1" max="28" value="${esc(pn.giorno_scadenza)}"></div></div>
+    <div class="row"><div class="fg"><label>Prima mensilità</label><input id="p-da" type="month" value="${meseDa(pn.mese_inizio)}"></div>
+      <div class="fg"><label>Ultima mensilità</label><input id="p-a" type="month" value="${meseDa(pn.mese_fine)}"></div></div>
+    <p class="hint" style="margin-bottom:.8rem">Sconti, fratelli ed esenzioni si fanno dopo, sulla singola voce del tesserato.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaPiano(this,'${sqId}')">Salva e genera voci</button></div>`);
+}
+async function salvaPiano(btn, sqId) {
+  const n = (id) => ($(id).value === '' ? 0 : Number($(id).value));
+  const da = $('p-da').value, a = $('p-a').value, gg = parseInt($('p-gg').value, 10);
+  if (!da || !a || a < da) return toast('Controlla prima e ultima mensilità', 'danger');
+  if (!(gg >= 1 && gg <= 28)) return toast('Il giorno di scadenza va da 1 a 28', 'danger');
+  if (n('p-isc') < 0 || n('p-men') < 0) return toast('Gli importi non possono essere negativi', 'danger');
+  await azione(btn, async () => {
+    const k = await rpc('soc_salva_piano', {
+      p_squadra: sqId, p_iscrizione_importo: n('p-isc'), p_iscrizione_scadenza: $('p-iscd').value || null,
+      p_mensilita_importo: n('p-men'), p_mese_inizio: da + '-01', p_mese_fine: a + '-01', p_giorno_scadenza: gg,
+    });
+    toast(k ? `Quote salvate: ${k} voci create` : 'Quote salvate');
+    ricarica();
+  });
+}
+async function rigeneraVoci(btn, sqId) {
+  await azione(btn, async () => {
+    const k = await rpc('soc_genera_voci', { p_squadra: sqId });
+    toast(k ? `${k} voci create` : 'Voci già allineate al piano');
+    ricarica();
+  });
+}
+
+/* voci e pagamenti nella scheda del tesserato */
+VISTE.tesserato.extra = async function (t) {
+  const voci = await vociDi([t.id]);
+  const pag = voci.length ? await leggi('soc_pagamenti', 'id,voce_id,importo,data,metodo,nota,registrato_da,registrato_il,annullato_il,annullato_da',
+    (b) => b.in('voce_id', voci.map((v) => v.id)).order('registrato_il', { ascending: false })) : [];
+  const mem = await membri();
+  const chi = (id) => { const m = mem.find((x) => x.id === id); return m ? nomeCompleto(m) : '—'; };
+  S.cache.voci = voci;
+  const s = semaforo(voci);
+  const el = $('t-extra'); if (!el) return;
+  el.innerHTML = `
+    <div class="kpis"><div class="kpi"><span>Scaduto</span><b class="num" style="color:${s.scaduto ? 'var(--bad)' : 'inherit'}">${euro(s.scaduto)}</b></div>
+      <div class="kpi"><span>Da pagare più avanti</span><b class="num">${euro(s.futuro)}</b></div></div>
+    <div class="card"><h3><i class="fa-solid fa-list-check"></i> Voci</h3><div class="list">${voci.map((v) => `
+      <div class="item" style="cursor:default;flex-wrap:wrap"><div class="b"><b>${esc(v.descrizione)}</b>
+        <small>scade il ${dataIt(v.scadenza)} · ${euro(v.importo)}${Number(v.pagato) ? ` · pagato ${euro(v.pagato)}` : ''}${v.nota ? ' · ' + esc(v.nota) : ''}</small>
+        <div style="margin-top:4px">${badgeVoce(v)}</div></div>
+        <div class="btns" style="flex:0 0 auto">${Number(v.residuo) > 0 ? `<button class="btn btn-accent btn-sm" onclick="foglioRicevuto('${v.id}')"><i class="fa-solid fa-check"></i> Ricevuto</button>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="foglioVoce('${v.id}')" aria-label="Modifica voce"><i class="fa-solid fa-pen"></i></button></div></div>`).join('')
+      || '<div class="empty">Nessuna voce: imposta le quote della squadra.</div>'}</div>
+      <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="foglioVoceExtra('${t.id}')"><i class="fa-solid fa-plus"></i> Aggiungi voce (kit, torneo…)</button></div>
+    <div class="card"><h3><i class="fa-solid fa-receipt"></i> Pagamenti</h3><div class="list">${pag.map((p) => {
+      const v = voci.find((x) => x.id === p.voce_id) || {};
+      return `<div class="item" style="cursor:default;${p.annullato_il ? 'opacity:.55' : ''}"><div class="b"><b>${euro(p.importo)} · ${esc(v.descrizione || '')}</b>
+        <small>${dataIt(p.data)} · ${p.metodo === 'contanti' ? 'contanti' : 'bonifico'} · registrato da ${esc(chi(p.registrato_da))} il ${quando(p.registrato_il)}${p.nota ? ' · ' + esc(p.nota) : ''}
+        ${p.annullato_il ? `<br>Annullato da ${esc(chi(p.annullato_da))} il ${quando(p.annullato_il)}` : ''}</small></div>
+        ${p.annullato_il ? '<span class="badge off">Annullato</span>' : `<button class="btn btn-ghost btn-sm" onclick="annullaPagamento('${p.id}')">Annulla</button>`}</div>`;
+    }).join('') || '<div class="empty">Nessun pagamento registrato.</div>'}</div>
+      <p class="hint">Un pagamento sbagliato non si cancella: si annulla e resta nello storico.</p></div>`;
+};
+
+function foglioRicevuto(voceId) {
+  const v = S.cache.voci.find((x) => x.id === voceId);
+  apriFoglio(`<h3>Ricevuto · ${esc(v.descrizione)}</h3>
+    <div class="row"><div class="fg"><label>Importo (€)</label><input id="r-imp" type="number" min="0.01" step="0.01" inputmode="decimal" value="${Number(v.residuo)}"></div>
+      <div class="fg"><label>Data</label><input id="r-data" type="date" value="${oggi()}" max="${oggi()}"></div></div>
+    <div class="tabs" id="r-met"><button class="on" data-m="bonifico" onclick="sceltaMetodo(this)">Bonifico</button><button data-m="contanti" onclick="sceltaMetodo(this)">Contanti</button></div>
+    <div class="fg"><label>Nota (facoltativa)</label><input id="r-nota" maxlength="200"></div>
+    <p class="hint" style="margin-bottom:.8rem">Resta da pagare: ${euro(v.residuo)}. Un importo minore registra un pagamento parziale.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="registraPagamento(this,'${voceId}')"><i class="fa-solid fa-check"></i> Conferma</button></div>`);
+}
+function sceltaMetodo(b) { b.parentNode.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); }
+async function registraPagamento(btn, voceId) {
+  const imp = Number($('r-imp').value), data = $('r-data').value || oggi();
+  if (!(imp > 0)) return toast('Scrivi l\'importo ricevuto', 'danger');
+  if (data > oggi()) return toast('La data non può essere nel futuro', 'danger');
+  await azione(btn, async () => {
+    await rpc('soc_registra_pagamento', { p_voce: voceId, p_importo: imp, p_data: data,
+      p_metodo: $('r-met').querySelector('.on').dataset.m, p_nota: $('r-nota').value.trim() });
+    toast('Pagamento registrato');
+    ricarica();
+  });
+}
+function annullaPagamento(id) {
+  conferma('Annullare questo pagamento? Resterà nello storico come annullato.', () => azione(null, async () => {
+    await rpc('soc_annulla_pagamento', { p_pagamento: id });
+    toast('Pagamento annullato');
+    ricarica();
+  }), 'Annulla pagamento', true);
+}
+function foglioVoce(voceId) {
+  const v = S.cache.voci.find((x) => x.id === voceId);
+  apriFoglio(`<h3>Modifica voce</h3>
+    <div class="fg"><label>Descrizione</label><input id="v-desc" value="${esc(v.descrizione)}" maxlength="80"></div>
+    <div class="row"><div class="fg"><label>Importo (€)</label><input id="v-imp" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(v.importo)}"></div>
+      <div class="fg"><label>Scadenza</label><input id="v-scad" type="date" value="${esc(v.scadenza)}"></div></div>
+    <label class="check"><input type="checkbox" id="v-es" ${v.esente ? 'checked' : ''}> Esente (non deve pagare questa voce)</label>
+    <div class="fg"><label>Nota (es. sconto fratelli)</label><input id="v-nota" value="${esc(v.nota)}" maxlength="200"></div>
+    <p class="hint" style="margin-bottom:.8rem">Già pagato: ${euro(v.pagato)}. Dopo la modifica la voce non segue più i cambi del piano.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaVoce(this,'${voceId}')">Salva</button></div>`);
+}
+async function salvaVoce(btn, voceId) {
+  const imp = Number($('v-imp').value);
+  if ($('v-imp').value === '' || imp < 0 || !$('v-scad').value) return toast('Controlla importo e scadenza', 'danger');
+  await azione(btn, async () => {
+    await rpc('soc_modifica_voce', { p_voce: voceId, p_descrizione: $('v-desc').value.trim(), p_importo: imp,
+      p_scadenza: $('v-scad').value, p_esente: $('v-es').checked, p_nota: $('v-nota').value.trim() });
+    toast('Voce aggiornata');
+    ricarica();
+  });
+}
+function foglioVoceExtra(tId) {
+  apriFoglio(`<h3>Nuova voce</h3>
+    <div class="fg"><label>Descrizione</label><input id="x-desc" maxlength="80" placeholder="es. Kit allenamento"></div>
+    <div class="row"><div class="fg"><label>Importo (€)</label><input id="x-imp" type="number" min="0.01" step="0.01" inputmode="decimal"></div>
+      <div class="fg"><label>Scadenza</label><input id="x-scad" type="date" value="${oggi()}"></div></div>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaVoceExtra(this,'${tId}')">Aggiungi</button></div>`);
+}
+async function salvaVoceExtra(btn, tId) {
+  const d = $('x-desc').value.trim(), imp = Number($('x-imp').value);
+  if (!d || !(imp > 0) || !$('x-scad').value) return toast('Scrivi descrizione, importo e scadenza', 'danger');
+  await azione(btn, async () => {
+    await rpc('soc_aggiungi_voce', { p_tesserato: tId, p_descrizione: d, p_importo: imp, p_scadenza: $('x-scad').value });
+    toast('Voce aggiunta');
+    ricarica();
+  });
+}
 
 avvio();
