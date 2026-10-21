@@ -791,4 +791,92 @@ async function salvaImpostazioni(btn) {
   });
 }
 
+/* =========================================================
+   STAFF: dirigenti e allenatori con codice personale + PIN
+   (il PIN si vede solo alla creazione o con "Nuovo PIN": sul server resta solo l'hash)
+   ========================================================= */
+VISTE.staff = { titolo: 'Staff', icona: 'fa-id-badge', ruoli: ['presidente'], async render() {
+  const [mem, ms, sq] = await Promise.all([membri(true),
+    leggi('soc_membri_squadre', 'membro_id,squadra_id', (b) => b.eq('societa_id', S.soc.societa_id)), squadre()]);
+  S.cache.ms = ms;
+  const squadreDi = (id) => ms.filter((x) => x.membro_id === id).map((x) => (sq.find((s) => s.id === x.squadra_id) || {}).nome).filter(Boolean);
+  const riga = (m) => `<div class="item" style="cursor:default;flex-wrap:wrap"><div class="b"><b>${esc(nomeCompleto(m))}</b>
+      <small>${ruoloLabel(m.ruolo)}${m.ruolo === 'allenatore' ? ' · ' + (esc(squadreDi(m.id).join(', ')) || 'nessuna squadra') : ''}${m.telefono ? ' · ' + esc(m.telefono) : ''}</small></div>
+      ${m.ruolo === 'presidente' ? '<span class="badge ok">Tu</span>' : `<div class="btns" style="flex:0 0 auto">
+        <button class="btn btn-ghost btn-sm" onclick="foglioMembro('${m.id}')" aria-label="Modifica"><i class="fa-solid fa-pen"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="nuovoPin('${m.id}')">Nuovo PIN</button>
+        <button class="btn btn-ghost btn-sm" onclick="revoca('${m.id}')" style="color:var(--bad)">Revoca</button></div>`}</div>`;
+  const attivi = mem.filter((m) => !m.revocato_il), revocati = mem.filter((m) => m.revocato_il);
+  vista(`<div class="eyebrow">Presidente</div><h2>Staff</h2>
+    <div class="list">${attivi.map(riga).join('')}</div>
+    <div class="btns" style="margin-top:1rem"><button class="btn btn-accent" onclick="foglioMembro(null,'dirigente')"><i class="fa-solid fa-plus"></i> Dirigente</button>
+      <button class="btn btn-accent" onclick="foglioMembro(null,'allenatore')"><i class="fa-solid fa-plus"></i> Allenatore</button></div>
+    <p class="hint">Ognuno entra con il proprio codice personale e un PIN di 6 cifre. Dirigenti: anagrafica, quote e solleciti. Allenatori: solo le proprie squadre, mai quote né pagamenti.</p>
+    ${revocati.length ? `<p class="hint" style="margin:1.2rem 0 .5rem">Revocati</p><div class="list" style="opacity:.6">${revocati.map((m) => `<div class="item" style="cursor:default"><div class="b"><b>${esc(nomeCompleto(m))}</b><small>${ruoloLabel(m.ruolo)} · revocato il ${quando(m.revocato_il)}</small></div></div>`).join('')}</div>` : ''}`);
+} };
+
+function foglioMembro(id, ruolo) {
+  const m = (S.cache.membri || []).find((x) => x.id === id) || { ruolo, nome: '', cognome: '', telefono: '' };
+  const sue = (S.cache.ms || []).filter((x) => x.membro_id === id).map((x) => x.squadra_id);
+  apriFoglio(`<h3>${id ? 'Modifica' : 'Nuovo'} ${ruoloLabel(m.ruolo).toLowerCase()}</h3>
+    <div class="row"><div class="fg"><label>Nome</label><input id="m-nome" value="${esc(m.nome)}" maxlength="60"></div>
+      <div class="fg"><label>Cognome</label><input id="m-cogn" value="${esc(m.cognome)}" maxlength="60"></div></div>
+    <div class="fg"><label>Telefono (per mandargli l'accesso su WhatsApp)</label><input id="m-tel" type="tel" value="${esc(m.telefono)}" placeholder="+39 …"></div>
+    ${m.ruolo === 'allenatore' ? `<div class="fg"><label>Squadre che allena</label>${(S.cache.squadre || []).map((s) => `
+      <label class="check" style="margin:.2rem 0"><input type="checkbox" class="m-sq" value="${s.id}" ${sue.includes(s.id) ? 'checked' : ''}> ${esc(s.nome)}</label>`).join('') || '<span class="muted">Crea prima una squadra.</span>'}</div>` : ''}
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
+      <button class="btn btn-accent" onclick="salvaMembro(this,${id ? `'${id}'` : 'null'},'${m.ruolo}')">${id ? 'Salva' : 'Crea e mostra il PIN'}</button></div>`);
+}
+async function salvaMembro(btn, id, ruolo) {
+  const nome = $('m-nome').value.trim();
+  if (!nome) return toast('Scrivi il nome', 'danger');
+  const sq = ruolo === 'allenatore' ? [...document.querySelectorAll('.m-sq:checked')].map((x) => x.value) : null;
+  const tel = $('m-tel').value.trim(), cogn = $('m-cogn').value.trim();
+  await azione(btn, async () => {
+    if (id) {
+      await rpc('soc_modifica_membro', { p_membro: id, p_nome: nome, p_cognome: cogn, p_telefono: tel, p_squadre: sq });
+      toast('Salvato');
+      return ricarica();
+    }
+    const r = ((await rpc('soc_crea_membro', { p_societa: S.soc.societa_id, p_ruolo: ruolo, p_nome: nome, p_cognome: cogn, p_telefono: tel, p_squadre: sq })) || [])[0];
+    // telefono già normalizzato dal server (+39…): serve per il link wa.me
+    const nuovo = (await membri(true)).find((x) => x.id === r.membro_id) || { nome };
+    mostraCredenziali(nuovo, r.codice, r.pin);
+  });
+}
+/* codice + PIN visibili una volta sola: si mandano subito su WhatsApp o si copiano */
+function mostraCredenziali(m, codice, pin) {
+  const url = new URL('societa.html', location.href).href;
+  const testo = `Ciao ${m.nome}, ecco il tuo accesso ad AiRIM Società (${S.soc.nome}).\nApri: ${url}\nCodice personale: ${codice}\nPIN: ${pin}\nIl PIN è personale: non condividerlo.`;
+  S.cache.credenziali = testo;
+  const tel = String(m.telefono || '').replace(/\D/g, '');
+  apriFoglio(`<h3>Accesso per ${esc(m.nome)}</h3>
+    <div class="fg"><label>Codice personale</label><div class="secret">${esc(codice)}</div></div>
+    <div class="fg"><label>PIN</label><div class="secret">${esc(pin)}</div></div>
+    <p class="hint" style="margin:-.2rem 0 .9rem">Il PIN si vede solo adesso: mandalo ora. Se lo perde, usa "Nuovo PIN".</p>
+    <div class="btns" style="flex-direction:column">
+      ${tel ? `<a class="btn btn-accent" href="${waLink(tel, testo)}" target="_blank" rel="noopener"><i class="fa-brands fa-whatsapp"></i> Invia su WhatsApp</a>` : ''}
+      <button class="btn btn-ghost" onclick="copia(S.cache.credenziali)"><i class="fa-solid fa-copy"></i> Copia il messaggio</button>
+      <button class="btn btn-ghost" onclick="S.cache.credenziali=null;vai('staff')">Fatto</button></div>`);
+}
+function copia(t) {
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+    .then(() => toast('Copiato')).catch(() => toast('Copia non riuscita: seleziona il testo a mano', 'danger'));
+}
+function nuovoPin(id) {
+  const m = S.cache.membri.find((x) => x.id === id);
+  conferma(`Generare un nuovo PIN per ${nomeCompleto(m)}? Il vecchio smette subito di funzionare e i suoi dispositivi dovranno accedere di nuovo.`, () => azione(null, async () => {
+    const r = ((await rpc('soc_nuovo_pin', { p_membro: id })) || [])[0];
+    mostraCredenziali(m, r.codice, r.pin);
+  }), 'Nuovo PIN');
+}
+function revoca(id) {
+  const m = S.cache.membri.find((x) => x.id === id);
+  conferma(`Revocare l'accesso a ${nomeCompleto(m)}? Esce subito da tutti i dispositivi. Quello che ha registrato resta nello storico.`, () => azione(null, async () => {
+    await rpc('soc_revoca_membro', { p_membro: id });
+    toast('Accesso revocato');
+    ricarica();
+  }), 'Revoca', true);
+}
+
 avvio();
