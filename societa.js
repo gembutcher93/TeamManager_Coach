@@ -452,6 +452,7 @@ function foglioTesserato(id, squadraId) {
       <div class="fg"><label>Telefono del genitore</label><input id="t-gtel" type="tel" value="${esc(t.genitore_telefono)}" placeholder="+39 …"></div></div></div>
     <div class="fg"><label>Telefono del tesserato</label><input id="t-tel" type="tel" value="${esc(t.telefono)}" placeholder="+39 …"></div>
     <div class="row"><div class="fg"><label>In squadra dal</label><input id="t-dal" type="date" value="${esc(t.dal || oggi())}"></div></div>
+    <p class="hint" style="margin:-.4rem 0 .8rem">Chi entra a stagione iniziata ha 15 giorni dall'ingresso per pagare iscrizione e prima mensilità.</p>
     <div class="fg"><label>Note</label><input id="t-note" value="${esc(t.note)}" maxlength="200"></div>
     ${id ? `<label class="check"><input type="checkbox" id="t-att" ${t.attivo ? '' : 'checked'}> Non è più in squadra (le mensilità future non pagate vengono tolte)</label>` : ''}
     <p class="hint" style="margin-bottom:.8rem">Nessun dato sanitario: niente certificati o note mediche.</p>
