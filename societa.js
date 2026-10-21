@@ -538,7 +538,11 @@ VISTE.squadra.extra = async function (sq) {
       <button class="btn btn-ghost btn-sm" onclick="rigeneraVoci(this,'${sq.id}')"><i class="fa-solid fa-rotate"></i> Rigenera voci</button></div>
       <p class="hint">Cambiando le quote si aggiornano solo le voci senza pagamenti e mai modificate a mano.</p>`
     : `<p class="muted">Imposta iscrizione e mensilità: le voci di ogni tesserato si creano da sole.</p>
-      <button class="btn btn-accent btn-block" style="margin-top:.8rem" onclick="foglioPiano('${sq.id}')"><i class="fa-solid fa-plus"></i> Imposta le quote</button>`}</div>`;
+      <button class="btn btn-accent btn-block" style="margin-top:.8rem" onclick="foglioPiano('${sq.id}')"><i class="fa-solid fa-plus"></i> Imposta le quote</button>`}</div>
+    <div class="card"><h3><i class="fa-solid fa-link"></i> AiRIM Coach</h3>${sq.team_id
+      ? `<p class="muted">L'allenatore ha collegato questa squadra. Puoi importare i giocatori della sua rosa attuale: solo nome, numero e ruolo (mai voti, statistiche o check-in). Chi è già tesserato viene saltato; un tesserato inserito a mano con lo stesso nome e cognome viene collegato, non duplicato.</p>
+        <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="importaRosa(this,'${sq.id}')"><i class="fa-solid fa-file-import"></i> Importa da AiRIM</button>`
+      : `<p class="muted">Non ancora collegata. L'allenatore, in AiRIM Coach → Impostazioni → Società, sceglie "Collega a una società" con il suo codice personale e PIN.</p>`}</div>`;
 };
 function meseNome(d) {
   const m = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
@@ -571,6 +575,13 @@ async function salvaPiano(btn, sqId) {
       p_mensilita_importo: n('p-men'), p_mese_inizio: da + '-01', p_mese_fine: a + '-01', p_giorno_scadenza: gg,
     });
     toast(k ? `Quote salvate: ${k} voci create` : 'Quote salvate');
+    ricarica();
+  });
+}
+async function importaRosa(btn, sqId) {
+  await azione(btn, async () => {
+    const n = await rpc('soc_importa_da_squadra', { p_squadra: sqId });
+    toast(n ? `${n} giocatori importati o collegati ai tesserati già presenti: completa cognome e telefono dove mancano` : 'Nessun giocatore nuovo da importare');
     ricarica();
   });
 }

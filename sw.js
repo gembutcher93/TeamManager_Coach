@@ -5,7 +5,7 @@
    Bump CACHE_VERSION ad ogni rilascio. localStorage, IndexedDB e sessione non vengono mai toccati:
    si cancellano solo le cache di QUESTA app (prefisso volleyteam-). */
 const CACHE_PREFIX = 'volleyteam-';
-const CACHE_VERSION = 'volleyteam-v83';
+const CACHE_VERSION = 'volleyteam-v84';
 const APP_SHELL = [
   './',
   './index.html',
@@ -15,6 +15,8 @@ const APP_SHELL = [
   './schemes.js',
   './polisport.js',
   './marquee.js',
+  './societa.html',
+  './societa.js',
   './manifest.json',
   './icons/logo-badge.png',
   './icons/icon-192.png',

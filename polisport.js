@@ -127,7 +127,8 @@
           font-family:'Outfit',sans-serif;font-weight:800;font-size:1.05rem;background:var(--brand);color:#04140A;">
           ${existing && existing.sport ? 'Salva' : 'Entra nell\'app'}</button>
         ${existing && existing.sport ? `<button id="ps-cancel" style="width:100%;margin-top:10px;background:none;border:0;color:#8395B4;cursor:pointer;font-size:.9rem;">Annulla</button>` : ''}
-        ${!(existing && existing.sport) ? `<button id="ps-login" style="width:100%;margin-top:14px;background:none;border:0;color:#8395B4;cursor:pointer;font-size:.85rem;">Hai già un account? Accedi</button>` : ''}
+        ${!(existing && existing.sport) ? `<button id="ps-login" style="width:100%;margin-top:14px;background:none;border:0;color:#8395B4;cursor:pointer;font-size:.85rem;">Hai già un account? Accedi</button>
+          <a href="societa.html" style="display:block;text-align:center;margin-top:8px;color:#5C6C8C;font-size:.8rem;">Presidente o dirigente? Area Società</a>` : ''}
       </div>`;
     document.body.appendChild(wrap);
     /* Link secondario discreto (Prompt: accesso rapido): questa e' la schermata reale di

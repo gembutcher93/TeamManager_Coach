@@ -186,6 +186,21 @@
     return (data && data[0]) || null; // {policy_version, policy_hash, accepted_at}
   }
 
+  /* ---- AiRIM Società: l'allenatore collega il suo account (codice personale + PIN
+     ricevuti dal presidente). Usa la sessione coach: la società potrà importare la rosa. ---- */
+  async function socCollegaAccount(codice, pin) {
+    const sb = await getClient();
+    const { data, error } = await sb.rpc('soc_collega_account', { p_codice: codice, p_pin: String(pin) });
+    if (error) throw error;
+    return (data && data[0]) || null; // {esito, societa_id, societa_nome, squadra_collegata, squadre_da_scegliere}
+  }
+  async function socCollegaSquadra(squadraId) {
+    const sb = await getClient();
+    const { error } = await sb.rpc('soc_collega_squadra', { p_squadra: squadraId });
+    if (error) throw error;
+  }
+
   window.AiRIMSync = { getClient, upsertTeam, upsertPlayerPackage, deletePlayerPackage, getPlayerPackage, listTeamPins, listPlayerReports, getLicenseStatus, getMyLicense,
-    signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance, upsertMyTeamBackup, getMyTeamBackup, getMyTeamBackupV, upsertMyTeamBackupV };
+    signUp, signIn, signOut, getSession, upsertMyTeam, recordPolicyAcceptance, getMyPolicyAcceptance, upsertMyTeamBackup, getMyTeamBackup, getMyTeamBackupV, upsertMyTeamBackupV,
+    socCollegaAccount, socCollegaSquadra };
 })();

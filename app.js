@@ -1706,6 +1706,11 @@ function buildLayout(){
             <div id="backup-status"></div></div>
         <div class="card" id="ctx-sync"><h3>☁️ Salvataggio online</h3>
             <div id="sync-settings-card"></div></div>
+        <div class="card"><h3><i class="fa-solid fa-building"></i> Società</h3>
+            <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Presidente o dirigente? L'Area Società gestisce tesserati, quote e solleciti. Alleni per una società? Collega il tuo account con il codice personale e il PIN che ti ha dato il presidente: la società potrà importare la rosa (solo nome, numero e ruolo, mai voti o statistiche).</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <a class="btn btn-ghost" href="societa.html" style="text-decoration:none"><i class="fa-solid fa-building"></i> Apri Area Società</a>
+                <button class="btn btn-ghost" onclick="openSocietaLink()"><i class="fa-solid fa-link"></i> Collega a una società</button></div></div>
         <div class="card"><h3><i class="fa-solid fa-brain"></i> Statistiche mentali</h3>
             <p style="color:var(--muted);margin-bottom:1rem;font-size:.9rem">Importa il codice che un giocatore ti invia dalla sua app (Mental Gym → "Invia al mister") per aggiornare i suoi valori Riflessi/Percezione sulla card.</p>
             <button class="btn btn-ghost" onclick="openImportMental()"><i class="fa-solid fa-file-import"></i> Importa statistiche mentali</button></div>
@@ -6026,6 +6031,41 @@ let LIC_LAST_SERVER_AT = 0;     // ora dell'ultima risposta del server (per il r
 let LIC_LAST_ERROR_AT = 0;      // ultimo tentativo fallito (per il testo "server non raggiungibile")
 /* Account attuale, noto anche prima della risposta del server e offline: la sessione
    Supabase salvata dal client (sb-<progetto>-auth-token) contiene l'email. */
+/* ---------- AiRIM Società: aggancio dell'allenatore (nessuna chiamata finché non si tocca) ---------- */
+const SOC_ESITI={errato:'Codice o PIN sbagliati.', bloccato:'Troppi tentativi sbagliati: riprova tra 15 minuti.', gia_collegato:'Questo codice è già collegato a un altro account AiRIM.'};
+async function openSocietaLink(){
+    await refreshCoachSession();
+    if(!COACH_EMAIL){ toast('Prima accedi con il tuo account in «Salvataggio online»','info'); return; }
+    openModal(`<div class="modal-header"><h3><i class="fa-solid fa-link"></i> Collega a una società</h3><button class="close-btn" onclick="closeModal()">×</button></div>
+        <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Account: <b>${escapeHtml(COACH_EMAIL)}</b>. Inserisci il codice personale e il PIN che ti ha mandato il presidente.</p>
+        <div class="fg" style="margin-bottom:10px"><label>Codice personale</label><input id="soc-cod" placeholder="es. TULA-K7Q3" autocapitalize="characters"></div>
+        <div class="fg" style="margin-bottom:14px"><label>PIN</label><input id="soc-pin" type="password" inputmode="numeric" maxlength="6"></div>
+        <button class="btn btn-accent" style="width:100%" id="soc-go" onclick="socLinkGo()"><i class="fa-solid fa-link"></i> Collega</button>`);
+}
+async function socLinkGo(){
+    const cod=(document.getElementById('soc-cod').value||'').trim().toUpperCase(), pin=(document.getElementById('soc-pin').value||'').trim();
+    if(!cod || !/^\d{6}$/.test(pin)){ toast('Inserisci il codice e il PIN di 6 cifre','info'); return; }
+    const btn=document.getElementById('soc-go'); btn.disabled=true;
+    try{
+        const r=await AiRIMSync.socCollegaAccount(cod, pin);
+        if(!r || r.esito!=='ok'){ toast(SOC_ESITI[r&&r.esito]||'Collegamento non riuscito','danger'); return; }
+        const lista=r.squadre_da_scegliere||[];
+        if(!r.squadra_collegata && lista.length>1){
+            openModal(`<div class="modal-header"><h3>Quale squadra alleni con questa app?</h3><button class="close-btn" onclick="closeModal()">×</button></div>
+                <p style="color:var(--muted);font-size:.9rem;margin-bottom:12px">Collegato a <b>${escapeHtml(r.societa_nome)}</b>. Scegli la squadra della società che corrisponde a questa squadra AiRIM.</p>
+                ${lista.map(q=>`<button class="btn btn-ghost" style="width:100%;margin-bottom:8px" onclick="socLinkTeam('${escapeHtml(q.id)}')">${escapeHtml(q.nome)}</button>`).join('')}`);
+            return;
+        }
+        closeModal();
+        toast(r.squadra_collegata ? `Collegato a ${r.societa_nome}: la società può importare la tua rosa`
+            : `Collegato a ${r.societa_nome}. Per collegare anche la squadra premi «Sincronizza» una volta e poi ricollegati`, 'success');
+    }catch(e){ toast(syncIsNetErr(e)?'Connessione assente: riprova':'Collegamento non riuscito','danger'); console.warn('[Società] collegamento',e); }
+    finally{ btn.disabled=false; }
+}
+async function socLinkTeam(id){
+    try{ await AiRIMSync.socCollegaSquadra(id); closeModal(); toast('Squadra collegata: la società può importare la tua rosa','success'); }
+    catch(e){ toast(e&&e.message==='dati_non_validi'?'Questa squadra AiRIM è già collegata a un\'altra squadra della società':'Collegamento non riuscito: riprova','danger'); }
+}
 function currentAccountEmail(){
     if(COACH_EMAIL) return COACH_EMAIL;
     try{
