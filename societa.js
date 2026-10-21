@@ -203,6 +203,11 @@ async function caricaSocieta(idScelto) {
   if (S.socs.length > 1 && !idScelto) return schermataScelta();
   S.soc = S.socs.find((r) => r.societa_id === idScelto) || S.socs[0];
   S.cache = {};
+  if (S.soc.ruolo === 'presidente') {   // informativa cambiata: nuova accettazione prima di tutto
+    let ultima;
+    try { ultima = ((await rpc('soc_mia_privacy', { p_societa: S.soc.societa_id })) || [])[0] || null; } catch (e) { ultima = undefined; }   // senza rete non blocca
+    if (ultima !== undefined && (!ultima || ultima.versione !== SOC_PRIVACY_VERSION)) return schermataPrivacy(ultima);
+  }
   if (!S.soc.attiva) return schermataLicenza();
   vai(S.soc.ruolo === 'allenatore' ? 'allenatore' : 'home');
 }
@@ -319,6 +324,25 @@ async function creaSocieta(btn) {
     });
     toast('Società creata');
     await caricaSocieta(id);
+  });
+}
+
+function schermataPrivacy(ultima) {
+  $('nav').hidden = true;
+  $('app').innerHTML = intestazione() + `
+    <div class="eyebrow">Informativa</div><h2>L'informativa è cambiata</h2>
+    <div class="card"><p class="muted" style="margin-bottom:.8rem">${ultima ? `Avevi accettato la versione ${esc(ultima.versione)} il ${quando(ultima.accettata_il)}.` : 'Non risulta un\'accettazione con questo account.'}
+      Per continuare a usare AiRIM Società leggi e accetta la versione ${esc(SOC_PRIVACY_VERSION)}.</p>
+      <div class="policy">${esc(SOC_PRIVACY_TEXT)}</div>
+      <label class="check"><input type="checkbox" id="pv-ok"> Ho letto e accetto l'informativa per conto della società (versione ${esc(SOC_PRIVACY_VERSION)})</label>
+      <button class="btn btn-accent btn-block" onclick="accettaPrivacy(this)">Accetto e continuo</button></div>`;
+}
+async function accettaPrivacy(btn) {
+  if (!$('pv-ok').checked) return toast('Per continuare accetta l\'informativa', 'danger');
+  await azione(btn, async () => {
+    await rpc('soc_registra_privacy', { p_societa: S.soc.societa_id, p_versione: SOC_PRIVACY_VERSION, p_hash: await sha256(SOC_PRIVACY_TEXT) });
+    toast('Informativa accettata');
+    await caricaSocieta(S.soc.societa_id);
   });
 }
 
