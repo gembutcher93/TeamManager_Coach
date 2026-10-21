@@ -663,6 +663,7 @@ VISTE.tesserato.extra = async function (t) {
   const mem = await membri();
   const chi = (id) => { const m = mem.find((x) => x.id === id); return m ? nomeCompleto(m) : '—'; };
   S.cache.voci = voci;
+  S.cache.pag = pag;
   const s = semaforo(voci);
   const el = $('t-extra'); if (!el) return;
   el.innerHTML = `
@@ -681,7 +682,9 @@ VISTE.tesserato.extra = async function (t) {
       return `<div class="item" style="cursor:default;${p.annullato_il ? 'opacity:.55' : ''}"><div class="b"><b>${euro(p.importo)} · ${esc(v.descrizione || '')}</b>
         <small>${dataIt(p.data)} · ${p.metodo === 'contanti' ? 'contanti' : 'bonifico'} · registrato da ${esc(chi(p.registrato_da))} il ${quando(p.registrato_il)}${p.nota ? ' · ' + esc(p.nota) : ''}
         ${p.annullato_il ? `<br>Annullato da ${esc(chi(p.annullato_da))} il ${quando(p.annullato_il)}` : ''}</small></div>
-        ${p.annullato_il ? '<span class="badge off">Annullato</span>' : `<button class="btn btn-ghost btn-sm" onclick="annullaPagamento('${p.id}')">Annulla</button>`}</div>`;
+        ${p.annullato_il ? '<span class="badge off">Annullato</span>' : `<div class="btns" style="flex:0 0 auto">
+          <button class="btn btn-ghost btn-sm" onclick="ricevuta('${p.id}')"><i class="fa-solid fa-file-image"></i> Ricevuta</button>
+          <button class="btn btn-ghost btn-sm" onclick="annullaPagamento('${p.id}')">Annulla</button></div>`}</div>`;
     }).join('') || '<div class="empty">Nessun pagamento registrato.</div>'}</div>
       <p class="hint">Un pagamento sbagliato non si cancella: si annulla e resta nello storico.</p></div>`;
 };
@@ -708,6 +711,63 @@ async function registraPagamento(btn, voceId) {
     toast('Pagamento registrato');
     ricarica();
   });
+}
+/* ---------- ricevuta di cortesia: immagine PNG generata sul telefono, nulla viene salvato ---------- */
+async function ricevuta(pagId) {
+  const p = S.cache.pag.find((x) => x.id === pagId), v = S.cache.voci.find((x) => x.id === p.voce_id) || {}, t = S.cache.tesserato;
+  const [soc] = await leggi('soc_societa', 'nome,causale_modello', (b) => b.eq('id', S.soc.societa_id));
+  const sq = (await squadre()).find((x) => x.id === t.squadra_id) || {};
+  const val = { voci: v.descrizione, nome: t.nome, cognome: t.cognome || '', squadra: sq.nome || '', stagione: sq.stagione || '', societa: soc.nome };
+  const causale = (soc.causale_modello || '{voci} {cognome} {nome} {squadra} {stagione}')
+    .replace(/\{(\w+)\}/g, (m, k) => (k in val ? val[k] : '')).replace(/\s+/g, ' ').trim();
+  const righe = [['Ricevuto da', nomeCompleto(t)], ['Voce', v.descrizione], ['Importo', euro(p.importo)], ['Data', dataIt(p.data)],
+    ['Metodo', p.metodo === 'contanti' ? 'Contanti' : 'Bonifico'], ['Causale', causale], ['Squadra', [sq.nome, sq.stagione].filter(Boolean).join(' · ')],
+    ['Riferimento', p.id.slice(0, 8).toUpperCase()]];
+  const W = 1080, c = document.createElement('canvas'), g = c.getContext('2d');
+  const font = (px, peso) => `${peso || 500} ${px}px Urbanist, system-ui, sans-serif`;
+  const a_capo = (testo, max) => {   // spezza il testo in righe larghe al massimo max pixel
+    const out = []; let r = '';
+    for (const w of String(testo).split(' ')) { const prova = r ? r + ' ' + w : w; if (g.measureText(prova).width > max && r) { out.push(r); r = w; } else r = prova; }
+    return out.concat(r);
+  };
+  const disegna = (vero) => {   // prima passata solo per misurare l'altezza
+    let y = 0;
+    if (vero) { g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, c.height); g.fillStyle = '#22C55E'; g.fillRect(0, 0, W, 16); }
+    y = 110; g.font = font(30, 800); if (vero) { g.fillStyle = '#16A34A'; g.fillText('RICEVUTA DI CORTESIA', 80, y); }
+    g.font = font(56, 800); for (const r of a_capo(soc.nome, W - 160)) { y += 70; if (vero) { g.fillStyle = '#0F172A'; g.fillText(r, 80, y); } }
+    y += 40;
+    for (const [k, val] of righe) {
+      y += 54; g.font = font(26, 700); if (vero) { g.fillStyle = '#64748B'; g.fillText(k.toUpperCase(), 80, y); }
+      g.font = k === 'Importo' ? font(52, 800) : font(36, 600);
+      for (const r of a_capo(val || '—', W - 160)) { y += k === 'Importo' ? 62 : 46; if (vero) { g.fillStyle = '#0F172A'; g.fillText(r, 80, y); } }
+    }
+    y += 60; if (vero) { g.fillStyle = '#E2E8F0'; g.fillRect(80, y, W - 160, 2); }
+    y += 56; g.font = font(30, 700); if (vero) { g.fillStyle = '#B91C1C'; g.fillText('Ricevuta di cortesia, non valida ai fini fiscali', 80, y); }
+    y += 44; g.font = font(24, 500); if (vero) { g.fillStyle = '#94A3B8'; g.fillText('Generata con AiRIM Società', 80, y); }
+    return y + 70;
+  };
+  c.width = W; c.height = 10; c.height = disegna(false); disegna(true);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  const nome = `ricevuta-${(t.cognome || t.nome).replace(/[^\w-]+/g, '')}-${p.data}.png`;
+  S.cache.ricevuta = new File([blob], nome, { type: 'image/png' });
+  const puoCondividere = navigator.canShare && navigator.canShare({ files: [S.cache.ricevuta] });
+  apriFoglio(`<h3>Ricevuta di cortesia</h3>
+    <img src="${URL.createObjectURL(blob)}" alt="Ricevuta" style="width:100%;border-radius:12px;border:1px solid var(--line);margin-bottom:.8rem">
+    <div class="btns" style="flex-direction:column">
+      ${puoCondividere ? `<button class="btn btn-accent" onclick="condividiRicevuta()"><i class="fa-solid fa-share-nodes"></i> Condividi (WhatsApp…)</button>` : ''}
+      <button class="btn ${puoCondividere ? 'btn-ghost' : 'btn-accent'}" onclick="scaricaFile(S.cache.ricevuta)"><i class="fa-solid fa-download"></i> Scarica</button>
+      <button class="btn btn-ghost" onclick="chiudiFoglio()">Chiudi</button></div>
+    <p class="hint">La ricevuta non viene salvata da nessuna parte: si rigenera quando serve.</p>`);
+}
+function condividiRicevuta() {
+  navigator.share({ files: [S.cache.ricevuta], title: 'Ricevuta di cortesia' })
+    .catch((e) => { if (e && e.name !== 'AbortError') toast('Condivisione non riuscita: usa Scarica', 'danger'); });
+}
+function scaricaFile(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 function annullaPagamento(id) {
   conferma('Annullare questo pagamento? Resterà nello storico come annullato.', () => azione(null, async () => {
