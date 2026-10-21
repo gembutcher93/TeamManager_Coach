@@ -16,9 +16,6 @@ const SUPABASE_URL = 'https://dvyrfoaeqtcdvgxnkswu.supabase.co';            // s
 const SUPABASE_ANON_KEY = 'sb_publishable_tghtDcorJoNBRd95gOkqYQ_R6pbASbm';
 const CONTACT_WHATSAPP = '393498290606';
 const CONTACT_INSTAGRAM_URL = 'https://www.instagram.com/othibyte/';
-// L'import della rosa richiede Prompt/soc_06_importa_rosa.sql sul server (la versione di soc_02
-// leggerebbe anche i giocatori tolti dalla rosa e duplicherebbe i tesserati inseriti a mano).
-const IMPORT_ROSA_ATTIVO = false;   // mettere true dopo aver lanciato soc_06
 
 const S = { sb: null, user: null, socs: [], soc: null, view: 'home', params: {}, cache: {} };
 const $ = (id) => document.getElementById(id);
@@ -544,9 +541,8 @@ VISTE.squadra.extra = async function (sq) {
     : `<p class="muted">Imposta iscrizione e mensilità: le voci di ogni tesserato si creano da sole.</p>
       <button class="btn btn-accent btn-block" style="margin-top:.8rem" onclick="foglioPiano('${sq.id}')"><i class="fa-solid fa-plus"></i> Imposta le quote</button>`}</div>
     <div class="card"><h3><i class="fa-solid fa-link"></i> AiRIM Coach</h3>${sq.team_id
-      ? `<p class="muted">L'allenatore ha collegato questa squadra.${IMPORT_ROSA_ATTIVO ? ` Puoi importare i giocatori della sua rosa attuale: solo nome, numero e ruolo (mai voti, statistiche o check-in). Chi è già tesserato viene saltato; un tesserato inserito a mano con lo stesso nome e cognome viene collegato, non duplicato.` : ''}</p>
-        ${IMPORT_ROSA_ATTIVO ? `<button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="importaRosa(this,'${sq.id}')"><i class="fa-solid fa-file-import"></i> Importa da AiRIM</button>`
-          : `<p class="hint"><i class="fa-solid fa-clock"></i> L'importazione della rosa sarà disponibile a breve: per ora i tesserati si inseriscono a mano.</p>`}`
+      ? `<p class="muted">L'allenatore ha collegato questa squadra. Puoi importare i giocatori della sua rosa attuale: solo nome, numero e ruolo (mai voti, statistiche o check-in). Chi è già tesserato viene saltato; un tesserato inserito a mano con lo stesso nome e cognome viene collegato, non duplicato.</p>
+        <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="importaRosa(this,'${sq.id}')"><i class="fa-solid fa-file-import"></i> Importa da AiRIM</button>`
       : `<p class="muted">Non ancora collegata. L'allenatore, in AiRIM Coach → Impostazioni → Società, sceglie "Collega a una società" con il suo codice personale e PIN.</p>`}</div>`;
 };
 function meseNome(d) {
