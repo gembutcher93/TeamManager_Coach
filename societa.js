@@ -70,6 +70,7 @@ const ERRORI = {
   nessun_importo_dovuto: 'Non risulta nulla di scaduto da pagare.',
   minorenne_solo_whatsapp: 'Per i minorenni l\'avviso va al genitore su WhatsApp.',
   squadra_non_collegata: 'La squadra non è ancora collegata ad AiRIM Coach.',
+  stagione_archiviata: 'Questa stagione è archiviata: si può solo consultare.',
   nessuna_scadenza: 'Questa scadenza non è vicina: niente da avvisare.',
   rosa_non_disponibile: 'L\'allenatore non ha ancora sincronizzato la rosa: chiedigli di premere "Sincronizza" nel Coach.',
 };
@@ -357,8 +358,9 @@ function vista(html) { const el = $('view'); if (el) el.innerHTML = html; }
 
 /* allenatore: le sue squadre e, per i suoi giocatori, solo semaforo del certificato e tesseramento sì/no */
 VISTE.allenatore = { titolo: 'Squadre', icona: 'fa-people-group', ruoli: ['allenatore'], async render() {
-  const [sq, rosa] = await Promise.all([leggi('soc_squadre', 'id,nome,stagione,team_id', (b) => b.eq('societa_id', S.soc.societa_id).order('nome')),
+  const [tutte, rosa] = await Promise.all([leggi('soc_squadre', 'id,nome,stagione,team_id,archiviata_il', (b) => b.eq('societa_id', S.soc.societa_id).order('nome')),
     rpc('soc_allenatore_rosa', { p_societa: S.soc.societa_id })]);
+  const sq = attive(tutte);
   vista(`<div class="eyebrow">Allenatore</div><h2>Le tue squadre</h2>
     ${sq.map((x) => { const g = (rosa || []).filter((r) => r.squadra_id === x.id);
       return `<div class="card"><h3><i class="fa-solid fa-people-group"></i> ${esc(x.nome)}</h3>
@@ -383,10 +385,14 @@ function stagioneCorrente() {
 }
 async function squadre(forza) {
   if (!S.cache.squadre || forza) {
-    S.cache.squadre = await leggi('soc_squadre', 'id,nome,stagione,team_id', (b) => b.eq('societa_id', S.soc.societa_id).order('nome'));
+    S.cache.squadre = await leggi('soc_squadre', 'id,nome,stagione,team_id,archiviata_il', (b) => b.eq('societa_id', S.soc.societa_id).order('nome').order('stagione'));
   }
   return S.cache.squadre;
 }
+/* squadre della stagione in corso (le archiviate restano solo in "Squadre → Archivio" e nell'export) */
+const attive = (sq) => sq.filter((x) => !x.archiviata_il);
+const idAttive = (sq) => new Set(attive(sq).map((x) => x.id));
+function stagioneDopo(st) { const y = parseInt(String(st).slice(0, 4), 10) + 1; return y + '/' + String((y + 1) % 100).padStart(2, '0'); }
 /* semaforo di un tesserato dalle sue voci: rosso = qualcosa di scaduto, giallo = da pagare più avanti, verde = in regola */
 function semaforo(voci) {
   const scaduto = voci.filter((v) => v.residuo > 0 && v.scadenza < oggi()).reduce((s, v) => s + Number(v.residuo), 0);
@@ -416,12 +422,14 @@ async function vociDi(idTesserati) {
 }
 
 VISTE.squadre = { titolo: 'Squadre', icona: 'fa-people-group', ruoli: ['presidente', 'dirigente'], async render() {
-  const sq = await squadre(true);
+  const tutte = await squadre(true), sq = attive(tutte), arch = tutte.filter((x) => x.archiviata_il);
+  const voce = (x) => `<button class="item" onclick="vai('squadra',{id:'${x.id}'})">
+      <div class="b"><b>${esc(x.nome)}</b><small>${esc(x.stagione)}${x.team_id ? ' · <i class="fa-solid fa-link"></i> AiRIM Coach' : ''}${x.archiviata_il ? ' · chiusa il ' + dataIt(x.archiviata_il) : ''}</small></div><i class="fa-solid fa-chevron-right muted"></i></button>`;
   vista(`<div class="eyebrow">Anagrafica</div><h2>Squadre</h2>
-    <div class="list">${sq.map((x) => `<button class="item" onclick="vai('squadra',{id:'${x.id}'})">
-      <div class="b"><b>${esc(x.nome)}</b><small>${esc(x.stagione)}${x.team_id ? ' · <i class="fa-solid fa-link"></i> AiRIM Coach' : ''}</small></div><i class="fa-solid fa-chevron-right muted"></i></button>`).join('')
-      || '<div class="empty">Nessuna squadra: crea la prima.</div>'}</div>
-    <button class="btn btn-accent btn-block" style="margin-top:1rem" onclick="foglioSquadra()"><i class="fa-solid fa-plus"></i> Nuova squadra</button>`);
+    <div class="list">${sq.map(voce).join('') || '<div class="empty">Nessuna squadra: crea la prima.</div>'}</div>
+    <button class="btn btn-accent btn-block" style="margin-top:1rem" onclick="foglioSquadra()"><i class="fa-solid fa-plus"></i> Nuova squadra</button>
+    ${arch.length ? `<p class="hint" style="margin:1.4rem 0 .5rem"><i class="fa-solid fa-box-archive"></i> Archivio delle stagioni chiuse (sola lettura)</p>
+      <div class="list" style="opacity:.75">${arch.map(voce).join('')}</div>` : ''}`);
 } };
 
 function foglioSquadra(id) {
@@ -450,6 +458,8 @@ VISTE.squadra = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async rend
     (b) => b.eq('squadra_id', id).order('cognome').order('nome'));
   const [voci, doc] = await Promise.all([vociDi(tess.map((t) => t.id)), tesseramentiDi(tess.map((t) => t.id))]);
   S.cache.tesserati = tess;
+  const ro = S.cache.ro = !!sq.archiviata_il;
+  S.cache.residuo = voci.reduce((x, v) => x + Number(v.residuo), 0);
   const riga = (t) => {
     const s = semaforo(voci.filter((v) => v.tesserato_id === t.id));
     const d = doc.find((x) => x.tesserato_id === t.id) || {};
@@ -460,12 +470,14 @@ VISTE.squadra = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async rend
   };
   const attivi = tess.filter((t) => t.attivo), usciti = tess.filter((t) => !t.attivo);
   vista(`<button class="back" onclick="vai('squadre')"><i class="fa-solid fa-chevron-left"></i> Squadre</button>
-    <div class="eyebrow">${esc(sq.stagione)}</div><h2>${esc(sq.nome)} <button class="btn btn-ghost btn-sm" onclick="foglioSquadra('${sq.id}')"><i class="fa-solid fa-pen"></i></button></h2>
+    <div class="eyebrow">${esc(sq.stagione)}${ro ? ' · archivio' : ''}</div><h2>${esc(sq.nome)} ${ro ? '' : `<button class="btn btn-ghost btn-sm" onclick="foglioSquadra('${sq.id}')"><i class="fa-solid fa-pen"></i></button>`}</h2>
+    ${ro ? `<div class="card" style="border-color:var(--warn)"><i class="fa-solid fa-box-archive"></i> Stagione chiusa il ${dataIt(sq.archiviata_il)}: si può consultare ma non modificare.
+      <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="foglioRiporta('${sq.id}')"><i class="fa-solid fa-share"></i> Riporta i tesserati nella stagione nuova</button></div>` : ''}
     <div id="sq-extra"></div>
     <div class="card"><h3><i class="fa-solid fa-users"></i> Tesserati (${attivi.length})</h3>
       <div class="list">${attivi.map(riga).join('') || '<div class="empty">Nessun tesserato.</div>'}</div>
       ${usciti.length ? `<p class="hint" style="margin:1rem 0 .5rem">Non più in squadra</p><div class="list">${usciti.map(riga).join('')}</div>` : ''}
-      <button class="btn btn-accent btn-block" style="margin-top:1rem" onclick="foglioTesserato(null,'${sq.id}')"><i class="fa-solid fa-user-plus"></i> Nuovo tesserato</button>
+      ${ro ? '' : `<button class="btn btn-accent btn-block" style="margin-top:1rem" onclick="foglioTesserato(null,'${sq.id}')"><i class="fa-solid fa-user-plus"></i> Nuovo tesserato</button>`}
       <p class="hint"><span class="dot bad" style="display:inline-block;width:9px;height:9px"></span> scaduto da pagare ·
         <span class="dot warn" style="display:inline-block;width:9px;height:9px"></span> da pagare più avanti ·
         <span class="dot ok" style="display:inline-block;width:9px;height:9px"></span> in regola ·
@@ -476,7 +488,7 @@ VISTE.squadra = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async rend
 function foglioTesserato(id, squadraId) {
   const t = (S.cache.tesserati || []).find((x) => x.id === id) || S.cache.tesserato && S.cache.tesserato.id === id && S.cache.tesserato
     || { squadra_id: squadraId, nome: '', cognome: '', ruolo: '', numero: null, telefono: '', minorenne: false, genitore_nome: '', genitore_telefono: '', dal: oggi(), attivo: true, note: '' };
-  const sq = S.cache.squadre || [];
+  const sq = attive(S.cache.squadre || []);
   apriFoglio(`<h3>${id ? 'Modifica tesserato' : 'Nuovo tesserato'}</h3>
     <div class="row"><div class="fg"><label>Nome</label><input id="t-nome" value="${esc(t.nome)}" maxlength="60"></div>
       <div class="fg"><label>Cognome</label><input id="t-cogn" value="${esc(t.cognome)}" maxlength="60"></div></div>
@@ -539,25 +551,26 @@ VISTE.tesserato = { tab: 'squadre', ruoli: ['presidente', 'dirigente'], async re
     (b) => b.eq('id', id)))[0];
   if (!t) return vai('squadre');
   S.cache.tesserato = t;
-  const sq = (await squadre()).find((x) => x.id === t.squadra_id) || {};
+  const sq = (await squadre(true)).find((x) => x.id === t.squadra_id) || {};
+  const ro = S.cache.ro = !!sq.archiviata_il;
   const d = (await tesseramentiDi([t.id]))[0] || {};
   S.cache.doc = d;
   const rigaDoc = (nome, data) => { const [c, l] = DOC[statoData(data)];
     return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0"><span>${nome}</span>
       <span>${data ? dataIt(data) + ' ' : ''}<span class="badge ${c}">${l}</span></span></div>`; };
   const contatto = t.minorenne ? `Genitore: ${esc(t.genitore_nome || '—')} · ${esc(t.genitore_telefono || '—')}` : esc(t.telefono || 'nessun telefono');
-  vista(`<button class="back" onclick="vai('squadra',{id:'${t.squadra_id}'})"><i class="fa-solid fa-chevron-left"></i> ${esc(sq.nome || 'Squadra')}</button>
+  vista(`<button class="back" onclick="vai('squadra',{id:'${t.squadra_id}'})"><i class="fa-solid fa-chevron-left"></i> ${esc(sq.nome || 'Squadra')}${ro ? ' ' + esc(sq.stagione) + ' (archivio)' : ''}</button>
     <h2>${esc(nomeCompleto(t))}${t.numero != null ? ` <span class="muted">#${t.numero}</span>` : ''}</h2>
     <div class="card"><div class="row" style="align-items:center"><div style="flex:1">
       <div>${esc(t.ruolo || '')}${t.minorenne ? ' · <span class="badge warn">minorenne</span>' : ''}${t.attivo ? '' : ' · <span class="badge off">non più in squadra</span>'}${t.player_id ? ' · <span class="badge ok">AiRIM</span>' : ''}</div>
       <div class="muted" style="font-size:.88rem;margin-top:4px">${contatto}</div>
       ${t.note ? `<div class="muted" style="font-size:.85rem;margin-top:4px">${esc(t.note)}</div>` : ''}</div>
-      <button class="btn btn-ghost btn-sm" onclick="foglioTesserato('${t.id}')"><i class="fa-solid fa-pen"></i> Modifica</button></div></div>
+      ${ro ? '' : `<button class="btn btn-ghost btn-sm" onclick="foglioTesserato('${t.id}')"><i class="fa-solid fa-pen"></i> Modifica</button>`}</div></div>
     <div class="card"><h3><i class="fa-solid fa-id-card"></i> Tesseramento e certificato</h3>
       <div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0"><span>Tesseramento</span>
         <span>${d.confermato ? `confermato il ${dataIt(d.confermato_il)} <span class="badge ok">Sì</span>` : '<span class="badge bad">Non confermato</span>'}</span></div>
       ${rigaDoc('Scadenza tessera', d.tessera_scadenza)}${rigaDoc('Certificato medico', d.certificato_scadenza)}
-      <button class="btn btn-ghost btn-block" style="margin-top:.6rem" onclick="foglioTesseramento('${t.id}')"><i class="fa-solid fa-pen"></i> Aggiorna</button></div>
+      ${ro ? '' : `<button class="btn btn-ghost btn-block" style="margin-top:.6rem" onclick="foglioTesseramento('${t.id}')"><i class="fa-solid fa-pen"></i> Aggiorna</button>`}</div>
     <div id="t-extra"></div>`);
   if (VISTE.tesserato.extra) await VISTE.tesserato.extra(t);
 } };
@@ -581,7 +594,8 @@ function badgeVoce(v) {
 }
 
 VISTE.home = { titolo: 'Cruscotto', icona: 'fa-chart-pie', ruoli: ['presidente', 'dirigente'], async render() {
-  const r = await rpc('soc_riepilogo', { p_societa: S.soc.societa_id }) || [];
+  const [tutte, righe] = await Promise.all([squadre(true), rpc('soc_riepilogo', { p_societa: S.soc.societa_id })]);
+  const ok = idAttive(tutte), r = (righe || []).filter((x) => ok.has(x.squadra_id));
   const tot = (k) => r.reduce((s, x) => s + Number(x[k] || 0), 0);
   vista(`<div class="eyebrow">Stagione in corso</div><h2>Cruscotto</h2>
     <div class="kpis">
@@ -606,7 +620,7 @@ async function foglioEsporta() {
     <div class="fg"><label>Cosa</label><select id="e-cosa"><option value="pagamenti">Pagamenti</option><option value="voci">Voci (quote dovute)</option>
       <option value="anagrafica">Anagrafica tesserati</option><option value="solleciti">Solleciti e avvisi</option></select></div>
     <div class="fg"><label>Squadra</label><select id="e-sq"><option value="">Tutte le squadre</option>
-      ${sq.map((x) => `<option value="${x.id}">${esc(x.nome)} ${esc(x.stagione)}</option>`).join('')}</select></div>
+      ${sq.map((x) => `<option value="${x.id}">${esc(x.nome)} ${esc(x.stagione)}${x.archiviata_il ? ' (archivio)' : ''}</option>`).join('')}</select></div>
     <div class="row"><div class="fg"><label>Dal</label><input id="e-dal" type="date"></div><div class="fg"><label>Al</label><input id="e-al" type="date"></div></div>
     <p class="hint" style="margin-bottom:.8rem">Periodo: data del pagamento, scadenza della voce, giorno del sollecito. L'anagrafica non dipende dal periodo. Lascia vuoto per avere tutto.</p>
     <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
@@ -673,6 +687,11 @@ VISTE.squadra.extra = async function (sq) {
     (b) => b.eq('squadra_id', sq.id)))[0];
   S.cache.piano = pn || null;
   const el = $('sq-extra'); if (!el) return;
+  if (sq.archiviata_il) {   // archivio: solo il riepilogo delle quote
+    el.innerHTML = pn ? `<div class="card"><h3><i class="fa-solid fa-euro-sign"></i> Quote della stagione</h3><div style="line-height:1.7">Iscrizione <b>${euro(pn.iscrizione_importo)}</b> ·
+      Mensilità <b>${euro(pn.mensilita_importo)}</b> da ${esc(meseNome(pn.mese_inizio))} a ${esc(meseNome(pn.mese_fine))}</div></div>` : '';
+    return;
+  }
   el.innerHTML = `<div class="card"><h3><i class="fa-solid fa-euro-sign"></i> Quote della stagione</h3>
     ${pn ? `<div style="line-height:1.7">Iscrizione <b>${euro(pn.iscrizione_importo)}</b>${pn.iscrizione_scadenza ? ` entro il ${dataIt(pn.iscrizione_scadenza)}` : ''}<br>
       Mensilità <b>${euro(pn.mensilita_importo)}</b> da ${esc(meseNome(pn.mese_inizio))} a ${esc(meseNome(pn.mese_fine))}, scadenza il giorno ${pn.giorno_scadenza}</div>
@@ -684,8 +703,54 @@ VISTE.squadra.extra = async function (sq) {
     <div class="card"><h3><i class="fa-solid fa-link"></i> AiRIM Coach</h3>${sq.team_id
       ? `<p class="muted">L'allenatore ha collegato questa squadra. Puoi importare i giocatori della sua rosa attuale: solo nome, numero e ruolo (mai voti, statistiche o check-in). Chi è già tesserato viene saltato; un tesserato inserito a mano con lo stesso nome e cognome viene collegato, non duplicato.</p>
         <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="importaRosa(this,'${sq.id}')"><i class="fa-solid fa-file-import"></i> Importa da AiRIM</button>`
-      : `<p class="muted">Non ancora collegata. L'allenatore, in AiRIM Coach → Impostazioni → Società, sceglie "Collega a una società" con il suo codice personale e PIN.</p>`}</div>`;
+      : `<p class="muted">Non ancora collegata. L'allenatore, in AiRIM Coach → Impostazioni → Società, sceglie "Collega a una società" con il suo codice personale e PIN.</p>`}</div>
+    ${S.soc.ruolo === 'presidente' ? `<div class="card"><h3><i class="fa-solid fa-flag-checkered"></i> Fine stagione</h3>
+      <p class="muted">Chiudi la ${esc(sq.stagione)}: resta in archivio in sola lettura e si apre la ${esc(stagioneDopo(sq.stagione))}, con le quote da impostare da zero.</p>
+      <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="foglioChiudi('${sq.id}')"><i class="fa-solid fa-box-archive"></i> Chiudi la stagione</button></div>` : ''}`;
 };
+
+/* ---------- nuova stagione: archivia la squadra e riporta i tesserati ---------- */
+function foglioChiudi(sqId) {
+  const sq = S.cache.squadre.find((x) => x.id === sqId);
+  apriFoglio(`<h3>Chiudi la stagione ${esc(sq.stagione)} · ${esc(sq.nome)}</h3>
+    <div class="fg"><label>Stagione nuova</label><input id="c-stag" value="${esc(stagioneDopo(sq.stagione))}" maxlength="7"></div>
+    ${S.cache.residuo > 0 ? `<div class="card" style="border-color:var(--bad)">Restano <b>${euro(S.cache.residuo)}</b> da incassare in questa stagione. Dopo la chiusura non si potranno più registrare pagamenti né modificare voci: registra prima quello che è arrivato.</div>` : ''}
+    <p class="hint" style="margin-bottom:.8rem">Tesserati, quote, pagamenti e solleciti restano consultabili in archivio. Il collegamento con AiRIM Coach e gli allenatori passano alla stagione nuova.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Indietro</button>
+      <button class="btn btn-danger" onclick="chiudiStagione(this,'${sqId}')">Chiudi la stagione</button></div>`);
+}
+async function chiudiStagione(btn, sqId) {
+  const st = $('c-stag').value.trim();
+  if (!/^\d{4}\/\d{2}$/.test(st)) return toast('Scrivi la stagione nel formato 2027/28', 'danger');
+  await azione(btn, async () => {
+    const nuova = await rpc('soc_chiudi_stagione', { p_squadra: sqId, p_stagione: st });
+    toast('Stagione chiusa: scegli chi riportare');
+    await squadre(true);
+    foglioRiporta(sqId, nuova);
+  });
+}
+async function foglioRiporta(vecchiaId, nuovaId) {
+  const sq = await squadre(), vecchia = sq.find((x) => x.id === vecchiaId);
+  const dest = attive(sq), scelta = nuovaId || (dest.find((x) => x.nome === vecchia.nome) || dest[0] || {}).id;
+  if (!dest.length) return toast('Nessuna squadra della stagione in corso: chiudi prima la stagione', 'danger');
+  const tess = (await leggi('soc_tesserati', 'id,nome,cognome,numero,attivo', (b) => b.eq('squadra_id', vecchiaId).order('cognome').order('nome'))).filter((t) => t.attivo);
+  apriFoglio(`<h3>Riporta i tesserati</h3>
+    <div class="fg"><label>Nella squadra</label><select id="r-dest">${dest.map((x) => `<option value="${x.id}" ${x.id === scelta ? 'selected' : ''}>${esc(x.nome)} ${esc(x.stagione)}</option>`).join('')}</select></div>
+    <label class="check"><input type="checkbox" checked onchange="document.querySelectorAll('.r-t').forEach((c)=>c.checked=this.checked)"> <b>Tutti</b></label>
+    ${tess.map((t) => `<label class="check" style="margin:.2rem 0"><input type="checkbox" class="r-t" value="${t.id}" checked> ${esc(nomeCompleto(t))}${t.numero != null ? ` <span class="muted">#${t.numero}</span>` : ''}</label>`).join('') || '<div class="empty">Nessun tesserato da riportare.</div>'}
+    <p class="hint" style="margin:.6rem 0 .8rem">Si copiano anagrafica, contatti e data del certificato medico. Tesseramento e tessera vanno confermati di nuovo. Chi è già stato riportato viene saltato.</p>
+    <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio();${nuovaId ? `vai('squadra',{id:'${nuovaId}'})` : ''}">Più tardi</button>
+      <button class="btn btn-accent" onclick="riporta(this)"><i class="fa-solid fa-share"></i> Riporta</button></div>`);
+}
+async function riporta(btn) {
+  const dest = $('r-dest').value, ids = [...document.querySelectorAll('.r-t:checked')].map((c) => c.value);
+  if (!ids.length) return toast('Scegli almeno un tesserato', 'danger');
+  await azione(btn, async () => {
+    const n = await rpc('soc_riporta_tesserati', { p_squadra: dest, p_tesserati: ids });
+    toast(n ? `${n} tesserati riportati: ora imposta le quote della stagione nuova` : 'Erano già stati riportati tutti');
+    vai('squadra', { id: dest });
+  });
+}
 function meseNome(d) {
   const m = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
   const [y, mm] = String(d).split('-'); return m[parseInt(mm, 10) - 1] + ' ' + y;
@@ -744,7 +809,7 @@ VISTE.tesserato.extra = async function (t) {
   const chi = (id) => { const m = mem.find((x) => x.id === id); return m ? nomeCompleto(m) : '—'; };
   S.cache.voci = voci;
   S.cache.pag = pag;
-  const s = semaforo(voci);
+  const s = semaforo(voci), ro = S.cache.ro;
   const el = $('t-extra'); if (!el) return;
   el.innerHTML = `
     <div class="kpis"><div class="kpi"><span>Scaduto</span><b class="num" style="color:${s.scaduto ? 'var(--bad)' : 'inherit'}">${euro(s.scaduto)}</b></div>
@@ -753,10 +818,10 @@ VISTE.tesserato.extra = async function (t) {
       <div class="item" style="cursor:default;flex-wrap:wrap"><div class="b"><b>${esc(v.descrizione)}</b>
         <small>scade il ${dataIt(v.scadenza)} · ${euro(v.importo)}${Number(v.pagato) ? ` · pagato ${euro(v.pagato)}` : ''}${v.nota ? ' · ' + esc(v.nota) : ''}</small>
         <div style="margin-top:4px">${badgeVoce(v)}</div></div>
-        <div class="btns" style="flex:0 0 auto">${Number(v.residuo) > 0 ? `<button class="btn btn-accent btn-sm" onclick="foglioRicevuto('${v.id}')"><i class="fa-solid fa-check"></i> Ricevuto</button>` : ''}
-          <button class="btn btn-ghost btn-sm" onclick="foglioVoce('${v.id}')" aria-label="Modifica voce"><i class="fa-solid fa-pen"></i></button></div></div>`).join('')
+        ${ro ? '' : `<div class="btns" style="flex:0 0 auto">${Number(v.residuo) > 0 ? `<button class="btn btn-accent btn-sm" onclick="foglioRicevuto('${v.id}')"><i class="fa-solid fa-check"></i> Ricevuto</button>` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="foglioVoce('${v.id}')" aria-label="Modifica voce"><i class="fa-solid fa-pen"></i></button></div>`}</div>`).join('')
       || '<div class="empty">Nessuna voce: imposta le quote della squadra.</div>'}</div>
-      <button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="foglioVoceExtra('${t.id}')"><i class="fa-solid fa-plus"></i> Aggiungi voce (kit, torneo…)</button></div>
+      ${ro ? '' : `<button class="btn btn-ghost btn-block" style="margin-top:.8rem" onclick="foglioVoceExtra('${t.id}')"><i class="fa-solid fa-plus"></i> Aggiungi voce (kit, torneo…)</button>`}</div>
     <div class="card"><h3><i class="fa-solid fa-receipt"></i> Pagamenti</h3><div class="list">${pag.map((p) => {
       const v = voci.find((x) => x.id === p.voce_id) || {};
       return `<div class="item" style="cursor:default;${p.annullato_il ? 'opacity:.55' : ''}"><div class="b"><b>${euro(p.importo)} · ${esc(v.descrizione || '')}</b>
@@ -764,7 +829,7 @@ VISTE.tesserato.extra = async function (t) {
         ${p.annullato_il ? `<br>Annullato da ${esc(chi(p.annullato_da))} il ${quando(p.annullato_il)}` : ''}</small></div>
         ${p.annullato_il ? '<span class="badge off">Annullato</span>' : `<div class="btns" style="flex:0 0 auto">
           <button class="btn btn-ghost btn-sm" onclick="ricevuta('${p.id}')"><i class="fa-solid fa-file-image"></i> Ricevuta</button>
-          <button class="btn btn-ghost btn-sm" onclick="annullaPagamento('${p.id}')">Annulla</button></div>`}</div>`;
+          ${ro ? '' : `<button class="btn btn-ghost btn-sm" onclick="annullaPagamento('${p.id}')">Annulla</button>`}</div>`}</div>`;
     }).join('') || '<div class="empty">Nessun pagamento registrato.</div>'}</div>
       <p class="hint">Un pagamento sbagliato non si cancella: si annulla e resta nello storico.</p></div>`;
 };
@@ -900,8 +965,8 @@ async function salvaVoceExtra(btn, tId) {
    NON IN REGOLA, SOLLECITI, IMPOSTAZIONI
    ========================================================= */
 VISTE.nir = { titolo: 'Non in regola', icona: 'fa-triangle-exclamation', ruoli: ['presidente', 'dirigente'], async render({ squadra }) {
-  const sq = await squadre();
-  const r = await rpc('soc_non_in_regola', { p_societa: S.soc.societa_id, p_squadra: squadra || null }) || [];
+  const sq = attive(await squadre(true)), ok = idAttive(sq);
+  const r = (await rpc('soc_non_in_regola', { p_societa: S.soc.societa_id, p_squadra: squadra || null }) || []).filter((x) => ok.has(x.squadra_id));
   S.cache.nir = r;
   const tot = r.reduce((s, x) => s + Number(x.totale), 0);
   vista(`<div class="eyebrow">Solleciti</div><h2>Non in regola</h2>
@@ -928,8 +993,8 @@ VISTE.nir = { titolo: 'Non in regola', icona: 'fa-triangle-exclamation', ruoli: 
     <p class="hint">Contano solo le voci già scadute. Il messaggio WhatsApp parte dal tuo telefono; il sollecito viene segnato nel registro quando tocchi il bottone.</p>`);
 } };
 VISTE.scadenze = { titolo: 'Scadenze', icona: 'fa-notes-medical', ruoli: ['presidente', 'dirigente'], async render({ squadra }) {
-  const sq = await squadre();
-  const r = await rpc('soc_scadenze', { p_societa: S.soc.societa_id, p_squadra: squadra || null }) || [];
+  const sq = attive(await squadre(true)), ok = idAttive(sq);
+  const r = (await rpc('soc_scadenze', { p_societa: S.soc.societa_id, p_squadra: squadra || null }) || []).filter((x) => ok.has(x.squadra_id));
   S.cache.scad = r;
   const cosa = (x) => (x.tipo === 'certificato' ? 'Certificato medico' : 'Tessera') + ' ' +
     (x.stato === 'mancante' ? 'mancante' : (x.stato === 'scaduto' ? (x.tipo === 'certificato' ? 'scaduto il ' : 'scaduta il ') : 'in scadenza il ') + dataIt(x.scadenza));
@@ -1043,7 +1108,7 @@ VISTE.staff = { titolo: 'Staff', icona: 'fa-id-badge', ruoli: ['presidente'], as
   const [mem, ms, sq] = await Promise.all([membri(true),
     leggi('soc_membri_squadre', 'membro_id,squadra_id', (b) => b.eq('societa_id', S.soc.societa_id)), squadre()]);
   S.cache.ms = ms;
-  const squadreDi = (id) => ms.filter((x) => x.membro_id === id).map((x) => (sq.find((s) => s.id === x.squadra_id) || {}).nome).filter(Boolean);
+  const squadreDi = (id) => ms.filter((x) => x.membro_id === id).map((x) => (attive(sq).find((s) => s.id === x.squadra_id) || {}).nome).filter(Boolean);
   const riga = (m) => `<div class="item" style="cursor:default;flex-wrap:wrap"><div class="b"><b>${esc(nomeCompleto(m))}</b>
       <small>${ruoloLabel(m.ruolo)}${m.ruolo === 'allenatore' ? ' · ' + (esc(squadreDi(m.id).join(', ')) || 'nessuna squadra') : ''}${m.telefono ? ' · ' + esc(m.telefono) : ''}</small></div>
       ${m.ruolo === 'presidente' ? '<span class="badge ok">Tu</span>' : `<div class="btns" style="flex:0 0 auto">
@@ -1061,12 +1126,12 @@ VISTE.staff = { titolo: 'Staff', icona: 'fa-id-badge', ruoli: ['presidente'], as
 
 function foglioMembro(id, ruolo) {
   const m = (S.cache.membri || []).find((x) => x.id === id) || { ruolo, nome: '', cognome: '', telefono: '' };
-  const sue = (S.cache.ms || []).filter((x) => x.membro_id === id).map((x) => x.squadra_id);
+  const sue = (S.cache.ms || []).filter((x) => x.membro_id === id).map((x) => x.squadra_id);   // le squadre archiviate non sono tra le caselle: restano com'erano
   apriFoglio(`<h3>${id ? 'Modifica' : 'Nuovo'} ${ruoloLabel(m.ruolo).toLowerCase()}</h3>
     <div class="row"><div class="fg"><label>Nome</label><input id="m-nome" value="${esc(m.nome)}" maxlength="60"></div>
       <div class="fg"><label>Cognome</label><input id="m-cogn" value="${esc(m.cognome)}" maxlength="60"></div></div>
     <div class="fg"><label>Telefono (per mandargli l'accesso su WhatsApp)</label><input id="m-tel" type="tel" value="${esc(m.telefono)}" placeholder="+39 …"></div>
-    ${m.ruolo === 'allenatore' ? `<div class="fg"><label>Squadre che allena</label>${(S.cache.squadre || []).map((s) => `
+    ${m.ruolo === 'allenatore' ? `<div class="fg"><label>Squadre che allena</label>${attive(S.cache.squadre || []).map((s) => `
       <label class="check" style="margin:.2rem 0"><input type="checkbox" class="m-sq" value="${s.id}" ${sue.includes(s.id) ? 'checked' : ''}> ${esc(s.nome)}</label>`).join('') || '<span class="muted">Crea prima una squadra.</span>'}</div>` : ''}
     <div class="btns"><button class="btn btn-ghost" onclick="chiudiFoglio()">Annulla</button>
       <button class="btn btn-accent" onclick="salvaMembro(this,${id ? `'${id}'` : 'null'},'${m.ruolo}')">${id ? 'Salva' : 'Crea e mostra il PIN'}</button></div>`);
